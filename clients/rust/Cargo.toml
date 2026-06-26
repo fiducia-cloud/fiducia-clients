@@ -1,0 +1,9 @@
+[package]
+name = "fiducia-client"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP client for fiducia.cloud."
+
+[dependencies]
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"

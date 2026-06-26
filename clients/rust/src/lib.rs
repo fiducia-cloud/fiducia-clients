@@ -1,0 +1,136 @@
+//! Fiducia HTTP client (Rust), built on `ureq`. Implements PROTOCOL.md.
+//!
+//! ```no_run
+//! let c = fiducia_client::FiduciaClient::new("https://api.fiducia.cloud");
+//! let lock = c.lock_acquire("orders/checkout", Some(30_000), true, 1).unwrap();
+//! c.lock_release("orders/checkout", lock["result"]["lock_id"].as_str().unwrap()).unwrap();
+//! ```
+
+use serde_json::{json, Value};
+
+/// A non-2xx response, or a transport failure.
+#[derive(Debug)]
+pub enum Error {
+    Http { status: u16, body: Option<Value> },
+    Transport(String),
+}
+
+/// HTTP client for a fiducia endpoint (edge / load balancer / node).
+pub struct FiduciaClient {
+    base: String,
+    agent: ureq::Agent,
+}
+
+impl FiduciaClient {
+    pub fn new(base_url: &str) -> Self {
+        Self {
+            base: base_url.trim_end_matches('/').to_string(),
+            agent: ureq::agent(),
+        }
+    }
+
+    fn request(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
+        let url = format!("{}{}", self.base, path);
+        let req = self.agent.request(method, &url);
+        let resp = match body {
+            Some(b) => req.send_json(b),
+            None => req.call(),
+        };
+        match resp {
+            Ok(r) => Ok(r.into_json::<Value>().unwrap_or(Value::Null)),
+            Err(ureq::Error::Status(code, r)) => Err(Error::Http {
+                status: code,
+                body: r.into_json::<Value>().ok(),
+            }),
+            Err(e) => Err(Error::Transport(e.to_string())),
+        }
+    }
+
+    // --- misc ---
+    pub fn health(&self) -> Result<Value, Error> { self.request("GET", "/healthz", None) }
+    pub fn status(&self) -> Result<Value, Error> { self.request("GET", "/v1/status", None) }
+
+    // --- locks & semaphores ---
+    pub fn lock_acquire(&self, key: &str, ttl_ms: Option<u64>, wait: bool, max: u32) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/locks/{}/acquire", enc(key)),
+            Some(json!({ "ttl_ms": ttl_ms, "wait": wait, "max": max })))
+    }
+    pub fn lock_release(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/locks/{}/release", enc(key)), Some(json!({ "lock_id": lock_id })))
+    }
+
+    // --- reader-writer locks ---
+    pub fn rw_acquire_read(&self, key: &str, ttl_ms: Option<u64>, wait: bool) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/rw/{}/read", enc(key)), Some(json!({ "ttl_ms": ttl_ms, "wait": wait })))
+    }
+    pub fn rw_end_read(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/rw/{}/read/end", enc(key)), Some(json!({ "lock_id": lock_id })))
+    }
+    pub fn rw_acquire_write(&self, key: &str, ttl_ms: Option<u64>, wait: bool) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/rw/{}/write", enc(key)), Some(json!({ "ttl_ms": ttl_ms, "wait": wait })))
+    }
+    pub fn rw_end_write(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/rw/{}/write/end", enc(key)), Some(json!({ "lock_id": lock_id })))
+    }
+
+    // --- config KV ---
+    pub fn kv_get(&self, key: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/kv/{}", enc(key)), None)
+    }
+    pub fn kv_put(&self, key: &str, value: &str, ttl_ms: Option<u64>) -> Result<Value, Error> {
+        self.request("PUT", &format!("/v1/kv/{}", enc(key)), Some(json!({ "value": value, "ttl_ms": ttl_ms })))
+    }
+    pub fn kv_delete(&self, key: &str) -> Result<Value, Error> {
+        self.request("DELETE", &format!("/v1/kv/{}", enc(key)), None)
+    }
+    pub fn kv_list(&self, prefix: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)
+    }
+
+    // --- leader election ---
+    pub fn election_campaign(&self, name: &str, candidate: &str, ttl_ms: u64) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/elections/{}/campaign", enc(name)),
+            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })))
+    }
+    pub fn election_renew(&self, name: &str, candidate: &str, fencing_token: u64) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/elections/{}/renew", enc(name)),
+            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })))
+    }
+    pub fn election_resign(&self, name: &str, candidate: &str, fencing_token: u64) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/elections/{}/resign", enc(name)),
+            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })))
+    }
+    pub fn election_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/elections/{}", enc(name)), None)
+    }
+
+    // --- service discovery ---
+    pub fn service_register(&self, service: &str, instance_id: &str, address: &str, ttl_ms: u64) -> Result<Value, Error> {
+        self.request("PUT", &format!("/v1/services/{}/instances/{}", enc(service), enc(instance_id)),
+            Some(json!({ "address": address, "ttl_ms": ttl_ms })))
+    }
+    pub fn service_heartbeat(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
+        self.request("POST", &format!("/v1/services/{}/instances/{}/heartbeat", enc(service), enc(instance_id)), None)
+    }
+    pub fn service_deregister(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
+        self.request("DELETE", &format!("/v1/services/{}/instances/{}", enc(service), enc(instance_id)), None)
+    }
+    pub fn service_instances(&self, service: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/services/{}", enc(service)), None)
+    }
+    pub fn service_list(&self) -> Result<Value, Error> {
+        self.request("GET", "/v1/services", None)
+    }
+}
+
+/// Percent-encode a single path segment (unreserved chars pass through).
+fn enc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}

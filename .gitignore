@@ -1,0 +1,35 @@
+# Rust
+target/
+Cargo.lock
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Go
+bin/
+vendor/
+
+# Java / C#
+*.class
+bin/
+obj/
+
+# Dart
+.dart_tool/
+.packages
+
+# Elixir
+_build/
+deps/
+*.beam
+
+# misc
+*.log
+.DS_Store
