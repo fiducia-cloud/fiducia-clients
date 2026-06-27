@@ -3,7 +3,12 @@
     from fiducia import FiduciaClient
     c = FiduciaClient("https://api.fiducia.cloud")
     lock = c.lock_acquire("orders/checkout", holder="worker-a", ttl_ms=30000)
-    c.lock_release("orders/checkout", "worker-a", lock["result"]["fencing_token"])
+    token = lock["result"]["output"]["fencing_token"]
+    c.lock_release("worker-a", token)
+
+The wire protocol (paths + request bodies) is encapsulated entirely in this
+file: callers pass keys/holders, the client maps them to the HTTP contract. If
+the REST shape changes, only this module changes — consumer code does not.
 """
 
 import json
