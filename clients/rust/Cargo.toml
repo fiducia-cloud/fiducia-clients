@@ -7,3 +7,7 @@ description = "HTTP client for fiducia.cloud."
 [dependencies]
 ureq = { version = "2", features = ["json"] }
 serde_json = "1"
+
+# Shared, generated payload/error contract — re-exported as `types` so callers
+# can deserialize responses into typed structs instead of poking at `Value`.
+fiducia-interfaces = { path = "../../../fiducia-interfaces/generated/rust" }

@@ -1,10 +1,24 @@
-// Fiducia HTTP client (TypeScript). Zero-dependency — uses the global `fetch`
-// (Node 18+ or browsers). Implements PROTOCOL.md.
+// Fiducia HTTP client (TypeScript). Zero *runtime* dependency — uses the global
+// `fetch` (Node 18+ or browsers). Implements PROTOCOL.md.
 //
 //   import { FiduciaClient } from "./fiducia";
+//   import type { KvEntry, LockGrant } from "@fiducia/client";
 //   const c = new FiduciaClient("https://api.fiducia.cloud");
 //   const lock = await c.lockAcquire("orders/checkout", { ttlMs: 30000 });
 //   await c.lockRelease("orders/checkout", lock.lock_id);
+
+// Shared payload/error contract — re-exported from @fiducia/interfaces so callers
+// type responses from one source of truth (these are type-only; no runtime cost).
+export type {
+  KvEntry,
+  KvGetResponse,
+  LockGrant,
+  Leadership,
+  ProposeError,
+  ProposeOutcome,
+  ServiceInstance,
+  ServiceListResponse,
+} from "@fiducia/interfaces/typescript";
 
 export interface AcquireOpts { ttlMs?: number; wait?: boolean; max?: number; }
 export interface RwOpts { ttlMs?: number; wait?: boolean; }

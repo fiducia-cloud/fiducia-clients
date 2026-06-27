@@ -8,6 +8,11 @@
 
 use serde_json::{json, Value};
 
+/// The shared, generated payload/error contract (from `fiducia-interfaces`),
+/// re-exported so callers can deserialize responses into typed structs, e.g.
+/// `serde_json::from_value::<fiducia_client::types::KvEntry>(resp["entry"].clone())`.
+pub use fiducia_interfaces as types;
+
 /// A non-2xx response, or a transport failure.
 #[derive(Debug)]
 pub enum Error {
@@ -133,4 +138,26 @@ fn enc(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_contract_types_parse_node_responses() {
+        // A node lock grant deserializes into the shared `LockGrant` type, and a
+        // NotLeader error into the shared `ProposeError` — so the client speaks the
+        // same contract the node emits (no per-client payload definitions).
+        let err: types::ProposeError = serde_json::from_value(
+            json!({ "reason": "not_leader", "shard": 7, "leader": "http://leader-a:8090" }),
+        )
+        .unwrap();
+        assert!(matches!(err.reason, types::ProposeErrorReason::NotLeader));
+        assert_eq!(err.leader.as_deref(), Some("http://leader-a:8090"));
+
+        let kv: types::KvEntry =
+            serde_json::from_value(json!({ "value": "on", "mod_revision": 9 })).unwrap();
+        assert_eq!(kv.value, "on");
+    }
 }

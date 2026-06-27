@@ -14,6 +14,21 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	// Shared, generated payload contract (aliased because the generated package
+	// is also named `fiducia`). Re-exported as typed aliases below.
+	types "github.com/fiducia-cloud/fiducia-interfaces/generated/go"
+)
+
+// Shared payload/error types, re-exported from fiducia-interfaces so callers can
+// decode responses into typed structs from one source of truth.
+type (
+	ProposeOutcome = types.ProposeOutcome
+	ProposeError   = types.ProposeError
+	KvEntry        = types.KvEntry
+	LockGrant      = types.LockGrant
+	Leadership     = types.Leadership
+	ServiceInstance = types.ServiceInstance
 )
 
 // AcquireOpts configures a lock/semaphore acquire.

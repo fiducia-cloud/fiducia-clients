@@ -1,0 +1,11 @@
+{
+  "name": "@fiducia/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fiducia HTTP client (TypeScript). Zero runtime deps; types from @fiducia/interfaces.",
+  "main": "fiducia.ts",
+  "dependencies": {
+    "@fiducia/interfaces": "file:../../../fiducia-interfaces"
+  }
+}
