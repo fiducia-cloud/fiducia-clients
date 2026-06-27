@@ -2,7 +2,7 @@
 //!
 //! ```no_run
 //! let c = fiducia_client::FiduciaClient::new("https://api.fiducia.cloud");
-//! let lock = c.lock_acquire("orders/checkout", Some("worker-a"), Some(30_000), false).unwrap();
+//! let lock = c.lock_acquire("orders/checkout", Some("worker-a"), Some(30_000), false, None).unwrap();
 //! let token = lock["result"]["fencing_token"].as_u64().unwrap();
 //! c.lock_release("orders/checkout", "worker-a", token).unwrap();
 //! ```
@@ -65,11 +65,25 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
         wait: bool,
+        max: Option<u32>,
     ) -> Result<Value, Error> {
         self.request(
             "POST",
             &format!("/v1/locks/{}/acquire", enc(key)),
-            Some(json!({ "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
+            Some(json!({ "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max })),
+        )
+    }
+    pub fn lock_acquire_many(
+        &self,
+        keys: &[&str],
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/acquire-many",
+            Some(json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
         )
     }
     pub fn lock_release(
@@ -81,6 +95,41 @@ impl FiduciaClient {
         self.request(
             "POST",
             &format!("/v1/locks/{}/release", enc(key)),
+            Some(json!({ "holder": holder, "fencing_token": fencing_token })),
+        )
+    }
+    pub fn lock_release_many(&self, lock_id: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/release-many",
+            Some(json!({ "lock_id": lock_id })),
+        )
+    }
+
+    // --- semaphores ---
+    pub fn semaphore_acquire(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: u32,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/semaphores/{}/acquire", enc(key)),
+            Some(json!({ "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max.max(2) })),
+        )
+    }
+    pub fn semaphore_release(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/semaphores/{}/release", enc(key)),
             Some(json!({ "holder": holder, "fencing_token": fencing_token })),
         )
     }

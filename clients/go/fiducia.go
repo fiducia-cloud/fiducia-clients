@@ -22,6 +22,15 @@ type AcquireOpts struct {
 	Holder string
 	TTLMs  int64
 	Wait   bool
+	Max    uint32
+}
+
+// AcquireManyOpts configures an atomic multi-key union lock.
+type AcquireManyOpts struct {
+	Keys   []string
+	Holder string
+	TTLMs  int64
+	Wait   bool
 }
 
 // ReleaseOpts identifies the current holder and fencing token.
@@ -120,10 +129,31 @@ func (c *Client) LockGet(key string) (map[string]any, error) {
 }
 func (c *Client) LockAcquire(key string, o AcquireOpts) (map[string]any, error) {
 	return c.request("POST", "/v1/locks/"+enc(key)+"/acquire",
-		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait})
+		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait, "max": o.Max})
+}
+func (c *Client) LockAcquireMany(o AcquireManyOpts) (map[string]any, error) {
+	return c.request("POST", "/v1/locks/acquire-many",
+		map[string]any{"keys": o.Keys, "holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait})
 }
 func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
 	return c.request("POST", "/v1/locks/"+enc(key)+"/release",
+		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
+}
+func (c *Client) LockReleaseMany(lockID string) (map[string]any, error) {
+	return c.request("POST", "/v1/locks/release-many", map[string]any{"lock_id": lockID})
+}
+
+// --- semaphores ---
+func (c *Client) SemaphoreAcquire(key string, o AcquireOpts) (map[string]any, error) {
+	max := o.Max
+	if max == 0 {
+		max = 2
+	}
+	return c.request("POST", "/v1/semaphores/"+enc(key)+"/acquire",
+		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait, "max": max})
+}
+func (c *Client) SemaphoreRelease(key string, o ReleaseOpts) (map[string]any, error) {
+	return c.request("POST", "/v1/semaphores/"+enc(key)+"/release",
 		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
 }
 

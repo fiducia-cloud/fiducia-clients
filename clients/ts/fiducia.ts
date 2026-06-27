@@ -6,7 +6,8 @@
 //   const lock = await c.lockAcquire("orders/checkout", { holder: "worker-a", ttlMs: 30000 });
 //   await c.lockRelease("orders/checkout", { holder: "worker-a", fencingToken: lock.result.fencing_token });
 
-export interface AcquireOpts { holder?: string; ttlMs?: number; wait?: boolean; }
+export interface AcquireOpts { holder?: string; ttlMs?: number; wait?: boolean; max?: number; }
+export interface AcquireManyOpts { keys: string[]; holder?: string; ttlMs?: number; wait?: boolean; }
 export interface ReleaseOpts { holder: string; fencingToken: number; }
 export interface RwOpts { ttlMs?: number; wait?: boolean; }
 export interface KvPutOpts { ttlMs?: number; prevRevision?: number; }
@@ -67,10 +68,27 @@ export class FiduciaClient {
   }
   lockAcquire(key: string, opts: AcquireOpts = {}) {
     return this.request("POST", `/v1/locks/${enc(key)}/acquire`,
-      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false });
+      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max });
+  }
+  lockAcquireMany(opts: AcquireManyOpts) {
+    return this.request("POST", "/v1/locks/acquire-many",
+      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false });
   }
   lockRelease(key: string, opts: ReleaseOpts) {
     return this.request("POST", `/v1/locks/${enc(key)}/release`,
+      { holder: opts.holder, fencing_token: opts.fencingToken });
+  }
+  lockReleaseMany(lockId: string) {
+    return this.request("POST", "/v1/locks/release-many", { lock_id: lockId });
+  }
+
+  // --- semaphores ---
+  semaphoreAcquire(key: string, opts: AcquireOpts = {}) {
+    return this.request("POST", `/v1/semaphores/${enc(key)}/acquire`,
+      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max ?? 2 });
+  }
+  semaphoreRelease(key: string, opts: ReleaseOpts) {
+    return this.request("POST", `/v1/semaphores/${enc(key)}/release`,
       { holder: opts.holder, fencing_token: opts.fencingToken });
   }
 

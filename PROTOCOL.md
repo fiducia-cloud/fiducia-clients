@@ -21,18 +21,27 @@ contract, server implementation in progress (clients ship ready for it).
 |--------|----------|------|---------|
 | `lockGet(key)` | `GET /v1/locks/{key}` | — | `{key, lock}` |
 | `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/{key}/acquire` | `{holder, ttl_ms, wait}` | `{committed, result}` |
-| `lockAcquire({key, holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockAcquireBody({key, holder, ttlMs, wait, max})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait, max}` | `{committed, result}` |
+| `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire-many` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockReleaseMany(lockId)` | `POST /v1/locks/release-many` | `{lock_id}` | `{committed, result}` |
 | `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
 | `lockWatch(key)` | `GET /v1/locks/{key}/watch` | — | SSE stream (**planned**) |
 
 `wait:false` is try-lock. `wait:true` joins the FIFO wait queue. A successful
-grant returns a monotonic `fencing_token` in `result`.
+single-key grant returns a monotonic `fencing_token` in `result`. A successful
+multi-key grant returns one `lock_id` plus `fencing_tokens` keyed by member key.
+The server sorts/dedupes `keys`, caps composites at five keys, and conflicts on
+any overlapping member key. Composite locks are exclusive: they block mutexes
+and semaphores on every member key until released by `lock_id`.
 
-### Semaphores — planned
+### Semaphores — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
 | `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/{key}/acquire` | `{holder, ttl_ms, max, wait}` | `{committed, result}` |
 | `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
+
+Semaphores are the same lock state machine with `max > 1`: up to `max` holders
+can hold the key at once, and each holder gets a distinct fencing token.
 
 ### Reader-writer locks — planned
 | Method | Endpoint | Body | Returns |

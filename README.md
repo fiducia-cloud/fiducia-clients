@@ -52,6 +52,25 @@ await c.lockRelease("orders/checkout", {
   fencingToken: lock.result.fencing_token,
 });
 
+// multi-key union lock
+const combo = await c.lockAcquireMany({
+  keys: ["orders/checkout", "inventory/sku-42"],
+  holder: "worker-a",
+  ttlMs: 30000,
+});
+await c.lockReleaseMany(combo.result.lock_id);
+
+// semaphore
+const slot = await c.semaphoreAcquire("webhook-delivery", {
+  holder: "worker-b",
+  ttlMs: 30000,
+  max: 12,
+});
+await c.semaphoreRelease("webhook-delivery", {
+  holder: "worker-b",
+  fencingToken: slot.result.fencing_token,
+});
+
 // rate limiting
 await c.rateLimitCheck("tenant-a", "checkout", {
   algorithm: "token_bucket",
@@ -82,11 +101,11 @@ const live = await c.serviceInstances("api");
 
 ## Status
 
-Clients are skeletons that track the live node endpoints (locks, rate limiting,
-cron/scheduling, KV, elections, discovery) and ship planned semaphore/RW/watch
-shapes ahead of the server (marked *planned* in `PROTOCOL.md`). They make HTTP
-calls and parse JSON; they do not yet add retries, auth helpers, or watch/SSE
-streaming.
+Clients are skeletons that track the live node endpoints (locks, semaphores,
+multi-key locks, rate limiting, cron/scheduling, KV, elections, discovery) and
+ship planned RW/watch shapes ahead of the server (marked *planned* in
+`PROTOCOL.md`). They make HTTP calls and parse JSON; they do not yet add
+retries, auth helpers, or watch/SSE streaming.
 
 ## Related
 

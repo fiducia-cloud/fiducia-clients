@@ -52,12 +52,28 @@ class FiduciaClient:
     def lock_get(self, key):
         return self._request("GET", "/v1/locks/%s" % _enc(key))
 
-    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False):
+    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None):
         return self._request("POST", "/v1/locks/%s/acquire" % _enc(key),
-                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+
+    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False):
+        return self._request("POST", "/v1/locks/acquire-many",
+                             {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
 
     def lock_release(self, key, holder, fencing_token):
         return self._request("POST", "/v1/locks/%s/release" % _enc(key),
+                             {"holder": holder, "fencing_token": fencing_token})
+
+    def lock_release_many(self, lock_id):
+        return self._request("POST", "/v1/locks/release-many", {"lock_id": lock_id})
+
+    # --- semaphores ---
+    def semaphore_acquire(self, key, holder=None, ttl_ms=None, max=2, wait=False):
+        return self._request("POST", "/v1/semaphores/%s/acquire" % _enc(key),
+                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+
+    def semaphore_release(self, key, holder, fencing_token):
+        return self._request("POST", "/v1/semaphores/%s/release" % _enc(key),
                              {"holder": holder, "fencing_token": fencing_token})
 
     # --- reader-writer locks ---
