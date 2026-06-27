@@ -4,8 +4,8 @@
 //   import { FiduciaClient } from "./fiducia";
 //   import type { KvEntry, LockGrant } from "@fiducia/client";
 //   const c = new FiduciaClient("https://api.fiducia.cloud");
-//   const lock = await c.lockAcquire("orders/checkout", { ttlMs: 30000 });
-//   await c.lockRelease("orders/checkout", lock.lock_id);
+//   const lock = await c.lockAcquire("orders/checkout", { holder: "worker-a", ttlMs: 30000 });
+//   await c.lockRelease("orders/checkout", { holder: "worker-a", fencingToken: lock.result.fencing_token });
 
 // Shared payload/error contract — re-exported from @fiducia/interfaces so callers
 // type responses from one source of truth (these are type-only; no runtime cost).
@@ -20,9 +20,31 @@ export type {
   ServiceListResponse,
 } from "@fiducia/interfaces/typescript";
 
-export interface AcquireOpts { ttlMs?: number; wait?: boolean; max?: number; }
+export interface AcquireOpts { holder?: string; ttlMs?: number; wait?: boolean; max?: number; }
+export interface AcquireManyOpts { keys: string[]; holder?: string; ttlMs?: number; wait?: boolean; }
+export interface ReleaseOpts { holder: string; fencingToken: number; }
 export interface RwOpts { ttlMs?: number; wait?: boolean; }
-export interface KvPutOpts { ttlMs?: number; }
+export interface KvPutOpts { ttlMs?: number; prevRevision?: number; }
+export interface RateLimitCheckOpts {
+  algorithm: "token_bucket" | "sliding_window";
+  limit: number;
+  windowMs: number;
+  refillPerSecond?: number;
+  cost?: number;
+}
+export interface ScheduleTarget {
+  kind: "webhook" | "queue" | "grpc";
+  url?: string;
+  name?: string;
+  endpoint?: string;
+}
+export interface ScheduleUpsertOpts {
+  cron?: string;
+  oneShotAtMs?: number;
+  target: ScheduleTarget;
+  delivery?: "at_least_once" | "exactly_once";
+  maxRetries?: number;
+}
 
 export class FiduciaError extends Error {
   constructor(public status: number, public body: any) {
@@ -54,13 +76,34 @@ export class FiduciaClient {
   health() { return this.request("GET", "/healthz"); }
   status() { return this.request("GET", "/v1/status"); }
 
-  // --- locks & semaphores ---
+  // --- locks ---
+  lockGet(key: string) {
+    return this.request("GET", `/v1/locks/${enc(key)}`);
+  }
   lockAcquire(key: string, opts: AcquireOpts = {}) {
     return this.request("POST", `/v1/locks/${enc(key)}/acquire`,
-      { ttl_ms: opts.ttlMs, wait: opts.wait ?? true, max: opts.max ?? 1 });
+      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max });
   }
-  lockRelease(key: string, lockId: string) {
-    return this.request("POST", `/v1/locks/${enc(key)}/release`, { lock_id: lockId });
+  lockAcquireMany(opts: AcquireManyOpts) {
+    return this.request("POST", "/v1/locks/acquire-many",
+      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false });
+  }
+  lockRelease(key: string, opts: ReleaseOpts) {
+    return this.request("POST", `/v1/locks/${enc(key)}/release`,
+      { holder: opts.holder, fencing_token: opts.fencingToken });
+  }
+  lockReleaseMany(lockId: string) {
+    return this.request("POST", "/v1/locks/release-many", { lock_id: lockId });
+  }
+
+  // --- semaphores ---
+  semaphoreAcquire(key: string, opts: AcquireOpts = {}) {
+    return this.request("POST", `/v1/semaphores/${enc(key)}/acquire`,
+      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max ?? 2 });
+  }
+  semaphoreRelease(key: string, opts: ReleaseOpts) {
+    return this.request("POST", `/v1/semaphores/${enc(key)}/release`,
+      { holder: opts.holder, fencing_token: opts.fencingToken });
   }
 
   // --- reader-writer locks ---
@@ -80,10 +123,46 @@ export class FiduciaClient {
   // --- config KV ---
   kvGet(key: string) { return this.request("GET", `/v1/kv/${enc(key)}`); }
   kvPut(key: string, value: string, opts: KvPutOpts = {}) {
-    return this.request("PUT", `/v1/kv/${enc(key)}`, { value, ttl_ms: opts.ttlMs });
+    return this.request("PUT", `/v1/kv/${enc(key)}`,
+      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision });
   }
   kvDelete(key: string) { return this.request("DELETE", `/v1/kv/${enc(key)}`); }
   kvList(prefix: string) { return this.request("GET", `/v1/kv?prefix=${enc(prefix)}`); }
+
+  // --- rate limiting ---
+  rateLimitCheck(tenant: string, key: string, opts: RateLimitCheckOpts) {
+    return this.request("POST", `/v1/rate-limit/${enc(tenant)}/${enc(key)}/check`, {
+      algorithm: opts.algorithm,
+      limit: opts.limit,
+      window_ms: opts.windowMs,
+      refill_per_second: opts.refillPerSecond,
+      cost: opts.cost,
+    });
+  }
+  rateLimitGet(tenant: string, key: string) {
+    return this.request("GET", `/v1/rate-limit/${enc(tenant)}/${enc(key)}`);
+  }
+
+  // --- cron / scheduling ---
+  scheduleUpsert(name: string, opts: ScheduleUpsertOpts) {
+    return this.request("PUT", `/v1/cron/schedules/${enc(name)}`, {
+      cron: opts.cron,
+      one_shot_at_ms: opts.oneShotAtMs,
+      target: opts.target,
+      delivery: opts.delivery,
+      max_retries: opts.maxRetries,
+    });
+  }
+  scheduleGet(name: string) {
+    return this.request("GET", `/v1/cron/schedules/${enc(name)}`);
+  }
+  scheduleRecordRun(name: string, fireId: string, firedAtMs?: number) {
+    return this.request("POST", `/v1/cron/schedules/${enc(name)}/runs`,
+      { fire_id: fireId, fired_at_ms: firedAtMs });
+  }
+  scheduleHistory(name: string) {
+    return this.request("GET", `/v1/cron/schedules/${enc(name)}/history`);
+  }
 
   // --- leader election ---
   electionCampaign(name: string, candidate: string, ttlMs: number) {

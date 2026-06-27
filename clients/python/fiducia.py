@@ -2,8 +2,8 @@
 
     from fiducia import FiduciaClient
     c = FiduciaClient("https://api.fiducia.cloud")
-    lock = c.lock_acquire("orders/checkout", ttl_ms=30000)
-    c.lock_release("orders/checkout", lock["lock_id"])
+    lock = c.lock_acquire("orders/checkout", holder="worker-a", ttl_ms=30000)
+    c.lock_release("orders/checkout", "worker-a", lock["result"]["fencing_token"])
 """
 
 import json
@@ -65,13 +65,33 @@ class FiduciaClient:
     def status(self):
         return self._request("GET", "/v1/status")
 
-    # --- locks & semaphores ---
-    def lock_acquire(self, key, ttl_ms=None, wait=True, max=1):
-        return self._request("POST", "/v1/locks/%s/acquire" % _enc(key),
-                             {"ttl_ms": ttl_ms, "wait": wait, "max": max})
+    # --- locks ---
+    def lock_get(self, key):
+        return self._request("GET", "/v1/locks/%s" % _enc(key))
 
-    def lock_release(self, key, lock_id):
-        return self._request("POST", "/v1/locks/%s/release" % _enc(key), {"lock_id": lock_id})
+    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None):
+        return self._request("POST", "/v1/locks/%s/acquire" % _enc(key),
+                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+
+    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False):
+        return self._request("POST", "/v1/locks/acquire-many",
+                             {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+
+    def lock_release(self, key, holder, fencing_token):
+        return self._request("POST", "/v1/locks/%s/release" % _enc(key),
+                             {"holder": holder, "fencing_token": fencing_token})
+
+    def lock_release_many(self, lock_id):
+        return self._request("POST", "/v1/locks/release-many", {"lock_id": lock_id})
+
+    # --- semaphores ---
+    def semaphore_acquire(self, key, holder=None, ttl_ms=None, max=2, wait=False):
+        return self._request("POST", "/v1/semaphores/%s/acquire" % _enc(key),
+                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+
+    def semaphore_release(self, key, holder, fencing_token):
+        return self._request("POST", "/v1/semaphores/%s/release" % _enc(key),
+                             {"holder": holder, "fencing_token": fencing_token})
 
     # --- reader-writer locks ---
     def rw_acquire_read(self, key, ttl_ms=None, wait=True):
@@ -90,14 +110,52 @@ class FiduciaClient:
     def kv_get(self, key):
         return self._request("GET", "/v1/kv/%s" % _enc(key))
 
-    def kv_put(self, key, value, ttl_ms=None):
-        return self._request("PUT", "/v1/kv/%s" % _enc(key), {"value": value, "ttl_ms": ttl_ms})
+    def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
+        return self._request("PUT", "/v1/kv/%s" % _enc(key),
+                             {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
 
     def kv_delete(self, key):
         return self._request("DELETE", "/v1/kv/%s" % _enc(key))
 
     def kv_list(self, prefix):
         return self._request("GET", "/v1/kv?prefix=%s" % _enc(prefix))
+
+    # --- rate limiting ---
+    def rate_limit_check(self, tenant, key, algorithm, limit, window_ms,
+                         refill_per_second=None, cost=None):
+        return self._request("POST", "/v1/rate-limit/%s/%s/check" % (_enc(tenant), _enc(key)),
+                             {
+                                 "algorithm": algorithm,
+                                 "limit": limit,
+                                 "window_ms": window_ms,
+                                 "refill_per_second": refill_per_second,
+                                 "cost": cost,
+                             })
+
+    def rate_limit_get(self, tenant, key):
+        return self._request("GET", "/v1/rate-limit/%s/%s" % (_enc(tenant), _enc(key)))
+
+    # --- cron / scheduling ---
+    def schedule_upsert(self, name, target, cron=None, one_shot_at_ms=None,
+                        delivery=None, max_retries=None):
+        return self._request("PUT", "/v1/cron/schedules/%s" % _enc(name),
+                             {
+                                 "cron": cron,
+                                 "one_shot_at_ms": one_shot_at_ms,
+                                 "target": target,
+                                 "delivery": delivery,
+                                 "max_retries": max_retries,
+                             })
+
+    def schedule_get(self, name):
+        return self._request("GET", "/v1/cron/schedules/%s" % _enc(name))
+
+    def schedule_record_run(self, name, fire_id, fired_at_ms=None):
+        return self._request("POST", "/v1/cron/schedules/%s/runs" % _enc(name),
+                             {"fire_id": fire_id, "fired_at_ms": fired_at_ms})
+
+    def schedule_history(self, name):
+        return self._request("GET", "/v1/cron/schedules/%s/history" % _enc(name))
 
     # --- leader election ---
     def election_campaign(self, name, candidate, ttl_ms):

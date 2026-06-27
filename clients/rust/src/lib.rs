@@ -2,8 +2,9 @@
 //!
 //! ```no_run
 //! let c = fiducia_client::FiduciaClient::new("https://api.fiducia.cloud");
-//! let lock = c.lock_acquire("orders/checkout", Some(30_000), true, 1).unwrap();
-//! c.lock_release("orders/checkout", lock["result"]["lock_id"].as_str().unwrap()).unwrap();
+//! let lock = c.lock_acquire("orders/checkout", Some("worker-a"), Some(30_000), false, None).unwrap();
+//! let token = lock["result"]["fencing_token"].as_u64().unwrap();
+//! c.lock_release("orders/checkout", "worker-a", token).unwrap();
 //! ```
 
 use serde_json::{json, Value};
@@ -52,30 +53,130 @@ impl FiduciaClient {
     }
 
     // --- misc ---
-    pub fn health(&self) -> Result<Value, Error> { self.request("GET", "/healthz", None) }
-    pub fn status(&self) -> Result<Value, Error> { self.request("GET", "/v1/status", None) }
-
-    // --- locks & semaphores ---
-    pub fn lock_acquire(&self, key: &str, ttl_ms: Option<u64>, wait: bool, max: u32) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/locks/{}/acquire", enc(key)),
-            Some(json!({ "ttl_ms": ttl_ms, "wait": wait, "max": max })))
+    pub fn health(&self) -> Result<Value, Error> {
+        self.request("GET", "/healthz", None)
     }
-    pub fn lock_release(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/locks/{}/release", enc(key)), Some(json!({ "lock_id": lock_id })))
+    pub fn status(&self) -> Result<Value, Error> {
+        self.request("GET", "/v1/status", None)
+    }
+
+    // --- locks ---
+    pub fn lock_get(&self, key: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/locks/{}", enc(key)), None)
+    }
+    pub fn lock_acquire(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: Option<u32>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/locks/{}/acquire", enc(key)),
+            Some(json!({ "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max })),
+        )
+    }
+    pub fn lock_acquire_many(
+        &self,
+        keys: &[&str],
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/acquire-many",
+            Some(json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
+        )
+    }
+    pub fn lock_release(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/locks/{}/release", enc(key)),
+            Some(json!({ "holder": holder, "fencing_token": fencing_token })),
+        )
+    }
+    pub fn lock_release_many(&self, lock_id: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/release-many",
+            Some(json!({ "lock_id": lock_id })),
+        )
+    }
+
+    // --- semaphores ---
+    pub fn semaphore_acquire(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: u32,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/semaphores/{}/acquire", enc(key)),
+            Some(json!({ "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max.max(2) })),
+        )
+    }
+    pub fn semaphore_release(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/semaphores/{}/release", enc(key)),
+            Some(json!({ "holder": holder, "fencing_token": fencing_token })),
+        )
     }
 
     // --- reader-writer locks ---
-    pub fn rw_acquire_read(&self, key: &str, ttl_ms: Option<u64>, wait: bool) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/rw/{}/read", enc(key)), Some(json!({ "ttl_ms": ttl_ms, "wait": wait })))
+    pub fn rw_acquire_read(
+        &self,
+        key: &str,
+        ttl_ms: Option<u64>,
+        wait: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/rw/{}/read", enc(key)),
+            Some(json!({ "ttl_ms": ttl_ms, "wait": wait })),
+        )
     }
     pub fn rw_end_read(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/rw/{}/read/end", enc(key)), Some(json!({ "lock_id": lock_id })))
+        self.request(
+            "POST",
+            &format!("/v1/rw/{}/read/end", enc(key)),
+            Some(json!({ "lock_id": lock_id })),
+        )
     }
-    pub fn rw_acquire_write(&self, key: &str, ttl_ms: Option<u64>, wait: bool) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/rw/{}/write", enc(key)), Some(json!({ "ttl_ms": ttl_ms, "wait": wait })))
+    pub fn rw_acquire_write(
+        &self,
+        key: &str,
+        ttl_ms: Option<u64>,
+        wait: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/rw/{}/write", enc(key)),
+            Some(json!({ "ttl_ms": ttl_ms, "wait": wait })),
+        )
     }
     pub fn rw_end_write(&self, key: &str, lock_id: &str) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/rw/{}/write/end", enc(key)), Some(json!({ "lock_id": lock_id })))
+        self.request(
+            "POST",
+            &format!("/v1/rw/{}/write/end", enc(key)),
+            Some(json!({ "lock_id": lock_id })),
+        )
     }
 
     // --- config KV ---
@@ -83,7 +184,24 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv/{}", enc(key)), None)
     }
     pub fn kv_put(&self, key: &str, value: &str, ttl_ms: Option<u64>) -> Result<Value, Error> {
-        self.request("PUT", &format!("/v1/kv/{}", enc(key)), Some(json!({ "value": value, "ttl_ms": ttl_ms })))
+        self.request(
+            "PUT",
+            &format!("/v1/kv/{}", enc(key)),
+            Some(json!({ "value": value, "ttl_ms": ttl_ms })),
+        )
+    }
+    pub fn kv_put_cas(
+        &self,
+        key: &str,
+        value: &str,
+        ttl_ms: Option<u64>,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "PUT",
+            &format!("/v1/kv/{}", enc(key)),
+            Some(json!({ "value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision })),
+        )
     }
     pub fn kv_delete(&self, key: &str) -> Result<Value, Error> {
         self.request("DELETE", &format!("/v1/kv/{}", enc(key)), None)
@@ -92,33 +210,162 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)
     }
 
+    // --- rate limiting ---
+    pub fn rate_limit_check(
+        &self,
+        tenant: &str,
+        key: &str,
+        algorithm: &str,
+        limit: u32,
+        window_ms: u64,
+        refill_per_second: Option<f64>,
+        cost: Option<u32>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/rate-limit/{}/{}/check", enc(tenant), enc(key)),
+            Some(json!({
+                "algorithm": algorithm,
+                "limit": limit,
+                "window_ms": window_ms,
+                "refill_per_second": refill_per_second,
+                "cost": cost,
+            })),
+        )
+    }
+    pub fn rate_limit_get(&self, tenant: &str, key: &str) -> Result<Value, Error> {
+        self.request(
+            "GET",
+            &format!("/v1/rate-limit/{}/{}", enc(tenant), enc(key)),
+            None,
+        )
+    }
+
+    // --- cron / scheduling ---
+    pub fn schedule_upsert(
+        &self,
+        name: &str,
+        cron: Option<&str>,
+        one_shot_at_ms: Option<u64>,
+        target: Value,
+        delivery: Option<&str>,
+        max_retries: Option<u32>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "PUT",
+            &format!("/v1/cron/schedules/{}", enc(name)),
+            Some(json!({
+                "cron": cron,
+                "one_shot_at_ms": one_shot_at_ms,
+                "target": target,
+                "delivery": delivery,
+                "max_retries": max_retries,
+            })),
+        )
+    }
+    pub fn schedule_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/cron/schedules/{}", enc(name)), None)
+    }
+    pub fn schedule_record_run(
+        &self,
+        name: &str,
+        fire_id: &str,
+        fired_at_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/cron/schedules/{}/runs", enc(name)),
+            Some(json!({ "fire_id": fire_id, "fired_at_ms": fired_at_ms })),
+        )
+    }
+    pub fn schedule_history(&self, name: &str) -> Result<Value, Error> {
+        self.request(
+            "GET",
+            &format!("/v1/cron/schedules/{}/history", enc(name)),
+            None,
+        )
+    }
+
     // --- leader election ---
-    pub fn election_campaign(&self, name: &str, candidate: &str, ttl_ms: u64) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/elections/{}/campaign", enc(name)),
-            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })))
+    pub fn election_campaign(
+        &self,
+        name: &str,
+        candidate: &str,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/elections/{}/campaign", enc(name)),
+            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })),
+        )
     }
-    pub fn election_renew(&self, name: &str, candidate: &str, fencing_token: u64) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/elections/{}/renew", enc(name)),
-            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })))
+    pub fn election_renew(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/elections/{}/renew", enc(name)),
+            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+        )
     }
-    pub fn election_resign(&self, name: &str, candidate: &str, fencing_token: u64) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/elections/{}/resign", enc(name)),
-            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })))
+    pub fn election_resign(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            &format!("/v1/elections/{}/resign", enc(name)),
+            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+        )
     }
     pub fn election_get(&self, name: &str) -> Result<Value, Error> {
         self.request("GET", &format!("/v1/elections/{}", enc(name)), None)
     }
 
     // --- service discovery ---
-    pub fn service_register(&self, service: &str, instance_id: &str, address: &str, ttl_ms: u64) -> Result<Value, Error> {
-        self.request("PUT", &format!("/v1/services/{}/instances/{}", enc(service), enc(instance_id)),
-            Some(json!({ "address": address, "ttl_ms": ttl_ms })))
+    pub fn service_register(
+        &self,
+        service: &str,
+        instance_id: &str,
+        address: &str,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "PUT",
+            &format!(
+                "/v1/services/{}/instances/{}",
+                enc(service),
+                enc(instance_id)
+            ),
+            Some(json!({ "address": address, "ttl_ms": ttl_ms })),
+        )
     }
     pub fn service_heartbeat(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
-        self.request("POST", &format!("/v1/services/{}/instances/{}/heartbeat", enc(service), enc(instance_id)), None)
+        self.request(
+            "POST",
+            &format!(
+                "/v1/services/{}/instances/{}/heartbeat",
+                enc(service),
+                enc(instance_id)
+            ),
+            None,
+        )
     }
     pub fn service_deregister(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
-        self.request("DELETE", &format!("/v1/services/{}/instances/{}", enc(service), enc(instance_id)), None)
+        self.request(
+            "DELETE",
+            &format!(
+                "/v1/services/{}/instances/{}",
+                enc(service),
+                enc(instance_id)
+            ),
+            None,
+        )
     }
     pub fn service_instances(&self, service: &str) -> Result<Value, Error> {
         self.request("GET", &format!("/v1/services/{}", enc(service)), None)
@@ -133,7 +380,9 @@ fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
