@@ -33,3 +33,4 @@ deps/
 # misc
 *.log
 .DS_Store
+.env
