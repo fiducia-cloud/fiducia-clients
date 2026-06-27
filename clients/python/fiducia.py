@@ -184,9 +184,9 @@ class FiduciaClient:
         return self._request("GET", "/v1/elections/%s" % _enc(name))
 
     # --- service discovery ---
-    def service_register(self, service, instance_id, address, ttl_ms):
+    def service_register(self, service, instance_id, address, ttl_ms, metadata=None):
         return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)),
-                             {"address": address, "ttl_ms": ttl_ms})
+                             {"address": address, "ttl_ms": ttl_ms, "metadata": metadata})
 
     def service_heartbeat(self, service, instance_id):
         return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)))
