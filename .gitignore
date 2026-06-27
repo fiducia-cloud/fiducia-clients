@@ -36,3 +36,4 @@ deps/
 !.env.example
 *.log
 .DS_Store
+.env
