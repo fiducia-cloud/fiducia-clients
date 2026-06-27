@@ -8,6 +8,11 @@
 
 use serde_json::{json, Value};
 
+/// The shared, generated payload/error contract (from `fiducia-interfaces`),
+/// re-exported so callers can deserialize responses into typed structs, e.g.
+/// `serde_json::from_value::<fiducia_client::types::KvEntry>(resp["entry"].clone())`.
+pub use fiducia_interfaces as types;
+
 /// A non-2xx response, or a transport failure.
 #[derive(Debug)]
 pub enum Error {
