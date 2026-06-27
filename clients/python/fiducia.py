@@ -7,9 +7,26 @@
 """
 
 import json
+import os as _os
+import sys as _sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# Shared, generated payload types (fiducia-interfaces), re-exported as
+# `fiducia.types` so callers can build typed payloads from one source of truth.
+# In-repo we reach the generated python adapter directly; a packaged install
+# would make `fiducia_interfaces` a normal dependency instead.
+_sys.path.insert(
+    0,
+    _os.path.join(
+        _os.path.dirname(__file__), "..", "..", "..", "fiducia-interfaces", "generated", "python"
+    ),
+)
+try:
+    import fiducia_interfaces as types  # noqa: E402
+except ImportError:  # pragma: no cover
+    types = None
 
 
 class FiduciaError(Exception):

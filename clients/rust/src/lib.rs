@@ -139,3 +139,25 @@ fn enc(s: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_contract_types_parse_node_responses() {
+        // A node lock grant deserializes into the shared `LockGrant` type, and a
+        // NotLeader error into the shared `ProposeError` — so the client speaks the
+        // same contract the node emits (no per-client payload definitions).
+        let err: types::ProposeError = serde_json::from_value(
+            json!({ "reason": "not_leader", "shard": 7, "leader": "http://leader-a:8090" }),
+        )
+        .unwrap();
+        assert!(matches!(err.reason, types::ProposeErrorReason::NotLeader));
+        assert_eq!(err.leader.as_deref(), Some("http://leader-a:8090"));
+
+        let kv: types::KvEntry =
+            serde_json::from_value(json!({ "value": "on", "mod_revision": 9 })).unwrap();
+        assert_eq!(kv.value, "on");
+    }
+}
