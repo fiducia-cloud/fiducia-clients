@@ -1,0 +1,9 @@
+clients/rust/target
+clients/rust/Cargo.lock
+clients/python/__pycache__
+node_modules
+.git
+.github
+.env
+.env.*
+*.log
