@@ -116,16 +116,16 @@ class FiduciaClient:
     def rw_end_write(self, key, lock_id):
         return self._request("POST", "/v1/rw/%s/write/end" % _enc(key), {"lock_id": lock_id})
 
-    # --- config KV ---
+    # --- config KV (keys are ?key=, slash-safe) ---
     def kv_get(self, key):
-        return self._request("GET", "/v1/kv/%s" % _enc(key))
+        return self._request("GET", "/v1/kv?key=%s" % _enc(key))
 
     def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
-        return self._request("PUT", "/v1/kv/%s" % _enc(key),
+        return self._request("PUT", "/v1/kv?key=%s" % _enc(key),
                              {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
 
     def kv_delete(self, key):
-        return self._request("DELETE", "/v1/kv/%s" % _enc(key))
+        return self._request("DELETE", "/v1/kv?key=%s" % _enc(key))
 
     def kv_list(self, prefix):
         return self._request("GET", "/v1/kv?prefix=%s" % _enc(prefix))
