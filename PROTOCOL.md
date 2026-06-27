@@ -16,14 +16,23 @@ endpoints, language-idiomatic surface.
 Legend: **live** = implemented in `fiducia-node` today · **planned** = part of the
 contract, server implementation in progress (clients ship ready for it).
 
-### Locks & semaphores — planned
+### Locks — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `lockAcquire(key, {ttlMs, wait, max})` | `POST /v1/locks/{key}/acquire` | `{ttl_ms, wait, max}` | `{acquired, fencing_token, lock_id, holders, max}` |
-| `lockRelease(key, lockId)` | `POST /v1/locks/{key}/release` | `{lock_id}` | `{released}` |
+| `lockGet(key)` | `GET /v1/locks/{key}` | — | `{key, lock}` |
+| `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/{key}/acquire` | `{holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockAcquire({key, holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
+| `lockWatch(key)` | `GET /v1/locks/{key}/watch` | — | SSE stream (**planned**) |
 
-`max` defaults to 1 (mutex); `max > 1` is a counting semaphore. `wait` (default
-true) blocks via long-poll until granted; `wait:false` is try-lock.
+`wait:false` is try-lock. `wait:true` joins the FIFO wait queue. A successful
+grant returns a monotonic `fencing_token` in `result`.
+
+### Semaphores — planned
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/{key}/acquire` | `{holder, ttl_ms, max, wait}` | `{committed, result}` |
+| `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
 
 ### Reader-writer locks — planned
 | Method | Endpoint | Body | Returns |
@@ -37,9 +46,29 @@ true) blocks via long-poll until granted; `wait:false` is try-lock.
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
 | `kvGet(key)` | `GET /v1/kv/{key}` | — | `{key, found, entry}` |
-| `kvPut(key, value, {ttlMs})` | `PUT /v1/kv/{key}` | `{value, ttl_ms}` | `{committed, result}` |
+| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv/{key}` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
 | `kvDelete(key)` | `DELETE /v1/kv/{key}` | — | `{committed, result}` |
-| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{keys}` |
+| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{keys}` (**planned**) |
+| `kvWatch(key, {startRevision})` | `GET /v1/kv/{key}/watch` | — | SSE stream (**planned**) |
+
+### Rate limiting — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `rateLimitCheck(tenant, key, {algorithm, limit, windowMs, refillPerSecond, cost})` | `POST /v1/rate-limit/{tenant}/{key}/check` | `{algorithm, limit, window_ms, refill_per_second, cost}` | `{committed, result}` |
+| `rateLimitGet(tenant, key)` | `GET /v1/rate-limit/{tenant}/{key}` | — | `{found, limit}` |
+
+`algorithm` is `token_bucket` or `sliding_window`.
+
+### Cron & scheduling — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `scheduleUpsert(name, {cron, oneShotAtMs, target, delivery, maxRetries})` | `PUT /v1/cron/schedules/{name}` | `{cron, one_shot_at_ms, target, delivery, max_retries}` | `{committed, result}` |
+| `scheduleGet(name)` | `GET /v1/cron/schedules/{name}` | — | `{found, schedule}` |
+| `scheduleRecordRun(name, {fireId, firedAtMs})` | `POST /v1/cron/schedules/{name}/runs` | `{fire_id, fired_at_ms}` | `{committed, result}` |
+| `scheduleHistory(name)` | `GET /v1/cron/schedules/{name}/history` | — | `{name, history}` |
+
+Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
+`webhook`, `queue`, or `grpc`.
 
 ### Leader election — live
 | Method | Endpoint | Body | Returns |

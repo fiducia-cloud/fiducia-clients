@@ -2,8 +2,9 @@
 // net/http). It implements PROTOCOL.md.
 //
 //	c := fiducia.New("https://api.fiducia.cloud")
-//	lock, _ := c.LockAcquire("orders/checkout", fiducia.AcquireOpts{TTLMs: 30000})
-//	c.LockRelease("orders/checkout", lock["lock_id"].(string))
+//	lock, _ := c.LockAcquire("orders/checkout", fiducia.AcquireOpts{Holder: "worker-a", TTLMs: 30000})
+//	token := uint64(lock["result"].(map[string]any)["fencing_token"].(float64))
+//	c.LockRelease("orders/checkout", fiducia.ReleaseOpts{Holder: "worker-a", FencingToken: token})
 package fiducia
 
 import (
@@ -16,17 +17,44 @@ import (
 	"strings"
 )
 
-// AcquireOpts configures a lock/semaphore acquire.
+// AcquireOpts configures a lock acquire.
 type AcquireOpts struct {
-	TTLMs int64
-	Wait  bool
-	Max   int
+	Holder string
+	TTLMs  int64
+	Wait   bool
+}
+
+// ReleaseOpts identifies the current holder and fencing token.
+type ReleaseOpts struct {
+	Holder       string
+	FencingToken uint64
 }
 
 // RwOpts configures a reader-writer acquire.
 type RwOpts struct {
 	TTLMs int64
 	Wait  bool
+}
+
+// RateLimitCheckOpts configures an atomic rate-limit check.
+type RateLimitCheckOpts struct {
+	Algorithm       string
+	Limit           uint32
+	WindowMs        uint64
+	RefillPerSecond *float64
+	Cost            uint32
+}
+
+// ScheduleTarget is a webhook, queue, or gRPC target.
+type ScheduleTarget map[string]any
+
+// ScheduleUpsertOpts configures a cron or one-shot schedule.
+type ScheduleUpsertOpts struct {
+	Cron        string
+	OneShotAtMs *uint64
+	Target      ScheduleTarget
+	Delivery    string
+	MaxRetries  uint32
 }
 
 // Error is a non-2xx response.
@@ -86,17 +114,17 @@ func enc(s string) string { return url.PathEscape(s) }
 func (c *Client) Health() (map[string]any, error) { return c.request("GET", "/healthz", nil) }
 func (c *Client) Status() (map[string]any, error) { return c.request("GET", "/v1/status", nil) }
 
-// --- locks & semaphores ---
-func (c *Client) LockAcquire(key string, o AcquireOpts) (map[string]any, error) {
-	max := o.Max
-	if max == 0 {
-		max = 1
-	}
-	return c.request("POST", "/v1/locks/"+enc(key)+"/acquire",
-		map[string]any{"ttl_ms": o.TTLMs, "wait": o.Wait, "max": max})
+// --- locks ---
+func (c *Client) LockGet(key string) (map[string]any, error) {
+	return c.request("GET", "/v1/locks/"+enc(key), nil)
 }
-func (c *Client) LockRelease(key, lockID string) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/"+enc(key)+"/release", map[string]any{"lock_id": lockID})
+func (c *Client) LockAcquire(key string, o AcquireOpts) (map[string]any, error) {
+	return c.request("POST", "/v1/locks/"+enc(key)+"/acquire",
+		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait})
+}
+func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
+	return c.request("POST", "/v1/locks/"+enc(key)+"/release",
+		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
 }
 
 // --- reader-writer locks ---
@@ -125,6 +153,58 @@ func (c *Client) KvDelete(key string) (map[string]any, error) {
 }
 func (c *Client) KvList(prefix string) (map[string]any, error) {
 	return c.request("GET", "/v1/kv?prefix="+url.QueryEscape(prefix), nil)
+}
+
+// --- rate limiting ---
+func (c *Client) RateLimitCheck(tenant, key string, o RateLimitCheckOpts) (map[string]any, error) {
+	body := map[string]any{
+		"algorithm": o.Algorithm,
+		"limit":     o.Limit,
+		"window_ms": o.WindowMs,
+	}
+	if o.RefillPerSecond != nil {
+		body["refill_per_second"] = *o.RefillPerSecond
+	}
+	if o.Cost > 0 {
+		body["cost"] = o.Cost
+	}
+	return c.request("POST", "/v1/rate-limit/"+enc(tenant)+"/"+enc(key)+"/check", body)
+}
+func (c *Client) RateLimitGet(tenant, key string) (map[string]any, error) {
+	return c.request("GET", "/v1/rate-limit/"+enc(tenant)+"/"+enc(key), nil)
+}
+
+// --- cron / scheduling ---
+func (c *Client) ScheduleUpsert(name string, o ScheduleUpsertOpts) (map[string]any, error) {
+	body := map[string]any{
+		"target": o.Target,
+	}
+	if o.Cron != "" {
+		body["cron"] = o.Cron
+	}
+	if o.OneShotAtMs != nil {
+		body["one_shot_at_ms"] = *o.OneShotAtMs
+	}
+	if o.Delivery != "" {
+		body["delivery"] = o.Delivery
+	}
+	if o.MaxRetries > 0 {
+		body["max_retries"] = o.MaxRetries
+	}
+	return c.request("PUT", "/v1/cron/schedules/"+enc(name), body)
+}
+func (c *Client) ScheduleGet(name string) (map[string]any, error) {
+	return c.request("GET", "/v1/cron/schedules/"+enc(name), nil)
+}
+func (c *Client) ScheduleRecordRun(name, fireID string, firedAtMs *uint64) (map[string]any, error) {
+	body := map[string]any{"fire_id": fireID}
+	if firedAtMs != nil {
+		body["fired_at_ms"] = *firedAtMs
+	}
+	return c.request("POST", "/v1/cron/schedules/"+enc(name)+"/runs", body)
+}
+func (c *Client) ScheduleHistory(name string) (map[string]any, error) {
+	return c.request("GET", "/v1/cron/schedules/"+enc(name)+"/history", nil)
 }
 
 // --- leader election ---
