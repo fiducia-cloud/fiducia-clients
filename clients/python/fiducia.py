@@ -3,7 +3,12 @@
     from fiducia import FiduciaClient
     c = FiduciaClient("https://api.fiducia.cloud")
     lock = c.lock_acquire("orders/checkout", holder="worker-a", ttl_ms=30000)
-    c.lock_release("orders/checkout", "worker-a", lock["result"]["fencing_token"])
+    token = lock["result"]["output"]["fencing_token"]
+    c.lock_release("worker-a", token)
+
+The wire protocol (paths + request bodies) is encapsulated entirely in this
+file: callers pass keys/holders, the client maps them to the HTTP contract. If
+the REST shape changes, only this module changes — consumer code does not.
 """
 
 import argparse
@@ -74,7 +79,9 @@ class FiduciaClient:
     def status(self):
         return self._request("GET", "/v1/status")
 
-    # --- locks ---
+    # --- locks (single-key + multi-key UNION locks) ---
+    # Keys live in the JSON body (slash-safe) for acquire, and ?key= for inspect;
+    # a grant is released by its fencing token (frees every member key at once).
     def lock_get(self, key):
         return self._request("GET", _query("/v1/locks", key=key))
 
@@ -83,23 +90,22 @@ class FiduciaClient:
                              {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
 
     def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False):
+        # Multi-key UNION lock: all-or-nothing across the whole set; conflicts on
+        # ANY member key block the grant.
         return self._request("POST", "/v1/locks/acquire",
-                             {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+                             {"keys": list(keys), "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
 
     def lock_release(self, key, holder, fencing_token):
         return self._request("POST", "/v1/locks/release",
                              {"holder": holder, "fencing_token": fencing_token})
 
-    def lock_release_many(self, lock_id):
-        return self._request("POST", "/v1/locks/release-many", {"lock_id": lock_id})
+    # --- semaphores (counting: up to `limit` concurrent holders) ---
+    def semaphore_get(self, key):
+        return self._request("GET", _query("/v1/semaphores", key=key))
 
-    # --- semaphores ---
     def semaphore_acquire(self, key, holder=None, ttl_ms=None, max=2, wait=False):
         return self._request("POST", "/v1/semaphores/acquire",
                              {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max})
-
-    def semaphore_get(self, key):
-        return self._request("GET", _query("/v1/semaphores", key=key))
 
     def semaphore_release(self, key, holder, fencing_token):
         return self._request("POST", "/v1/semaphores/release",
@@ -118,7 +124,7 @@ class FiduciaClient:
     def rw_end_write(self, key, lock_id):
         return self._request("POST", "/v1/rw/%s/write/end" % _enc(key), {"lock_id": lock_id})
 
-    # --- config KV ---
+    # --- config KV (keys are ?key=, slash-safe) ---
     def kv_get(self, key):
         return self._request("GET", _query("/v1/kv", key=key))
 
@@ -191,6 +197,7 @@ class FiduciaClient:
                              {"address": address, "ttl_ms": ttl_ms, "metadata": metadata or {}})
 
     def service_heartbeat(self, service, instance_id, ttl_ms=None):
+        # Always send a JSON body — the node's heartbeat handler expects one.
         return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)),
                              {"ttl_ms": ttl_ms})
 
