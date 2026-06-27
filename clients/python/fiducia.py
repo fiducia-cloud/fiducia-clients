@@ -1,4 +1,4 @@
-"""Fiducia HTTP client (Python). Zero-dependency — stdlib urllib. Implements PROTOCOL.md.
+"""Fiducia HTTP client (Python). Zero-dependency - stdlib urllib. Implements PROTOCOL.md.
 
     from fiducia import FiduciaClient
     c = FiduciaClient("https://api.fiducia.cloud")
@@ -6,6 +6,7 @@
     c.lock_release("orders/checkout", "worker-a", lock["result"]["fencing_token"])
 """
 
+import argparse
 import json
 import os as _os
 import sys as _sys
@@ -40,6 +41,14 @@ def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
 
+def _query(path, **params):
+    qs = urllib.parse.urlencode(
+        {key: value for key, value in params.items() if value is not None},
+        doseq=True,
+    )
+    return "%s?%s" % (path, qs) if qs else path
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30):
         self.base = base_url.rstrip("/")
@@ -67,18 +76,18 @@ class FiduciaClient:
 
     # --- locks ---
     def lock_get(self, key):
-        return self._request("GET", "/v1/locks/%s" % _enc(key))
+        return self._request("GET", _query("/v1/locks", key=key))
 
     def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None):
-        return self._request("POST", "/v1/locks/%s/acquire" % _enc(key),
-                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+        return self._request("POST", "/v1/locks/acquire",
+                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
 
     def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False):
-        return self._request("POST", "/v1/locks/acquire-many",
+        return self._request("POST", "/v1/locks/acquire",
                              {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
 
     def lock_release(self, key, holder, fencing_token):
-        return self._request("POST", "/v1/locks/%s/release" % _enc(key),
+        return self._request("POST", "/v1/locks/release",
                              {"holder": holder, "fencing_token": fencing_token})
 
     def lock_release_many(self, lock_id):
@@ -86,12 +95,15 @@ class FiduciaClient:
 
     # --- semaphores ---
     def semaphore_acquire(self, key, holder=None, ttl_ms=None, max=2, wait=False):
-        return self._request("POST", "/v1/semaphores/%s/acquire" % _enc(key),
-                             {"holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+        return self._request("POST", "/v1/semaphores/acquire",
+                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max})
+
+    def semaphore_get(self, key):
+        return self._request("GET", _query("/v1/semaphores", key=key))
 
     def semaphore_release(self, key, holder, fencing_token):
-        return self._request("POST", "/v1/semaphores/%s/release" % _enc(key),
-                             {"holder": holder, "fencing_token": fencing_token})
+        return self._request("POST", "/v1/semaphores/release",
+                             {"key": key, "holder": holder, "fencing_token": fencing_token})
 
     # --- reader-writer locks ---
     def rw_acquire_read(self, key, ttl_ms=None, wait=True):
@@ -108,17 +120,17 @@ class FiduciaClient:
 
     # --- config KV ---
     def kv_get(self, key):
-        return self._request("GET", "/v1/kv/%s" % _enc(key))
+        return self._request("GET", _query("/v1/kv", key=key))
 
     def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
-        return self._request("PUT", "/v1/kv/%s" % _enc(key),
+        return self._request("PUT", _query("/v1/kv", key=key),
                              {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
 
     def kv_delete(self, key):
-        return self._request("DELETE", "/v1/kv/%s" % _enc(key))
+        return self._request("DELETE", _query("/v1/kv", key=key))
 
     def kv_list(self, prefix):
-        return self._request("GET", "/v1/kv?prefix=%s" % _enc(prefix))
+        return self._request("GET", _query("/v1/kv", prefix=prefix))
 
     # --- rate limiting ---
     def rate_limit_check(self, tenant, key, algorithm, limit, window_ms,
@@ -174,12 +186,13 @@ class FiduciaClient:
         return self._request("GET", "/v1/elections/%s" % _enc(name))
 
     # --- service discovery ---
-    def service_register(self, service, instance_id, address, ttl_ms):
+    def service_register(self, service, instance_id, address, ttl_ms, metadata=None):
         return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)),
-                             {"address": address, "ttl_ms": ttl_ms})
+                             {"address": address, "ttl_ms": ttl_ms, "metadata": metadata or {}})
 
-    def service_heartbeat(self, service, instance_id):
-        return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)))
+    def service_heartbeat(self, service, instance_id, ttl_ms=None):
+        return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)),
+                             {"ttl_ms": ttl_ms})
 
     def service_deregister(self, service, instance_id):
         return self._request("DELETE", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)))
@@ -189,3 +202,242 @@ class FiduciaClient:
 
     def service_list(self):
         return self._request("GET", "/v1/services")
+
+
+def _metadata(items):
+    out = {}
+    for item in items or []:
+        if "=" not in item:
+            raise SystemExit("metadata must be KEY=VALUE")
+        key, value = item.split("=", 1)
+        if not key:
+            raise SystemExit("metadata key cannot be empty")
+        out[key] = value
+    return out
+
+
+def _target(args):
+    target = {"kind": args.target_kind}
+    if args.target_url:
+        target["url"] = args.target_url
+    if args.target_name:
+        target["name"] = args.target_name
+    if args.target_endpoint:
+        target["endpoint"] = args.target_endpoint
+    return target
+
+
+def _print_json(value):
+    print(json.dumps(value, sort_keys=True))
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="fiducia")
+    parser.add_argument("--base", default=_os.environ.get("FIDUCIA_BASE_URL", "https://api.fiducia.cloud"))
+    parser.add_argument("--timeout", type=float, default=30)
+    sub = parser.add_subparsers(dest="resource", required=True)
+
+    sub.add_parser("health")
+    sub.add_parser("status")
+
+    lock = sub.add_parser("lock")
+    lock_sub = lock.add_subparsers(dest="action", required=True)
+    p = lock_sub.add_parser("get")
+    p.add_argument("key")
+    p = lock_sub.add_parser("acquire")
+    p.add_argument("key")
+    p.add_argument("--holder")
+    p.add_argument("--ttl-ms", type=int)
+    p.add_argument("--wait", action="store_true")
+    p = lock_sub.add_parser("acquire-many")
+    p.add_argument("keys", nargs="+")
+    p.add_argument("--holder")
+    p.add_argument("--ttl-ms", type=int)
+    p.add_argument("--wait", action="store_true")
+    p = lock_sub.add_parser("release")
+    p.add_argument("key")
+    p.add_argument("--holder", required=True)
+    p.add_argument("--fencing-token", type=int, required=True)
+
+    sem = sub.add_parser("semaphore")
+    sem_sub = sem.add_subparsers(dest="action", required=True)
+    p = sem_sub.add_parser("get")
+    p.add_argument("key")
+    p = sem_sub.add_parser("acquire")
+    p.add_argument("key")
+    p.add_argument("--holder")
+    p.add_argument("--ttl-ms", type=int)
+    p.add_argument("--limit", type=int, default=2)
+    p.add_argument("--wait", action="store_true")
+    p = sem_sub.add_parser("release")
+    p.add_argument("key")
+    p.add_argument("--holder", required=True)
+    p.add_argument("--fencing-token", type=int, required=True)
+
+    kv = sub.add_parser("kv")
+    kv_sub = kv.add_subparsers(dest="action", required=True)
+    p = kv_sub.add_parser("get")
+    p.add_argument("key")
+    p = kv_sub.add_parser("put")
+    p.add_argument("key")
+    p.add_argument("value")
+    p.add_argument("--ttl-ms", type=int)
+    p.add_argument("--prev-revision", type=int)
+    p = kv_sub.add_parser("delete")
+    p.add_argument("key")
+    p = kv_sub.add_parser("list")
+    p.add_argument("prefix")
+
+    rate = sub.add_parser("rate-limit")
+    rate_sub = rate.add_subparsers(dest="action", required=True)
+    p = rate_sub.add_parser("check")
+    p.add_argument("tenant")
+    p.add_argument("key")
+    p.add_argument("--algorithm", choices=["token_bucket", "sliding_window"], required=True)
+    p.add_argument("--limit", type=int, required=True)
+    p.add_argument("--window-ms", type=int, required=True)
+    p.add_argument("--refill-per-second", type=float)
+    p.add_argument("--cost", type=int)
+    p = rate_sub.add_parser("get")
+    p.add_argument("tenant")
+    p.add_argument("key")
+
+    cron = sub.add_parser("cron")
+    cron_sub = cron.add_subparsers(dest="action", required=True)
+    p = cron_sub.add_parser("upsert")
+    p.add_argument("name")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--cron")
+    mode.add_argument("--one-shot-at-ms", type=int)
+    p.add_argument("--target-kind", choices=["webhook", "queue", "grpc"], required=True)
+    p.add_argument("--target-url")
+    p.add_argument("--target-name")
+    p.add_argument("--target-endpoint")
+    p.add_argument("--delivery", choices=["at_least_once", "exactly_once"])
+    p.add_argument("--max-retries", type=int)
+    p = cron_sub.add_parser("get")
+    p.add_argument("name")
+    p = cron_sub.add_parser("record-run")
+    p.add_argument("name")
+    p.add_argument("fire_id")
+    p.add_argument("--fired-at-ms", type=int)
+    p = cron_sub.add_parser("history")
+    p.add_argument("name")
+
+    election = sub.add_parser("election")
+    election_sub = election.add_subparsers(dest="action", required=True)
+    p = election_sub.add_parser("campaign")
+    p.add_argument("name")
+    p.add_argument("candidate")
+    p.add_argument("--ttl-ms", type=int, required=True)
+    for action in ("renew", "resign"):
+        p = election_sub.add_parser(action)
+        p.add_argument("name")
+        p.add_argument("candidate")
+        p.add_argument("--fencing-token", type=int, required=True)
+    p = election_sub.add_parser("get")
+    p.add_argument("name")
+
+    service = sub.add_parser("service")
+    service_sub = service.add_subparsers(dest="action", required=True)
+    p = service_sub.add_parser("register")
+    p.add_argument("service")
+    p.add_argument("instance_id")
+    p.add_argument("address")
+    p.add_argument("--ttl-ms", type=int, required=True)
+    p.add_argument("--metadata", action="append", default=[])
+    p = service_sub.add_parser("heartbeat")
+    p.add_argument("service")
+    p.add_argument("instance_id")
+    p.add_argument("--ttl-ms", type=int)
+    p = service_sub.add_parser("deregister")
+    p.add_argument("service")
+    p.add_argument("instance_id")
+    p = service_sub.add_parser("instances")
+    p.add_argument("service")
+    service_sub.add_parser("list")
+
+    return parser
+
+
+def main(argv=None, client_factory=FiduciaClient):
+    args = build_parser().parse_args(argv)
+    client = client_factory(args.base, timeout=args.timeout)
+
+    if args.resource == "health":
+        value = client.health()
+    elif args.resource == "status":
+        value = client.status()
+    elif args.resource == "lock":
+        if args.action == "get":
+            value = client.lock_get(args.key)
+        elif args.action == "acquire":
+            value = client.lock_acquire(args.key, holder=args.holder, ttl_ms=args.ttl_ms, wait=args.wait)
+        elif args.action == "acquire-many":
+            value = client.lock_acquire_many(args.keys, holder=args.holder, ttl_ms=args.ttl_ms, wait=args.wait)
+        elif args.action == "release":
+            value = client.lock_release(args.key, args.holder, args.fencing_token)
+    elif args.resource == "semaphore":
+        if args.action == "get":
+            value = client.semaphore_get(args.key)
+        elif args.action == "acquire":
+            value = client.semaphore_acquire(args.key, holder=args.holder, ttl_ms=args.ttl_ms,
+                                             max=args.limit, wait=args.wait)
+        elif args.action == "release":
+            value = client.semaphore_release(args.key, args.holder, args.fencing_token)
+    elif args.resource == "kv":
+        if args.action == "get":
+            value = client.kv_get(args.key)
+        elif args.action == "put":
+            value = client.kv_put(args.key, args.value, ttl_ms=args.ttl_ms, prev_revision=args.prev_revision)
+        elif args.action == "delete":
+            value = client.kv_delete(args.key)
+        elif args.action == "list":
+            value = client.kv_list(args.prefix)
+    elif args.resource == "rate-limit":
+        if args.action == "check":
+            value = client.rate_limit_check(args.tenant, args.key, args.algorithm, args.limit, args.window_ms,
+                                            refill_per_second=args.refill_per_second, cost=args.cost)
+        elif args.action == "get":
+            value = client.rate_limit_get(args.tenant, args.key)
+    elif args.resource == "cron":
+        if args.action == "upsert":
+            value = client.schedule_upsert(args.name, _target(args), cron=args.cron,
+                                           one_shot_at_ms=args.one_shot_at_ms, delivery=args.delivery,
+                                           max_retries=args.max_retries)
+        elif args.action == "get":
+            value = client.schedule_get(args.name)
+        elif args.action == "record-run":
+            value = client.schedule_record_run(args.name, args.fire_id, fired_at_ms=args.fired_at_ms)
+        elif args.action == "history":
+            value = client.schedule_history(args.name)
+    elif args.resource == "election":
+        if args.action == "campaign":
+            value = client.election_campaign(args.name, args.candidate, args.ttl_ms)
+        elif args.action == "renew":
+            value = client.election_renew(args.name, args.candidate, args.fencing_token)
+        elif args.action == "resign":
+            value = client.election_resign(args.name, args.candidate, args.fencing_token)
+        elif args.action == "get":
+            value = client.election_get(args.name)
+    elif args.resource == "service":
+        if args.action == "register":
+            value = client.service_register(args.service, args.instance_id, args.address, args.ttl_ms,
+                                            metadata=_metadata(args.metadata))
+        elif args.action == "heartbeat":
+            value = client.service_heartbeat(args.service, args.instance_id, ttl_ms=args.ttl_ms)
+        elif args.action == "deregister":
+            value = client.service_deregister(args.service, args.instance_id)
+        elif args.action == "instances":
+            value = client.service_instances(args.service)
+        elif args.action == "list":
+            value = client.service_list()
+    else:
+        raise SystemExit("unknown resource")
+
+    _print_json(value)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

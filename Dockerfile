@@ -9,5 +9,5 @@ RUN cd clients/go \
     && go test ./... \
     && cd ../.. \
     && cargo test --manifest-path clients/rust/Cargo.toml \
-    && PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile clients/python/fiducia.py
-CMD ["bash", "-lc", "cd clients/go && go test ./... && cd ../.. && cargo test --manifest-path clients/rust/Cargo.toml && PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile clients/python/fiducia.py"]
+    && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py
+CMD ["bash", "-lc", "cd clients/go && go test ./... && cd ../.. && cargo test --manifest-path clients/rust/Cargo.toml && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py"]
