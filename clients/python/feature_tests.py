@@ -138,7 +138,7 @@ def t_cron():
     name = nid("nightly")
     up = out(c.schedule_upsert(name, target={"kind": "webhook", "url": "https://example.com/hook"},
                                cron="0 0 * * *", delivery="exactly_once", max_retries=3))
-    check("schedule upserted", up.get("ok") is True, up)
+    check("schedule upserted", up.get("scheduled") is True, up)
     g = c.schedule_get(name)
     check("schedule get found", g.get("found") is True, g)
     r1 = out(c.schedule_record_run(name, "2026-06-27T00:00Z"))
