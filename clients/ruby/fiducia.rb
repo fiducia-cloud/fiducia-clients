@@ -3,8 +3,9 @@
 #
 #   require_relative "fiducia"
 #   c = Fiducia::Client.new("https://api.fiducia.cloud")
-#   lock = c.lock_acquire("orders/checkout", ttl_ms: 30000)
-#   c.lock_release("orders/checkout", lock["result"]["lock_id"])
+#   lock = c.lock("orders/checkout", ttl_ms: 30_000)  # blocks until acquired
+#   lock.release
+#   # non-blocking: lock = c.try_lock("orders/checkout"); lock&.release
 
 require "net/http"
 require "json"
