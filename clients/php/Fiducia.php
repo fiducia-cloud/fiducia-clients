@@ -3,8 +3,9 @@
 //
 //   require "Fiducia.php";
 //   $c = new Fiducia\Client("https://api.fiducia.cloud");
-//   $lock = $c->lockAcquire("orders/checkout", 30000);
-//   $c->lockRelease("orders/checkout", $lock["result"]["lock_id"]);
+//   $lock = $c->lock("orders/checkout");   // blocks until acquired
+//   $lock->release();
+//   // non-blocking: $lock = $c->tryLock("orders/checkout"); if ($lock) $lock->release();
 
 namespace Fiducia;
 
