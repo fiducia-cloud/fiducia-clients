@@ -100,6 +100,128 @@ defmodule Fiducia.Client do
   def service_list(c), do: request(c, :get, "/v1/services")
 
   # --- internals ---
+  defp do_acquire_lock(c, keys, wait, opts) do
+    holder = opts[:holder] || gen_holder()
+    ttl_ms = opts[:ttl_ms] || 60_000
+
+    case lock_acquire(c, keys, holder: holder, ttl_ms: ttl_ms, wait: wait) do
+      {:ok, resp} ->
+        out = output(resp)
+
+        cond do
+          out["acquired"] == true ->
+            {:ok, lock_map(c, keys, holder, out)}
+
+          not wait ->
+            {:ok, nil}
+
+          true ->
+            deadline = now_ms() + Keyword.get(opts, :max_wait_ms, 30_000)
+            interval = Keyword.get(opts, :retry_interval_ms, 250)
+            poll_lock(c, keys, holder, deadline, interval, Keyword.get(opts, :max_retries), 0)
+        end
+
+      err ->
+        err
+    end
+  end
+
+  defp poll_lock(_c, _keys, _holder, _deadline, _interval, max_retries, attempt)
+       when is_integer(max_retries) and attempt >= max_retries,
+       do: {:error, :timeout}
+
+  defp poll_lock(c, keys, holder, deadline, interval, max_retries, attempt) do
+    remaining = deadline - now_ms()
+
+    if remaining <= 0 do
+      {:error, :timeout}
+    else
+      Process.sleep(min(interval, remaining))
+
+      case lock_get(c, hd(keys)) do
+        {:ok, %{"lock" => lk}} when is_map(lk) ->
+          if lk["holder"] == holder and lk["fencing_token"] != nil do
+            {:ok,
+             %{client: c, keys: keys, holder: holder, fencing_token: lk["fencing_token"], lease_expires_ms: lk["lease_expires_ms"]}}
+          else
+            poll_lock(c, keys, holder, deadline, interval, max_retries, attempt + 1)
+          end
+
+        {:ok, _} ->
+          poll_lock(c, keys, holder, deadline, interval, max_retries, attempt + 1)
+
+        err ->
+          err
+      end
+    end
+  end
+
+  defp do_acquire_semaphore(c, key, limit, wait, opts) do
+    holder = opts[:holder] || gen_holder()
+    ttl_ms = opts[:ttl_ms] || 60_000
+
+    case semaphore_acquire(c, key, limit, holder: holder, ttl_ms: ttl_ms, wait: wait) do
+      {:ok, resp} ->
+        out = output(resp)
+
+        cond do
+          out["acquired"] == true ->
+            {:ok, %{client: c, key: key, holder: holder, fencing_token: out["fencing_token"], lease_expires_ms: out["lease_expires_ms"]}}
+
+          not wait ->
+            {:ok, nil}
+
+          true ->
+            deadline = now_ms() + Keyword.get(opts, :max_wait_ms, 30_000)
+            interval = Keyword.get(opts, :retry_interval_ms, 250)
+            poll_semaphore(c, key, holder, deadline, interval, Keyword.get(opts, :max_retries), 0)
+        end
+
+      err ->
+        err
+    end
+  end
+
+  defp poll_semaphore(_c, _key, _holder, _deadline, _interval, max_retries, attempt)
+       when is_integer(max_retries) and attempt >= max_retries,
+       do: {:error, :timeout}
+
+  defp poll_semaphore(c, key, holder, deadline, interval, max_retries, attempt) do
+    remaining = deadline - now_ms()
+
+    if remaining <= 0 do
+      {:error, :timeout}
+    else
+      Process.sleep(min(interval, remaining))
+
+      case semaphore_get(c, key) do
+        {:ok, %{"semaphore" => %{"holders" => holders}}} when is_list(holders) ->
+          case Enum.find(holders, fn h -> h["holder"] == holder and h["fencing_token"] != nil end) do
+            nil ->
+              poll_semaphore(c, key, holder, deadline, interval, max_retries, attempt + 1)
+
+            slot ->
+              {:ok, %{client: c, key: key, holder: holder, fencing_token: slot["fencing_token"], lease_expires_ms: slot["lease_expires_ms"]}}
+          end
+
+        {:ok, _} ->
+          poll_semaphore(c, key, holder, deadline, interval, max_retries, attempt + 1)
+
+        err ->
+          err
+      end
+    end
+  end
+
+  defp lock_map(c, keys, holder, out),
+    do: %{client: c, keys: keys, holder: holder, fencing_token: out["fencing_token"], lease_expires_ms: out["lease_expires_ms"]}
+
+  defp output(resp) when is_map(resp), do: (resp["result"] || %{})["output"] || %{}
+  defp output(_), do: %{}
+
+  defp gen_holder, do: "fdc-" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
   defp enc(s), do: URI.encode_www_form(to_string(s))
 
   defp request(c, method, path, body \\ nil) do
