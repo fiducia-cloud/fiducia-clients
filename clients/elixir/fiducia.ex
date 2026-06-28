@@ -16,14 +16,42 @@ defmodule Fiducia.Client do
   def health(c), do: request(c, :get, "/healthz")
   def status(c), do: request(c, :get, "/v1/status")
 
-  # --- locks & semaphores ---
-  def lock_acquire(c, key, opts \\ []) do
-    body = %{ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, true), max: Keyword.get(opts, :max, 1)}
-    request(c, :post, "/v1/locks/#{enc(key)}/acquire", body)
+  # --- locks (current protocol: holder + fencing_token, keys in the body) ---
+  def lock_get(c, key), do: request(c, :get, "/v1/locks?key=#{enc(key)}")
+
+  def lock_acquire(c, keys, opts \\ []) do
+    body = %{keys: List.wrap(keys), holder: opts[:holder], ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, false)}
+    request(c, :post, "/v1/locks/acquire", body)
   end
 
-  def lock_release(c, key, lock_id),
-    do: request(c, :post, "/v1/locks/#{enc(key)}/release", %{lock_id: lock_id})
+  def lock_release(c, holder, fencing_token),
+    do: request(c, :post, "/v1/locks/release", %{holder: holder, fencing_token: fencing_token})
+
+  # --- semaphores ---
+  def semaphore_get(c, key), do: request(c, :get, "/v1/semaphores?key=#{enc(key)}")
+
+  def semaphore_acquire(c, key, limit, opts \\ []) do
+    body = %{key: key, limit: limit, holder: opts[:holder], ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, false)}
+    request(c, :post, "/v1/semaphores/acquire", body)
+  end
+
+  def semaphore_release(c, key, holder, fencing_token),
+    do: request(c, :post, "/v1/semaphores/release", %{key: key, holder: holder, fencing_token: fencing_token})
+
+  # --- high-level blocking / try acquisition (live-mutex style) ---
+  #
+  # try_lock: wait:false -> {:ok, lock} | {:ok, nil} (held now) | {:error, reason}
+  # lock / must_lock: wait:true -> {:ok, lock} | {:error, :timeout} | {:error, reason}
+  # Each lock/handle is a map; pass it to release/1.
+  def try_lock(c, key, opts \\ []), do: do_acquire_lock(c, List.wrap(key), false, opts)
+  def lock(c, key, opts \\ []), do: do_acquire_lock(c, List.wrap(key), true, opts)
+  def must_lock(c, key, opts \\ []), do: lock(c, key, opts)
+  def try_semaphore(c, key, limit, opts \\ []), do: do_acquire_semaphore(c, key, limit, false, opts)
+  def acquire_semaphore(c, key, limit, opts \\ []), do: do_acquire_semaphore(c, key, limit, true, opts)
+
+  @doc "Release a held lock or semaphore handle (the map returned by lock/acquire_semaphore)."
+  def release(%{client: c, key: key, holder: h, fencing_token: t}), do: semaphore_release(c, key, h, t)
+  def release(%{client: c, holder: h, fencing_token: t}), do: lock_release(c, h, t)
 
   # --- reader-writer locks ---
   def rw_acquire_read(c, key, opts \\ []),
