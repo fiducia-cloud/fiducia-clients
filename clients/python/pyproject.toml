@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiducia-client"
+version = "0.1.0"
+description = "Fiducia HTTP client and CLI."
+readme = { text = "Fiducia HTTP client and CLI for fiducia.cloud.", content-type = "text/plain" }
+requires-python = ">=3.8"
+license = { text = "UNLICENSED" }
+authors = [{ name = "fiducia.cloud" }]
+keywords = ["fiducia", "coordination", "locks", "semaphores", "kv"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Repository = "https://github.com/fiducia-cloud/fiducia-clients"
+
+[project.scripts]
+fiducia = "fiducia:main"
+
+[tool.setuptools]
+py-modules = ["fiducia"]
