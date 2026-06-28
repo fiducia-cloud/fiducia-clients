@@ -1,0 +1,106 @@
+{
+  "$comment": "SINGLE SOURCE OF TRUTH for the fiducia client surface. Every client in clients/<lang>/ is generated from this by generate.py — edit here, regenerate, never hand-sync. Mirrors the deployed fiducia-node HTTP API. param.in: path (URL-encoded segment, NO slashes) | query (?k=, slash-safe) | body (JSON field). Optional params are omitted from required positional args.",
+  "version": 1,
+  "operations": [
+    { "name": "health", "group": "misc", "method": "GET", "path": "/healthz", "params": [], "doc": "Liveness probe." },
+    { "name": "status", "group": "misc", "method": "GET", "path": "/v1/status", "params": [], "doc": "Per-shard consensus status." },
+
+    { "name": "lock_get", "group": "locks", "method": "GET", "path": "/v1/locks", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Inspect a lock member key: holder, the held union, and the FIFO wait queue." },
+    { "name": "lock_acquire", "group": "locks", "method": "POST", "path": "/v1/locks/acquire", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Acquire a single-key lock (try-lock unless wait)." },
+    { "name": "lock_acquire_many", "group": "locks", "method": "POST", "path": "/v1/locks/acquire", "params": [
+      { "name": "keys", "in": "body", "type": "string[]" },
+      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key." },
+    { "name": "lock_release", "group": "locks", "method": "POST", "path": "/v1/locks/release", "params": [
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Release the whole grant (every member key) by its fencing token." },
+
+    { "name": "semaphore_get", "group": "semaphores", "method": "GET", "path": "/v1/semaphores", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Inspect a semaphore: limit, holders, free permits, queue." },
+    { "name": "semaphore_acquire", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/acquire", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "limit", "in": "body", "type": "int" },
+      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Take a permit of a counting semaphore (up to limit holders)." },
+    { "name": "semaphore_release", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/release", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Return one permit (admits the next FIFO waiter)." },
+
+    { "name": "kv_get", "group": "kv", "method": "GET", "path": "/v1/kv", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Read a config key." },
+    { "name": "kv_put", "group": "kv", "method": "PUT", "path": "/v1/kv", "params": [
+      { "name": "key", "in": "query", "type": "string" },
+      { "name": "value", "in": "body", "type": "string" },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "prev_revision", "in": "body", "type": "int", "optional": true } ], "doc": "Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist)." },
+    { "name": "kv_delete", "group": "kv", "method": "DELETE", "path": "/v1/kv", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Delete a config key." },
+
+    { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
+      { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
+    { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
+      { "name": "name", "in": "path", "type": "string" },
+      { "name": "candidate", "in": "body", "type": "string" },
+      { "name": "ttl_ms", "in": "body", "type": "int" } ], "doc": "Campaign for leadership; wins if currently unheld. Returns a fencing token on win." },
+    { "name": "election_renew", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/renew", "params": [
+      { "name": "name", "in": "path", "type": "string" },
+      { "name": "candidate", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Extend the lease; requires the held fencing token." },
+    { "name": "election_resign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/resign", "params": [
+      { "name": "name", "in": "path", "type": "string" },
+      { "name": "candidate", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Step down; requires the held fencing token." },
+
+    { "name": "service_instances", "group": "discovery", "method": "GET", "path": "/v1/services/{service}", "params": [
+      { "name": "service", "in": "path", "type": "string" } ], "doc": "List live instances of a service." },
+    { "name": "service_register", "group": "discovery", "method": "PUT", "path": "/v1/services/{service}/instances/{instance_id}", "params": [
+      { "name": "service", "in": "path", "type": "string" },
+      { "name": "instance_id", "in": "path", "type": "string" },
+      { "name": "address", "in": "body", "type": "string" },
+      { "name": "ttl_ms", "in": "body", "type": "int" },
+      { "name": "metadata", "in": "body", "type": "object", "optional": true } ], "doc": "Register/refresh an instance with a TTL lease and optional metadata." },
+    { "name": "service_heartbeat", "group": "discovery", "method": "POST", "path": "/v1/services/{service}/instances/{instance_id}/heartbeat", "params": [
+      { "name": "service", "in": "path", "type": "string" },
+      { "name": "instance_id", "in": "path", "type": "string" },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Renew an instance lease before it expires." },
+    { "name": "service_deregister", "group": "discovery", "method": "DELETE", "path": "/v1/services/{service}/instances/{instance_id}", "params": [
+      { "name": "service", "in": "path", "type": "string" },
+      { "name": "instance_id", "in": "path", "type": "string" } ], "doc": "Remove an instance from the registry." },
+
+    { "name": "rate_limit_get", "group": "rate_limit", "method": "GET", "path": "/v1/rate-limit/{tenant}/{key}", "params": [
+      { "name": "tenant", "in": "path", "type": "string" },
+      { "name": "key", "in": "path", "type": "string" } ], "doc": "Current limiter state for a tenant/key." },
+    { "name": "rate_limit_check", "group": "rate_limit", "method": "POST", "path": "/v1/rate-limit/{tenant}/{key}/check", "params": [
+      { "name": "tenant", "in": "path", "type": "string" },
+      { "name": "key", "in": "path", "type": "string" },
+      { "name": "algorithm", "in": "body", "type": "string" },
+      { "name": "limit", "in": "body", "type": "int" },
+      { "name": "window_ms", "in": "body", "type": "int" },
+      { "name": "refill_per_second", "in": "body", "type": "number", "optional": true },
+      { "name": "cost", "in": "body", "type": "int", "optional": true } ], "doc": "Atomic check-and-decrement (token_bucket | sliding_window). Returns {allowed, remaining}." },
+
+    { "name": "schedule_get", "group": "cron", "method": "GET", "path": "/v1/cron/schedules/{name}", "params": [
+      { "name": "name", "in": "path", "type": "string" } ], "doc": "Read a schedule definition." },
+    { "name": "schedule_upsert", "group": "cron", "method": "PUT", "path": "/v1/cron/schedules/{name}", "params": [
+      { "name": "name", "in": "path", "type": "string" },
+      { "name": "target", "in": "body", "type": "object" },
+      { "name": "cron", "in": "body", "type": "string", "optional": true },
+      { "name": "one_shot_at_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "delivery", "in": "body", "type": "string", "optional": true },
+      { "name": "max_retries", "in": "body", "type": "int", "optional": true } ], "doc": "Create/update a schedule. target = {kind: webhook|queue|grpc, ...}. Exactly one of cron / one_shot_at_ms." },
+    { "name": "schedule_record_run", "group": "cron", "method": "POST", "path": "/v1/cron/schedules/{name}/runs", "params": [
+      { "name": "name", "in": "path", "type": "string" },
+      { "name": "fire_id", "in": "body", "type": "string" },
+      { "name": "fired_at_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Record a fire; duplicate fire_id is deduped (exactly-once)." },
+    { "name": "schedule_history", "group": "cron", "method": "GET", "path": "/v1/cron/schedules/{name}/history", "params": [
+      { "name": "name", "in": "path", "type": "string" } ], "doc": "Recent run history." }
+  ]
+}
