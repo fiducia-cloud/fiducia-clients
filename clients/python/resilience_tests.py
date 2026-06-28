@@ -74,34 +74,43 @@ def find_leader():
     return None
 
 
-# Make a node "unresponsive" with a deny-all NetworkPolicy — a real network
-# partition. (We can't SIGSTOP the server from inside the pod: it's PID 1, and the
-# kernel ignores SIGSTOP to a PID-namespace init sent from within the namespace.
-# A partition is also closer to a real-world unresponsive node, and needs a
-# policy-enforcing CNI — e.g. Cilium on the Hetzner cluster.)
-def _isolate_policy(pod):
-    return (
-        "apiVersion: networking.k8s.io/v1\n"
-        "kind: NetworkPolicy\n"
-        "metadata:\n"
-        "  name: resil-isolate-%s\n"
-        "  namespace: %s\n"
-        "spec:\n"
-        "  podSelector:\n"
-        "    matchLabels:\n"
-        "      statefulset.kubernetes.io/pod-name: %s\n"
-        "  policyTypes: [Ingress, Egress]\n"  # empty ingress/egress rules = deny all
-        % (pod, NS, pod)
-    )
+# Make a node "unresponsive" by SIGSTOP-ing its server process FROM THE HOST.
+# The server runs as the container's PID 1, and the kernel ignores SIGSTOP to a
+# PID-namespace init sent from WITHIN the namespace (so `kubectl exec ... kill`
+# does nothing); from an ancestor namespace (the host) it IS honored. We find the
+# right process by its FIDUCIA_NODE_ID env. Requires running on the node hosting
+# the pod — always true on the single-node AWS cluster; for a multi-machine
+# cluster, run per-machine. (A frozen process keeps its TCP sockets but answers
+# nothing — a faithful "unresponsive, not terminated".)
+import glob  # noqa: E402
+
+
+def _host_pid(pod):
+    for env_path in glob.glob("/proc/[0-9]*/environ"):
+        try:
+            entries = open(env_path, "rb").read().split(b"\0")
+            nid = next((e for e in entries if e.startswith(b"FIDUCIA_NODE_ID=")), None)
+            if nid and pod.encode() in nid:
+                pid = env_path.split("/")[2]
+                if open("/proc/%s/comm" % pid).read().strip() == "fiducia-node":
+                    return pid
+        except (OSError, IndexError):
+            continue
+    return None
 
 
 def isolate(pod):
-    return subprocess.run(["kubectl", "apply", "-f", "-"], input=_isolate_policy(pod),
-                          text=True, capture_output=True, timeout=30)
+    pid = _host_pid(pod)
+    if pid:
+        subprocess.run(["kill", "-STOP", pid], capture_output=True)
+    return pid
 
 
 def restore(pod):
-    return kubectl("delete", "networkpolicy", "resil-isolate-%s" % pod, "--ignore-not-found")
+    pid = _host_pid(pod)
+    if pid:
+        subprocess.run(["kill", "-CONT", pid], capture_output=True)
+    return pid
 
 
 class Workload:
