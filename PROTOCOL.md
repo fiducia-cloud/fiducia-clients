@@ -1,6 +1,13 @@
 # Fiducia client protocol (HTTP)
 
-The single source of truth every client in [`clients/`](clients/) targets. All
+> **Machine-readable source of truth:** [`operations.json`](operations.json) — the
+> endpoint manifest every client is generated from (run `python3 generate.py`).
+> The current endpoint list is in [`ENDPOINTS.md`](ENDPOINTS.md) (also generated).
+> This document is the human narrative; if it disagrees with `operations.json`,
+> the manifest wins. (Generated clients today: python, typescript, go — others
+> still hand-written and being migrated onto the generator.)
+
+A description of the contract every client in [`clients/`](clients/) targets. All
 clients are thin HTTP wrappers over this contract — same methods, same
 endpoints, language-idiomatic surface.
 
