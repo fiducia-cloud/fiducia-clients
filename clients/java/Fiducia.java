@@ -69,7 +69,15 @@ public class Fiducia {
             Object v = kv[i + 1];
             if (v == null) sb.append("null");
             else if (v instanceof String) sb.append('"').append(esc((String) v)).append('"');
-            else sb.append(v); // Number / Boolean
+            else if (v instanceof List) {
+                sb.append('[');
+                List<?> list = (List<?>) v;
+                for (int j = 0; j < list.size(); j++) {
+                    if (j > 0) sb.append(',');
+                    sb.append('"').append(esc(String.valueOf(list.get(j)))).append('"');
+                }
+                sb.append(']');
+            } else sb.append(v); // Number / Boolean
         }
         return sb.append('}').toString();
     }
