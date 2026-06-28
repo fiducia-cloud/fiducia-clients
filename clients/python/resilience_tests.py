@@ -216,7 +216,7 @@ def test_node_unresponsive():
               node_shard0(leader) is None, "paused node still responded")
     finally:
         restore(leader)
-        print("    %s partition removed (NetworkPolicy deleted)" % leader)
+        print("    %s resumed (SIGCONT)" % leader)
 
     # Rejoin: the resumed node answers /v1/status again and converges to follower.
     rejoined = False
