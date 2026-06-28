@@ -2,8 +2,9 @@
 // Implements PROTOCOL.md.
 //
 //   final c = FiduciaClient("https://api.fiducia.cloud");
-//   final lock = await c.lockAcquire("orders/checkout", ttlMs: 30000);
-//   await c.lockRelease("orders/checkout", lock["result"]["lock_id"]);
+//   final lock = await c.lock(["orders/checkout"], ttlMs: 30000); // blocks
+//   await lock.release();
+//   // non-blocking: final l = await c.tryLock(["orders/checkout"]); await l?.release();
 
 import 'dart:async';
 import 'dart:convert';
