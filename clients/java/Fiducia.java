@@ -4,7 +4,7 @@
 //
 //   Fiducia c = new Fiducia("https://api.fiducia.cloud");
 //   String lock = c.lockAcquire("orders/checkout", 30000L, true, 1);
-//   c.lockRelease("orders/checkout", "<lock_id from the JSON>");
+//   c.lockRelease("orders/checkout", "worker-a", 7L);
 
 package cloud.fiducia;
 
@@ -14,10 +14,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 public class Fiducia {
     private final String base;
     private final HttpClient http = HttpClient.newHttpClient();
+    public Duration requestTimeout = null;
+    public Duration lockRequestTimeout = null;
+    public int retryMax = 0;
+    public Duration retryDelay = Duration.ZERO;
 
     public Fiducia(String baseUrl) {
         this.base = baseUrl.replaceAll("/+$", "");
@@ -33,8 +38,36 @@ public class Fiducia {
         }
     }
 
+    public static class RequestOptions {
+        public Duration timeout = null;
+        public Duration requestTimeout = null;
+        public Duration lockRequestTimeout = null;
+        public int maxRetries = 0;
+        public int retryMax = 0;
+        public int retries = 0;
+        public Duration retryDelay = Duration.ZERO;
+    }
+
     private String request(String method, String path, String jsonBody) {
+        return request(method, path, jsonBody, null, false);
+    }
+
+    private String request(String method, String path, String jsonBody, RequestOptions opts, boolean lockAcquire) {
+        int retries = resolveRetries(opts);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return requestOnce(method, path, jsonBody, opts, lockAcquire);
+            } catch (RuntimeException e) {
+                if (attempt >= retries || !retryable(e)) throw e;
+                sleep(resolveRetryDelay(opts));
+            }
+        }
+    }
+
+    private String requestOnce(String method, String path, String jsonBody, RequestOptions opts, boolean lockAcquire) {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path));
+        Duration timeout = resolveTimeout(opts, lockAcquire);
+        if (timeout != null) b.timeout(timeout);
         if (jsonBody != null) {
             b.header("content-type", "application/json")
              .method(method, HttpRequest.BodyPublishers.ofString(jsonBody));
@@ -46,6 +79,45 @@ public class Fiducia {
             if (r.statusCode() >= 300) throw new FiduciaException(r.statusCode(), r.body());
             return r.body();
         } catch (java.io.IOException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Duration resolveTimeout(RequestOptions opts, boolean lockAcquire) {
+        if (opts != null && opts.lockRequestTimeout != null) return opts.lockRequestTimeout;
+        if (opts != null && opts.requestTimeout != null) return opts.requestTimeout;
+        if (opts != null && opts.timeout != null) return opts.timeout;
+        if (lockAcquire && lockRequestTimeout != null) return lockRequestTimeout;
+        return requestTimeout;
+    }
+
+    private int resolveRetries(RequestOptions opts) {
+        if (opts != null && opts.maxRetries > 0) return opts.maxRetries;
+        if (opts != null && opts.retryMax > 0) return opts.retryMax;
+        if (opts != null && opts.retries > 0) return opts.retries;
+        return Math.max(retryMax, 0);
+    }
+
+    private Duration resolveRetryDelay(RequestOptions opts) {
+        if (opts != null && opts.retryDelay != null && !opts.retryDelay.isZero()) return opts.retryDelay;
+        return retryDelay == null ? Duration.ZERO : retryDelay;
+    }
+
+    private static boolean retryable(RuntimeException e) {
+        if (e instanceof FiduciaException) {
+            int status = ((FiduciaException) e).status;
+            return status == 408 || status == 425 || status == 429 || status == 500 ||
+                   status == 502 || status == 503 || status == 504;
+        }
+        return true;
+    }
+
+    private static void sleep(Duration delay) {
+        if (delay == null || delay.isZero() || delay.isNegative()) return;
+        try {
+            Thread.sleep(delay.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
     }
@@ -78,10 +150,84 @@ public class Fiducia {
 
     // --- locks & semaphores ---
     public String lockAcquire(String key, Long ttlMs, boolean wait, int max) {
-        return request("POST", "/v1/locks/" + enc(key) + "/acquire", obj("ttl_ms", ttlMs, "wait", wait, "max", max));
+        return lockAcquire(key, ttlMs, wait, max, null);
     }
-    public String lockRelease(String key, String lockId) {
-        return request("POST", "/v1/locks/" + enc(key) + "/release", obj("lock_id", lockId));
+    public String lockAcquire(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, wait, max, opts);
+    }
+    public String tryLock(String key, Long ttlMs) {
+        return lockAcquireWithWait(key, ttlMs, false, 1, null);
+    }
+    public String tryLock(String key, Long ttlMs, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, false, 1, opts);
+    }
+    public String tryLock(String key, Long ttlMs, int max) {
+        return lockAcquireWithWait(key, ttlMs, false, max, null);
+    }
+    public String tryLock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, false, max, opts);
+    }
+    public String mustLock(String key, Long ttlMs) {
+        return lockAcquireWithWait(key, ttlMs, true, 1, null);
+    }
+    public String mustLock(String key, Long ttlMs, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, true, 1, opts);
+    }
+    public String mustLock(String key, Long ttlMs, int max) {
+        return lockAcquireWithWait(key, ttlMs, true, max, null);
+    }
+    public String mustLock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, true, max, opts);
+    }
+    public String lock(String key, Long ttlMs) {
+        return mustLock(key, ttlMs);
+    }
+    public String lock(String key, Long ttlMs, RequestOptions opts) {
+        return mustLock(key, ttlMs, 1, opts);
+    }
+    public String lock(String key, Long ttlMs, int max) {
+        return mustLock(key, ttlMs, max);
+    }
+    public String lock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return mustLock(key, ttlMs, max, opts);
+    }
+    private String lockAcquireWithWait(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return request("POST", "/v1/locks/acquire",
+            obj("key", key, "ttl_ms", ttlMs, "wait", wait, "max", max), opts, true);
+    }
+    public String semaphoreAcquire(String key, Long ttlMs, boolean wait, int max) {
+        return semaphoreAcquire(key, ttlMs, wait, max, null);
+    }
+    public String semaphoreAcquire(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, wait, max, opts);
+    }
+    public String trySemaphore(String key, Long ttlMs, int max) {
+        return semaphoreAcquireWithWait(key, ttlMs, false, max, null);
+    }
+    public String trySemaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, false, max, opts);
+    }
+    public String mustSemaphore(String key, Long ttlMs, int max) {
+        return semaphoreAcquireWithWait(key, ttlMs, true, max, null);
+    }
+    public String mustSemaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, true, max, opts);
+    }
+    public String semaphore(String key, Long ttlMs, int max) {
+        return mustSemaphore(key, ttlMs, max);
+    }
+    public String semaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return mustSemaphore(key, ttlMs, max, opts);
+    }
+    private String semaphoreAcquireWithWait(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return request("POST", "/v1/semaphores/acquire",
+            obj("key", key, "ttl_ms", ttlMs, "wait", wait, "limit", Math.max(max, 2)), opts, true);
+    }
+    public String lockRelease(String key, String holder, long fencingToken) {
+        return request("POST", "/v1/locks/release", obj("holder", holder, "fencing_token", fencingToken));
+    }
+    public String semaphoreRelease(String key, String holder, long fencingToken) {
+        return request("POST", "/v1/semaphores/release", obj("key", key, "holder", holder, "fencing_token", fencingToken));
     }
 
     // --- reader-writer locks ---
@@ -99,11 +245,11 @@ public class Fiducia {
     }
 
     // --- config KV ---
-    public String kvGet(String key) { return request("GET", "/v1/kv/" + enc(key), null); }
+    public String kvGet(String key) { return request("GET", "/v1/kv?key=" + enc(key), null); }
     public String kvPut(String key, String value, Long ttlMs) {
-        return request("PUT", "/v1/kv/" + enc(key), obj("value", value, "ttl_ms", ttlMs));
+        return request("PUT", "/v1/kv?key=" + enc(key), obj("value", value, "ttl_ms", ttlMs));
     }
-    public String kvDelete(String key) { return request("DELETE", "/v1/kv/" + enc(key), null); }
+    public String kvDelete(String key) { return request("DELETE", "/v1/kv?key=" + enc(key), null); }
     public String kvList(String prefix) { return request("GET", "/v1/kv?prefix=" + enc(prefix), null); }
 
     // --- leader election ---

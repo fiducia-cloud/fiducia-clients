@@ -15,6 +15,7 @@ import argparse
 import json
 import os as _os
 import sys as _sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +43,10 @@ class FiduciaError(Exception):
         self.body = body
 
 
+class FiduciaTimeoutError(Exception):
+    pass
+
+
 def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
@@ -55,22 +60,106 @@ def _query(path, **params):
 
 
 class FiduciaClient:
-    def __init__(self, base_url, timeout=30):
+    def __init__(self, base_url, timeout=30, max_retries=0, retry_delay=0):
         self.base = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
-    def _request(self, method, path, body=None):
+    def _request(self, method, path, body=None, **request_opts):
+        max_retries = self._resolve_retries(request_opts)
+        retry_delay = self._resolve_retry_delay(request_opts)
+        for attempt in range(max_retries + 1):
+            try:
+                return self._request_once(method, path, body, request_opts)
+            except Exception as exc:
+                if attempt >= max_retries or not self._retryable(exc):
+                    raise
+                if retry_delay:
+                    time.sleep(retry_delay)
+
+    def _request_once(self, method, path, body=None, request_opts=None):
+        request_opts = request_opts or {}
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
             req.add_header("content-type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 text = r.read().decode()
                 return json.loads(text) if text else None
         except urllib.error.HTTPError as e:
             text = e.read().decode()
             raise FiduciaError(e.code, json.loads(text) if text else None)
+        except TimeoutError as e:
+            raise FiduciaTimeoutError(str(e))
+
+    def _watch(self, path, **request_opts):
+        req = urllib.request.Request(self.base + path, method="GET")
+        req.add_header("accept", "text/event-stream")
+        try:
+            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
+                event = {}
+                data = []
+                for raw_line in r:
+                    line = raw_line.decode().rstrip("\r\n")
+                    if not line:
+                        decoded = _decode_sse_event(event, data)
+                        if decoded is not None:
+                            yield decoded
+                        event, data = {}, []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    field, _, value = line.partition(":")
+                    if value.startswith(" "):
+                        value = value[1:]
+                    if field == "event":
+                        event["event"] = value
+                    elif field == "id":
+                        event["id"] = value
+                    elif field == "data":
+                        data.append(value)
+                decoded = _decode_sse_event(event, data)
+                if decoded is not None:
+                    yield decoded
+        except urllib.error.HTTPError as e:
+            text = e.read().decode()
+            raise FiduciaError(e.code, json.loads(text) if text else None)
+        except TimeoutError as e:
+            raise FiduciaTimeoutError(str(e))
+
+    def _resolve_timeout(self, opts):
+        for key in ("timeout_ms", "request_timeout_ms", "lock_request_timeout_ms"):
+            value = opts.get(key)
+            if value is not None:
+                return value / 1000
+        for key in ("timeout", "request_timeout", "lock_request_timeout"):
+            value = opts.get(key)
+            if value is not None:
+                return value
+        return self.timeout
+
+    def _resolve_retries(self, opts):
+        for key in ("max_retries", "retry_max", "retries"):
+            value = opts.get(key)
+            if value is not None:
+                if value < 0:
+                    raise ValueError("%s must be non-negative" % key)
+                return int(value)
+        return int(self.max_retries or 0)
+
+    def _resolve_retry_delay(self, opts):
+        if opts.get("retry_delay_ms") is not None:
+            return opts["retry_delay_ms"] / 1000
+        if opts.get("retry_delay") is not None:
+            return opts["retry_delay"]
+        return self.retry_delay or 0
+
+    def _retryable(self, exc):
+        if isinstance(exc, FiduciaError):
+            return exc.status in (408, 425, 429, 500, 502, 503, 504)
+        return isinstance(exc, (FiduciaTimeoutError, TimeoutError, urllib.error.URLError))
 
     # --- misc ---
     def health(self):
@@ -85,17 +174,42 @@ class FiduciaClient:
     def lock_get(self, key):
         return self._request("GET", _query("/v1/locks", key=key))
 
-    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None):
+    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None, **request_opts):
         return self._request("POST", "/v1/locks/acquire",
-                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max})
+                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max},
+                             **request_opts)
 
-    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False):
+    def try_lock(self, key, holder=None, ttl_ms=None, max=None, **request_opts):
+        return self.lock_acquire(key, holder=holder, ttl_ms=ttl_ms, wait=False, max=max, **request_opts)
+
+    def must_lock(self, key, holder=None, ttl_ms=None, max=None, **request_opts):
+        return self.lock_acquire(key, holder=holder, ttl_ms=ttl_ms, wait=True, max=max, **request_opts)
+
+    lock = must_lock
+
+    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False, **request_opts):
         # Multi-key UNION lock: all-or-nothing across the whole set; conflicts on
         # ANY member key block the grant.
         return self._request("POST", "/v1/locks/acquire",
-                             {"keys": list(keys), "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+                             {"keys": list(keys), "holder": holder, "ttl_ms": ttl_ms, "wait": wait},
+                             **request_opts)
 
-    def lock_release(self, key, holder, fencing_token):
+    def try_lock_many(self, keys, holder=None, ttl_ms=None, **request_opts):
+        return self.lock_acquire_many(keys, holder=holder, ttl_ms=ttl_ms, wait=False, **request_opts)
+
+    def must_lock_many(self, keys, holder=None, ttl_ms=None, **request_opts):
+        return self.lock_acquire_many(keys, holder=holder, ttl_ms=ttl_ms, wait=True, **request_opts)
+
+    lock_many = must_lock_many
+
+    def lock_release(self, key_or_holder, holder=None, fencing_token=None):
+        if fencing_token is None:
+            if holder is None:
+                raise TypeError("lock_release requires holder and fencing_token")
+            fencing_token = holder
+            holder = key_or_holder
+        elif holder is None:
+            raise TypeError("lock_release requires holder")
         return self._request("POST", "/v1/locks/release",
                              {"holder": holder, "fencing_token": fencing_token})
 
@@ -103,9 +217,21 @@ class FiduciaClient:
     def semaphore_get(self, key):
         return self._request("GET", _query("/v1/semaphores", key=key))
 
-    def semaphore_acquire(self, key, holder=None, ttl_ms=None, max=2, wait=False):
+    def semaphore_acquire(self, key, limit=None, holder=None, ttl_ms=None, max=None, wait=False, **request_opts):
+        if max is not None and limit is not None and max != limit:
+            raise ValueError("semaphore limit and max disagree")
+        limit = max if max is not None else (limit if limit is not None else 2)
         return self._request("POST", "/v1/semaphores/acquire",
-                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max})
+                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": limit},
+                             **request_opts)
+
+    def try_semaphore(self, key, holder=None, ttl_ms=None, max=2, **request_opts):
+        return self.semaphore_acquire(key, holder=holder, ttl_ms=ttl_ms, max=max, wait=False, **request_opts)
+
+    def must_semaphore(self, key, holder=None, ttl_ms=None, max=2, **request_opts):
+        return self.semaphore_acquire(key, holder=holder, ttl_ms=ttl_ms, max=max, wait=True, **request_opts)
+
+    semaphore = must_semaphore
 
     def semaphore_release(self, key, holder, fencing_token):
         return self._request("POST", "/v1/semaphores/release",
@@ -137,6 +263,12 @@ class FiduciaClient:
 
     def kv_list(self, prefix):
         return self._request("GET", _query("/v1/kv", prefix=prefix))
+
+    def kv_watch(self, key, **request_opts):
+        return self._watch(_query("/v1/kv", key=key, watch="true"), **request_opts)
+
+    def kv_watch_prefix(self, prefix, **request_opts):
+        return self._watch(_query("/v1/kv", prefix=prefix, watch="true"), **request_opts)
 
     # --- rate limiting ---
     def rate_limit_check(self, tenant, key, algorithm, limit, window_ms,
@@ -191,6 +323,9 @@ class FiduciaClient:
     def election_get(self, name):
         return self._request("GET", "/v1/elections/%s" % _enc(name))
 
+    def election_watch(self, name, **request_opts):
+        return self._watch("/v1/elections/%s/watch" % _enc(name), **request_opts)
+
     # --- service discovery ---
     def service_register(self, service, instance_id, address, ttl_ms, metadata=None):
         return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)),
@@ -209,6 +344,23 @@ class FiduciaClient:
 
     def service_list(self):
         return self._request("GET", "/v1/services")
+
+    def service_watch(self, service, **request_opts):
+        return self._watch("/v1/services/%s/watch" % _enc(service), **request_opts)
+
+
+def _decode_sse_event(event, data):
+    if not data:
+        return None
+    raw = "\n".join(data)
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = raw
+    out = {"event": event.get("event", "message"), "data": decoded}
+    if "id" in event:
+        out["id"] = event["id"]
+    return out
 
 
 def _metadata(items):

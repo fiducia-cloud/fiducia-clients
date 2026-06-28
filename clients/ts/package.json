@@ -1,11 +1,27 @@
 {
   "name": "@fiducia/client",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
+  "license": "UNLICENSED",
   "description": "Fiducia HTTP client (TypeScript). Zero runtime deps; types from @fiducia/interfaces.",
   "main": "fiducia.ts",
+  "types": "fiducia.ts",
+  "scripts": {
+    "test": "node --test --experimental-strip-types fiducia.test.ts"
+  },
+  "files": [
+    "fiducia.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fiducia-cloud/fiducia-clients.git",
+    "directory": "clients/ts"
+  },
   "dependencies": {
-    "@fiducia/interfaces": "file:../../../fiducia-interfaces"
+    "@fiducia/interfaces": "^0.1.0"
   }
 }

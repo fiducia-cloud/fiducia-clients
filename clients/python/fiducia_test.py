@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import pathlib
+import re
 import sys
 import unittest
 
@@ -15,14 +17,47 @@ class RecordingClient(fiducia.FiduciaClient):
         super().__init__(base_url, timeout=timeout)
         self.calls = []
 
-    def _request(self, method, path, body=None):
-        self.calls.append((method, path, body))
+    def _request(self, method, path, body=None, **request_opts):
+        self.calls.append((method, path, body, request_opts))
         return {"method": method, "path": path, "body": body}
+
+    def _watch(self, path, **request_opts):
+        self.calls.append(("WATCH", path, None, request_opts))
+        return iter(())
 
 
 class FiduciaPythonClientTests(unittest.TestCase):
     def assert_last_call(self, client, method, path, body=None):
-        self.assertEqual(client.calls[-1], (method, path, body))
+        self.assertEqual(client.calls[-1], (method, path, body, {}))
+
+    def assert_last_call_with_opts(self, client, method, path, body=None, request_opts=None):
+        self.assertEqual(client.calls[-1], (method, path, body, request_opts or {}))
+
+    def test_sdk_sources_use_live_lock_semaphore_and_kv_routes(self):
+        repo = pathlib.Path(__file__).resolve().parents[2]
+        sources = [
+            "clients/csharp/Fiducia.cs",
+            "clients/dart/fiducia.dart",
+            "clients/elixir/fiducia.ex",
+            "clients/go/fiducia.go",
+            "clients/java/Fiducia.java",
+            "clients/php/Fiducia.php",
+            "clients/powershell/Fiducia.psm1",
+            "clients/python/fiducia.py",
+            "clients/ruby/fiducia.rb",
+            "clients/rust/src/lib.rs",
+            "clients/shell/fiducia.sh",
+            "clients/ts/fiducia.ts",
+        ]
+        path_key_action = re.compile(r"/v1/(?:locks|semaphores)/.+/(?:acquire|release)")
+
+        for rel in sources:
+            with self.subTest(source=rel):
+                text = (repo / rel).read_text()
+                self.assertIsNone(path_key_action.search(text))
+                self.assertNotIn("/v1/kv/", text)
+                self.assertNotIn("/v1/locks/acquire-many", text)
+                self.assertNotIn("/v1/locks/release-many", text)
 
     def test_sdk_routes_cover_coordination_primitives(self):
         c = RecordingClient()
@@ -36,6 +71,21 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "/v1/locks/acquire",
             {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
         )
+        c.try_lock("orders/42", holder="worker-a", ttl_ms=30_000)
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/locks/acquire",
+            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": False, "max": None},
+        )
+        c.must_lock("orders/42", holder="worker-a", ttl_ms=30_000, lock_request_timeout_ms=5000, max_retries=2)
+        self.assert_last_call_with_opts(
+            c,
+            "POST",
+            "/v1/locks/acquire",
+            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
+            {"lock_request_timeout_ms": 5000, "max_retries": 2},
+        )
         c.lock_acquire_many(["orders/42", "inventory/sku-7"], holder="worker-a")
         self.assert_last_call(
             c,
@@ -43,8 +93,17 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "/v1/locks/acquire",
             {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": False},
         )
+        c.lock_many(["orders/42", "inventory/sku-7"], holder="worker-a")
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/locks/acquire",
+            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": True},
+        )
         c.lock_release("orders/42", "worker-a", 11)
         self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 11})
+        c.lock_release("worker-a", 12)
+        self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 12})
 
         c.semaphore_get("pools/db/primary")
         self.assert_last_call(c, "GET", "/v1/semaphores?key=pools%2Fdb%2Fprimary")
@@ -54,6 +113,28 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "POST",
             "/v1/semaphores/acquire",
             {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": 20_000, "wait": True, "limit": 3},
+        )
+        c.semaphore_acquire("pools/db/primary", 4, holder="worker-c", ttl_ms=20_000, wait=True)
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/semaphores/acquire",
+            {"key": "pools/db/primary", "holder": "worker-c", "ttl_ms": 20_000, "wait": True, "limit": 4},
+        )
+        c.try_semaphore("pools/db/primary", holder="worker-b", max=3)
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/semaphores/acquire",
+            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": None, "wait": False, "limit": 3},
+        )
+        c.must_semaphore("pools/db/primary", holder="worker-b", max=3, retries=1)
+        self.assert_last_call_with_opts(
+            c,
+            "POST",
+            "/v1/semaphores/acquire",
+            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": None, "wait": True, "limit": 3},
+            {"retries": 1},
         )
         c.semaphore_release("pools/db/primary", "worker-b", 12)
         self.assert_last_call(
@@ -76,6 +157,10 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "DELETE", "/v1/kv?key=flags%2Fnew-ui")
         c.kv_list("flags/")
         self.assert_last_call(c, "GET", "/v1/kv?prefix=flags%2F")
+        c.kv_watch("flags/new-ui", timeout_ms=500)
+        self.assert_last_call_with_opts(c, "WATCH", "/v1/kv?key=flags%2Fnew-ui&watch=true", request_opts={"timeout_ms": 500})
+        c.kv_watch_prefix("flags/")
+        self.assert_last_call(c, "WATCH", "/v1/kv?prefix=flags%2F&watch=true")
 
         c.rate_limit_check("tenant/a", "checkout", "token_bucket", 100, 60_000, cost=2)
         self.assert_last_call(
@@ -127,6 +212,8 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "POST", "/v1/elections/cron-main/resign", {"candidate": "node-a", "fencing_token": 21})
         c.election_get("cron-main")
         self.assert_last_call(c, "GET", "/v1/elections/cron-main")
+        c.election_watch("cron-main")
+        self.assert_last_call(c, "WATCH", "/v1/elections/cron-main/watch")
 
         c.service_register("api", "i-1", "10.0.0.1:9000", 10_000, metadata={"az": "a"})
         self.assert_last_call(
@@ -143,6 +230,8 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "GET", "/v1/services/api")
         c.service_list()
         self.assert_last_call(c, "GET", "/v1/services")
+        c.service_watch("api")
+        self.assert_last_call(c, "WATCH", "/v1/services/api/watch")
 
     def test_cli_dispatches_feature_groups(self):
         cases = [

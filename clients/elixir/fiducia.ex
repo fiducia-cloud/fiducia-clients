@@ -5,12 +5,20 @@
 #   Application.ensure_all_started(:ssl)
 #   c = Fiducia.Client.new("https://api.fiducia.cloud")
 #   {:ok, lock} = Fiducia.Client.lock_acquire(c, "orders/checkout", ttl_ms: 30_000)
-#   Fiducia.Client.lock_release(c, "orders/checkout", lock["result"]["lock_id"])
+#   Fiducia.Client.lock_release(c, "orders/checkout", "worker-a", lock["result"]["output"]["fencing_token"])
 
 defmodule Fiducia.Client do
-  defstruct base: nil
+  defstruct base: nil, request_timeout_ms: nil, lock_request_timeout_ms: nil, retry_max: 0, retry_delay_ms: 0
 
-  def new(base_url), do: %__MODULE__{base: String.trim_trailing(base_url, "/")}
+  def new(base_url, opts \\ []) do
+    %__MODULE__{
+      base: String.trim_trailing(base_url, "/"),
+      request_timeout_ms: opts[:request_timeout_ms],
+      lock_request_timeout_ms: opts[:lock_request_timeout_ms],
+      retry_max: Keyword.get(opts, :retry_max, 0),
+      retry_delay_ms: Keyword.get(opts, :retry_delay_ms, 0)
+    }
+  end
 
   # --- misc ---
   def health(c), do: request(c, :get, "/healthz")
@@ -18,12 +26,28 @@ defmodule Fiducia.Client do
 
   # --- locks & semaphores ---
   def lock_acquire(c, key, opts \\ []) do
-    body = %{ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, true), max: Keyword.get(opts, :max, 1)}
-    request(c, :post, "/v1/locks/#{enc(key)}/acquire", body)
+    body = %{key: key, ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, true), max: Keyword.get(opts, :max, 1)}
+    request(c, :post, "/v1/locks/acquire", body, Keyword.put(opts, :lock_acquire, true))
   end
 
-  def lock_release(c, key, lock_id),
-    do: request(c, :post, "/v1/locks/#{enc(key)}/release", %{lock_id: lock_id})
+  def try_lock(c, key, opts \\ []), do: lock_acquire(c, key, Keyword.put(opts, :wait, false))
+  def must_lock(c, key, opts \\ []), do: lock_acquire(c, key, Keyword.put(opts, :wait, true))
+  def lock(c, key, opts \\ []), do: must_lock(c, key, opts)
+
+  def lock_release(c, _key, holder, fencing_token),
+    do: request(c, :post, "/v1/locks/release", %{holder: holder, fencing_token: fencing_token})
+
+  def semaphore_acquire(c, key, opts \\ []) do
+    body = %{key: key, ttl_ms: opts[:ttl_ms], wait: Keyword.get(opts, :wait, true), limit: max(Keyword.get(opts, :max, 2), 2)}
+    request(c, :post, "/v1/semaphores/acquire", body, Keyword.put(opts, :lock_acquire, true))
+  end
+
+  def try_semaphore(c, key, opts \\ []), do: semaphore_acquire(c, key, Keyword.put(opts, :wait, false))
+  def must_semaphore(c, key, opts \\ []), do: semaphore_acquire(c, key, Keyword.put(opts, :wait, true))
+  def semaphore(c, key, opts \\ []), do: must_semaphore(c, key, opts)
+
+  def semaphore_release(c, key, holder, fencing_token),
+    do: request(c, :post, "/v1/semaphores/release", %{key: key, holder: holder, fencing_token: fencing_token})
 
   # --- reader-writer locks ---
   def rw_acquire_read(c, key, opts \\ []),
@@ -39,11 +63,11 @@ defmodule Fiducia.Client do
     do: request(c, :post, "/v1/rw/#{enc(key)}/write/end", %{lock_id: lock_id})
 
   # --- config KV ---
-  def kv_get(c, key), do: request(c, :get, "/v1/kv/#{enc(key)}")
+  def kv_get(c, key), do: request(c, :get, "/v1/kv?key=#{enc(key)}")
   def kv_put(c, key, value, opts \\ []),
-    do: request(c, :put, "/v1/kv/#{enc(key)}", %{value: value, ttl_ms: opts[:ttl_ms]})
+    do: request(c, :put, "/v1/kv?key=#{enc(key)}", %{value: value, ttl_ms: opts[:ttl_ms]})
 
-  def kv_delete(c, key), do: request(c, :delete, "/v1/kv/#{enc(key)}")
+  def kv_delete(c, key), do: request(c, :delete, "/v1/kv?key=#{enc(key)}")
   def kv_list(c, prefix), do: request(c, :get, "/v1/kv?prefix=#{enc(prefix)}")
 
   # --- leader election ---
@@ -74,7 +98,27 @@ defmodule Fiducia.Client do
   # --- internals ---
   defp enc(s), do: URI.encode_www_form(to_string(s))
 
-  defp request(c, method, path, body \\ nil) do
+  defp request(c, method, path, body \\ nil, opts \\ []) do
+    do_request(c, method, path, body, opts, 0, resolve_retries(c, opts))
+  end
+
+  defp do_request(c, method, path, body, opts, attempt, max_retries) do
+    case request_once(c, method, path, body, opts) do
+      {:ok, data} ->
+        {:ok, data}
+
+      {:error, reason} = err ->
+        if attempt < max_retries and retryable?(reason) do
+          delay = resolve_retry_delay_ms(c, opts)
+          if delay > 0, do: :timer.sleep(delay)
+          do_request(c, method, path, body, opts, attempt + 1, max_retries)
+        else
+          err
+        end
+    end
+  end
+
+  defp request_once(c, method, path, body, opts) do
     url = String.to_charlist(c.base <> path)
 
     http_request =
@@ -84,7 +128,13 @@ defmodule Fiducia.Client do
         {url, []}
       end
 
-    case :httpc.request(method, http_request, [], body_format: :binary) do
+    http_opts =
+      case resolve_timeout_ms(c, opts) do
+        nil -> []
+        timeout -> [timeout: timeout, connect_timeout: timeout]
+      end
+
+    case :httpc.request(method, http_request, http_opts, body_format: :binary) do
       {:ok, {{_v, status, _r}, _headers, resp_body}} ->
         data = if resp_body in ["", <<>>], do: nil, else: :json.decode(resp_body)
         if status >= 300, do: {:error, {status, data}}, else: {:ok, data}
@@ -93,4 +143,22 @@ defmodule Fiducia.Client do
         {:error, reason}
     end
   end
+
+  defp resolve_timeout_ms(c, opts) do
+    opts[:lock_request_timeout_ms] ||
+      opts[:request_timeout_ms] ||
+      opts[:timeout_ms] ||
+      if(opts[:lock_acquire], do: c.lock_request_timeout_ms, else: nil) ||
+      c.request_timeout_ms
+  end
+
+  defp resolve_retries(c, opts),
+    do: max(opts[:max_retries] || opts[:retry_max] || opts[:retries] || c.retry_max || 0, 0)
+
+  defp resolve_retry_delay_ms(c, opts),
+    do: max(opts[:retry_delay_ms] || c.retry_delay_ms || 0, 0)
+
+  defp retryable?({status, _body}) when status in [408, 425, 429, 500, 502, 503, 504], do: true
+  defp retryable?({_status, _body}), do: false
+  defp retryable?(_reason), do: true
 end

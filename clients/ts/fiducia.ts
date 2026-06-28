@@ -4,8 +4,8 @@
 //   import { FiduciaClient } from "./fiducia";
 //   import type { KvEntry, LockGrant } from "@fiducia/client";
 //   const c = new FiduciaClient("https://api.fiducia.cloud");
-//   const lock = await c.lockAcquire("orders/checkout", { holder: "worker-a", ttlMs: 30000 });
-//   await c.lockRelease("orders/checkout", { holder: "worker-a", fencingToken: lock.result.fencing_token });
+//   const lock = await c.mustLock("orders/checkout", { holder: "worker-a", ttlMs: 30000 });
+//   await c.lockRelease("orders/checkout", { holder: "worker-a", fencingToken: lock.result.output.fencing_token });
 
 // Shared payload/error contract — re-exported from @fiducia/interfaces so callers
 // type responses from one source of truth (these are type-only; no runtime cost).
@@ -20,8 +20,34 @@ export type {
   ServiceListResponse,
 } from "@fiducia/interfaces/typescript";
 
-export interface AcquireOpts { holder?: string; ttlMs?: number; wait?: boolean; max?: number; }
-export interface AcquireManyOpts { keys: string[]; holder?: string; ttlMs?: number; wait?: boolean; }
+export interface RequestControlOpts {
+  timeoutMs?: number;
+  requestTimeoutMs?: number;
+  lockRequestTimeoutMs?: number;
+  maxRetries?: number;
+  retryMax?: number;
+  retries?: number;
+  retryDelayMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface FiduciaClientOpts extends RequestControlOpts {
+  fetch?: typeof fetch;
+}
+
+export interface AcquireOpts extends RequestControlOpts {
+  holder?: string;
+  ttlMs?: number;
+  wait?: boolean;
+  max?: number;
+}
+
+export interface AcquireManyOpts extends RequestControlOpts {
+  keys: string[];
+  holder?: string;
+  ttlMs?: number;
+  wait?: boolean;
+}
 export interface ReleaseOpts { holder: string; fencingToken: number; }
 export interface RwOpts { ttlMs?: number; wait?: boolean; }
 export interface KvPutOpts { ttlMs?: number; prevRevision?: number; }
@@ -45,10 +71,43 @@ export interface ScheduleUpsertOpts {
   delivery?: "at_least_once" | "exactly_once";
   maxRetries?: number;
 }
+export interface WatchEvent<T = any> {
+  event: string;
+  data: T;
+  id?: string;
+}
 
 export class FiduciaError extends Error {
-  constructor(public status: number, public body: any) {
+  status: number;
+  body: any;
+  headers?: Headers;
+
+  constructor(status: number, body: any, headers?: Headers) {
     super(`fiducia: HTTP ${status}`);
+    this.status = status;
+    this.body = body;
+    this.headers = headers;
+  }
+}
+
+export class FiduciaTimeoutError extends Error {
+  timeoutMs: number;
+  method: string;
+  path: string;
+  attempt: number;
+
+  constructor(
+    timeoutMs: number,
+    method: string,
+    path: string,
+    attempt: number,
+  ) {
+    super(`fiducia: ${method} ${path} timed out after ${timeoutMs}ms`);
+    this.name = "FiduciaTimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.method = method;
+    this.path = path;
+    this.attempt = attempt;
   }
 }
 
@@ -56,20 +115,235 @@ const enc = encodeURIComponent;
 
 export class FiduciaClient {
   private base: string;
-  constructor(baseUrl: string) {
+  private fetchImpl: typeof fetch;
+  private requestTimeoutMs?: number;
+  private lockRequestTimeoutMs?: number;
+  private retryMax: number;
+  private retryDelayMs: number;
+
+  constructor(baseUrl: string, opts: FiduciaClientOpts = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
+    this.fetchImpl = opts.fetch ?? fetch;
+    this.requestTimeoutMs = this.pickTimeoutMs({
+      timeoutMs: opts.timeoutMs,
+      requestTimeoutMs: opts.requestTimeoutMs,
+    });
+    this.lockRequestTimeoutMs = this.pickTimeoutMs({
+      timeoutMs: opts.lockRequestTimeoutMs,
+    });
+    this.retryMax = this.pickRetryMax(opts);
+    this.retryDelayMs = this.pickRetryDelayMs(opts);
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<any> {
-    const res = await fetch(this.base + path, {
-      method,
-      headers: body !== undefined ? { "content-type": "application/json" } : undefined,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+  private pickTimeoutMs(opts: RequestControlOpts): number | undefined {
+    const value = opts.timeoutMs ?? opts.requestTimeoutMs ?? opts.lockRequestTimeoutMs;
+    if (value === undefined) return undefined;
+    if (!Number.isFinite(value) || value <= 0) throw new Error("fiducia: timeout must be a positive number of milliseconds");
+    return value;
+  }
+
+  private pickRetryMax(opts: RequestControlOpts): number {
+    const value = opts.maxRetries ?? opts.retryMax ?? opts.retries ?? 0;
+    if (!Number.isInteger(value) || value < 0) throw new Error("fiducia: retries must be a non-negative integer");
+    return value;
+  }
+
+  private pickRetryDelayMs(opts: RequestControlOpts): number {
+    const value = opts.retryDelayMs ?? 0;
+    if (!Number.isFinite(value) || value < 0) throw new Error("fiducia: retryDelayMs must be a non-negative number");
+    return value;
+  }
+
+  private resolveTimeoutMs(opts: RequestControlOpts, lockAcquire = false): number | undefined {
+    const value = opts.timeoutMs
+      ?? (lockAcquire ? opts.lockRequestTimeoutMs : undefined)
+      ?? opts.requestTimeoutMs
+      ?? (lockAcquire ? this.lockRequestTimeoutMs : undefined)
+      ?? this.requestTimeoutMs;
+    return this.pickTimeoutMs({ timeoutMs: value });
+  }
+
+  private resolveRetryMax(opts: RequestControlOpts): number {
+    return this.pickRetryMax({
+      maxRetries: opts.maxRetries ?? opts.retryMax ?? opts.retries ?? this.retryMax,
     });
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-    if (!res.ok) throw new FiduciaError(res.status, data);
-    return data;
+  }
+
+  private resolveRetryDelayMs(opts: RequestControlOpts): number {
+    return this.pickRetryDelayMs({ retryDelayMs: opts.retryDelayMs ?? this.retryDelayMs });
+  }
+
+  private retryable(err: unknown, signal?: AbortSignal): boolean {
+    if (signal?.aborted) return false;
+    if (err instanceof FiduciaTimeoutError) return true;
+    if (err instanceof FiduciaError) return [408, 425, 429, 500, 502, 503, 504].includes(err.status);
+    return ["AbortError", "TimeoutError", "TypeError"].includes(String((err as any)?.name));
+  }
+
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (ms <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(signal.reason ?? new Error("fiducia: request aborted"));
+      let abortHandler: (() => void) | undefined;
+      const done = () => {
+        if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      abortHandler = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abortHandler!);
+        reject(signal?.reason ?? new Error("fiducia: request aborted"));
+      };
+      signal?.addEventListener("abort", abortHandler, { once: true });
+    });
+  }
+
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    opts: RequestControlOpts = {},
+    lockAcquire = false,
+  ): Promise<any> {
+    const maxRetries = this.resolveRetryMax(opts);
+    const retryDelayMs = this.resolveRetryDelayMs(opts);
+
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.requestOnce(method, path, body, opts, attempt + 1, lockAcquire);
+      } catch (err) {
+        if (attempt >= maxRetries || !this.retryable(err, opts.signal)) throw err;
+        await this.sleep(retryDelayMs, opts.signal);
+      }
+    }
+  }
+
+  private async requestOnce(
+    method: string,
+    path: string,
+    body: unknown,
+    opts: RequestControlOpts,
+    attempt: number,
+    lockAcquire: boolean,
+  ): Promise<any> {
+    const timeoutMs = this.resolveTimeoutMs(opts, lockAcquire);
+    const controller = timeoutMs !== undefined || opts.signal ? new AbortController() : undefined;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+
+    if (opts.signal) {
+      if (opts.signal.aborted) throw opts.signal.reason ?? new Error("fiducia: request aborted");
+      abort = () => controller?.abort(opts.signal?.reason);
+      opts.signal.addEventListener("abort", abort, { once: true });
+    }
+
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller?.abort();
+      }, timeoutMs);
+    }
+
+    try {
+      const res = await this.fetchImpl(this.base + path, {
+        signal: controller?.signal,
+        method,
+        headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!res.ok) throw new FiduciaError(res.status, data, res.headers);
+      return data;
+    } catch (err) {
+      if (timedOut && timeoutMs !== undefined) throw new FiduciaTimeoutError(timeoutMs, method, path, attempt);
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (abort) opts.signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private async *watch(path: string, opts: RequestControlOpts = {}): AsyncGenerator<WatchEvent> {
+    const timeoutMs = this.resolveTimeoutMs(opts);
+    const controller = timeoutMs !== undefined || opts.signal ? new AbortController() : undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+
+    if (opts.signal) {
+      if (opts.signal.aborted) throw opts.signal.reason ?? new Error("fiducia: request aborted");
+      abort = () => controller?.abort(opts.signal?.reason);
+      opts.signal.addEventListener("abort", abort, { once: true });
+    }
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => controller?.abort(), timeoutMs);
+    }
+
+    try {
+      const res = await this.fetchImpl(this.base + path, {
+        method: "GET",
+        headers: { accept: "text/event-stream" },
+        signal: controller?.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : null;
+        throw new FiduciaError(res.status, data, res.headers);
+      }
+      if (!res.body?.getReader) throw new Error("fiducia: response body is not streamable");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary >= 0) {
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const event = parseSseBlock(block);
+            if (event) yield event;
+            boundary = buffer.indexOf("\n\n");
+          }
+        }
+        buffer += decoder.decode();
+        const event = parseSseBlock(buffer);
+        if (event) yield event;
+      } finally {
+        reader.releaseLock();
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (abort) opts.signal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private lockAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    return this.request("POST", "/v1/locks/acquire",
+      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+  }
+
+  private acquireOptsFromArgs(optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, maybeOpts: AcquireOpts = {}): AcquireOpts {
+    if (typeof optsOrTtlMs === "object" && optsOrTtlMs !== null) return { ...optsOrTtlMs, max: optsOrTtlMs.max ?? 1 };
+    const base: AcquireOpts = typeof maxOrOpts === "object" && maxOrOpts !== null ? maxOrOpts : maybeOpts;
+    const ttlMs = typeof optsOrTtlMs === "number" ? optsOrTtlMs : base.ttlMs;
+    const max = typeof maxOrOpts === "number" ? maxOrOpts : base.max ?? 1;
+    return { ...base, ttlMs, max };
+  }
+
+  private lockAcquireManyWithWait(opts: AcquireManyOpts, wait: boolean) {
+    return this.request("POST", "/v1/locks/acquire",
+      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+  }
+
+  private semaphoreAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    return this.request("POST", "/v1/semaphores/acquire",
+      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait, limit: opts.max ?? 2 }, opts, true);
   }
 
   // --- misc ---
@@ -78,32 +352,75 @@ export class FiduciaClient {
 
   // --- locks ---
   lockGet(key: string) {
-    return this.request("GET", `/v1/locks/${enc(key)}`);
+    return this.request("GET", `/v1/locks?key=${enc(key)}`);
   }
   lockAcquire(key: string, opts: AcquireOpts = {}) {
-    return this.request("POST", `/v1/locks/${enc(key)}/acquire`,
-      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max });
+    return this.lockAcquireWithWait(key, opts, opts.wait ?? false);
+  }
+  tryLock(key: string, opts?: AcquireOpts): Promise<any>;
+  tryLock(key: string, ttlMs: number | undefined): Promise<any>;
+  tryLock(key: string, ttlMs: number | undefined, max: number): Promise<any>;
+  tryLock(key: string, ttlMs: number | undefined, opts: AcquireOpts): Promise<any>;
+  tryLock(key: string, ttlMs: number | undefined, max: number, opts: AcquireOpts): Promise<any>;
+  tryLock(key: string, optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, opts: AcquireOpts = {}) {
+    return this.lockAcquireWithWait(key, this.acquireOptsFromArgs(optsOrTtlMs, maxOrOpts, opts), false);
+  }
+  mustLock(key: string, opts?: AcquireOpts): Promise<any>;
+  mustLock(key: string, ttlMs: number | undefined): Promise<any>;
+  mustLock(key: string, ttlMs: number | undefined, max: number): Promise<any>;
+  mustLock(key: string, ttlMs: number | undefined, opts: AcquireOpts): Promise<any>;
+  mustLock(key: string, ttlMs: number | undefined, max: number, opts: AcquireOpts): Promise<any>;
+  mustLock(key: string, optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, opts: AcquireOpts = {}) {
+    return this.lockAcquireWithWait(key, this.acquireOptsFromArgs(optsOrTtlMs, maxOrOpts, opts), true);
+  }
+  lock(key: string, opts?: AcquireOpts): Promise<any>;
+  lock(key: string, ttlMs: number | undefined): Promise<any>;
+  lock(key: string, ttlMs: number | undefined, max: number): Promise<any>;
+  lock(key: string, ttlMs: number | undefined, opts: AcquireOpts): Promise<any>;
+  lock(key: string, ttlMs: number | undefined, max: number, opts: AcquireOpts): Promise<any>;
+  lock(key: string, optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, opts: AcquireOpts = {}) {
+    return this.mustLock(key, this.acquireOptsFromArgs(optsOrTtlMs, maxOrOpts, opts));
   }
   lockAcquireMany(opts: AcquireManyOpts) {
-    return this.request("POST", "/v1/locks/acquire-many",
-      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false });
+    return this.lockAcquireManyWithWait(opts, opts.wait ?? false);
+  }
+  tryLockMany(opts: AcquireManyOpts) {
+    return this.lockAcquireManyWithWait(opts, false);
+  }
+  mustLockMany(opts: AcquireManyOpts) {
+    return this.lockAcquireManyWithWait(opts, true);
+  }
+  lockMany(opts: AcquireManyOpts) {
+    return this.mustLockMany(opts);
   }
   lockRelease(key: string, opts: ReleaseOpts) {
-    return this.request("POST", `/v1/locks/${enc(key)}/release`,
+    return this.request("POST", "/v1/locks/release",
       { holder: opts.holder, fencing_token: opts.fencingToken });
   }
   lockReleaseMany(lockId: string) {
-    return this.request("POST", "/v1/locks/release-many", { lock_id: lockId });
+    void lockId;
+    throw new Error("fiducia: lockReleaseMany(lockId) is legacy; release union locks with lockRelease(key, { holder, fencingToken })");
   }
 
   // --- semaphores ---
+  semaphoreGet(key: string) {
+    return this.request("GET", `/v1/semaphores?key=${enc(key)}`);
+  }
   semaphoreAcquire(key: string, opts: AcquireOpts = {}) {
-    return this.request("POST", `/v1/semaphores/${enc(key)}/acquire`,
-      { holder: opts.holder, ttl_ms: opts.ttlMs, wait: opts.wait ?? false, max: opts.max ?? 2 });
+    return this.semaphoreAcquireWithWait(key, opts, opts.wait ?? false);
+  }
+  trySemaphore(key: string, opts: AcquireOpts = {}) {
+    return this.semaphoreAcquireWithWait(key, opts, false);
+  }
+  mustSemaphore(key: string, opts: AcquireOpts = {}) {
+    return this.semaphoreAcquireWithWait(key, opts, true);
+  }
+  semaphore(key: string, opts: AcquireOpts = {}) {
+    return this.mustSemaphore(key, opts);
   }
   semaphoreRelease(key: string, opts: ReleaseOpts) {
-    return this.request("POST", `/v1/semaphores/${enc(key)}/release`,
-      { holder: opts.holder, fencing_token: opts.fencingToken });
+    return this.request("POST", "/v1/semaphores/release",
+      { key, holder: opts.holder, fencing_token: opts.fencingToken });
   }
 
   // --- reader-writer locks ---
@@ -121,13 +438,19 @@ export class FiduciaClient {
   }
 
   // --- config KV ---
-  kvGet(key: string) { return this.request("GET", `/v1/kv/${enc(key)}`); }
+  kvGet(key: string) { return this.request("GET", `/v1/kv?key=${enc(key)}`); }
   kvPut(key: string, value: string, opts: KvPutOpts = {}) {
-    return this.request("PUT", `/v1/kv/${enc(key)}`,
+    return this.request("PUT", `/v1/kv?key=${enc(key)}`,
       { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision });
   }
-  kvDelete(key: string) { return this.request("DELETE", `/v1/kv/${enc(key)}`); }
+  kvDelete(key: string) { return this.request("DELETE", `/v1/kv?key=${enc(key)}`); }
   kvList(prefix: string) { return this.request("GET", `/v1/kv?prefix=${enc(prefix)}`); }
+  kvWatch(key: string, opts: RequestControlOpts = {}) {
+    return this.watch(`/v1/kv?key=${enc(key)}&watch=true`, opts);
+  }
+  kvWatchPrefix(prefix: string, opts: RequestControlOpts = {}) {
+    return this.watch(`/v1/kv?prefix=${enc(prefix)}&watch=true`, opts);
+  }
 
   // --- rate limiting ---
   rateLimitCheck(tenant: string, key: string, opts: RateLimitCheckOpts) {
@@ -175,18 +498,50 @@ export class FiduciaClient {
     return this.request("POST", `/v1/elections/${enc(name)}/resign`, { candidate, fencing_token: fencingToken });
   }
   electionGet(name: string) { return this.request("GET", `/v1/elections/${enc(name)}`); }
+  electionWatch(name: string, opts: RequestControlOpts = {}) {
+    return this.watch(`/v1/elections/${enc(name)}/watch`, opts);
+  }
 
   // --- service discovery ---
-  serviceRegister(service: string, instanceId: string, address: string, ttlMs: number) {
+  serviceRegister(service: string, instanceId: string, address: string, ttlMs: number, metadata: Record<string, string> = {}) {
     return this.request("PUT", `/v1/services/${enc(service)}/instances/${enc(instanceId)}`,
-      { address, ttl_ms: ttlMs });
+      { address, ttl_ms: ttlMs, metadata });
   }
-  serviceHeartbeat(service: string, instanceId: string) {
-    return this.request("POST", `/v1/services/${enc(service)}/instances/${enc(instanceId)}/heartbeat`);
+  serviceHeartbeat(service: string, instanceId: string, ttlMs?: number) {
+    return this.request("POST", `/v1/services/${enc(service)}/instances/${enc(instanceId)}/heartbeat`,
+      { ttl_ms: ttlMs });
   }
   serviceDeregister(service: string, instanceId: string) {
     return this.request("DELETE", `/v1/services/${enc(service)}/instances/${enc(instanceId)}`);
   }
   serviceInstances(service: string) { return this.request("GET", `/v1/services/${enc(service)}`); }
   serviceList() { return this.request("GET", "/v1/services"); }
+  serviceWatch(service: string, opts: RequestControlOpts = {}) {
+    return this.watch(`/v1/services/${enc(service)}/watch`, opts);
+  }
+}
+
+function parseSseBlock(block: string): WatchEvent | undefined {
+  let event = "message";
+  let id: string | undefined;
+  const data: string[] = [];
+  for (const rawLine of block.replace(/\r\n/g, "\n").split("\n")) {
+    if (!rawLine || rawLine.startsWith(":")) continue;
+    const colon = rawLine.indexOf(":");
+    const field = colon >= 0 ? rawLine.slice(0, colon) : rawLine;
+    let value = colon >= 0 ? rawLine.slice(colon + 1) : "";
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    if (field === "id") id = value;
+    if (field === "data") data.push(value);
+  }
+  if (!data.length) return undefined;
+  const raw = data.join("\n");
+  let decoded: any = raw;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    decoded = raw;
+  }
+  return { event, id, data: decoded };
 }

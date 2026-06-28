@@ -1,0 +1,25 @@
+{
+  "name": "fiducia/client",
+  "description": "Fiducia HTTP client for PHP.",
+  "type": "library",
+  "license": "proprietary",
+  "version": "0.1.0",
+  "require": {
+    "php": ">=8.1",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "autoload": {
+    "files": [
+      "Fiducia.php"
+    ]
+  },
+  "archive": {
+    "exclude": [
+      "/publish.sh"
+    ]
+  },
+  "support": {
+    "source": "https://github.com/fiducia-cloud/fiducia-clients/tree/main/clients/php"
+  }
+}

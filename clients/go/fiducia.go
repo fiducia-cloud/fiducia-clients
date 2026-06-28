@@ -3,18 +3,21 @@
 //
 //	c := fiducia.New("https://api.fiducia.cloud")
 //	lock, _ := c.LockAcquire("orders/checkout", fiducia.AcquireOpts{Holder: "worker-a", TTLMs: 30000})
-//	token := uint64(lock["result"].(map[string]any)["fencing_token"].(float64))
+//	token := uint64(lock["result"].(map[string]any)["output"].(map[string]any)["fencing_token"].(float64))
 //	c.LockRelease("orders/checkout", fiducia.ReleaseOpts{Holder: "worker-a", FencingToken: token})
 package fiducia
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	// Shared, generated payload contract (aliased because the generated package
 	// is also named `fiducia`). Re-exported as typed aliases below.
@@ -24,28 +27,42 @@ import (
 // Shared payload/error types, re-exported from fiducia-interfaces so callers can
 // decode responses into typed structs from one source of truth.
 type (
-	ProposeOutcome = types.ProposeOutcome
-	ProposeError   = types.ProposeError
-	KvEntry        = types.KvEntry
-	LockGrant      = types.LockGrant
-	Leadership     = types.Leadership
+	ProposeOutcome  = types.ProposeOutcome
+	ProposeError    = types.ProposeError
+	KvEntry         = types.KvEntry
+	LockGrant       = types.LockGrant
+	Leadership      = types.Leadership
 	ServiceInstance = types.ServiceInstance
 )
 
 // AcquireOpts configures a lock acquire.
 type AcquireOpts struct {
-	Holder string
-	TTLMs  int64
-	Wait   bool
-	Max    uint32
+	Holder             string
+	TTLMs              int64
+	Wait               bool
+	Max                uint32
+	Context            context.Context
+	RequestTimeout     time.Duration
+	LockRequestTimeout time.Duration
+	MaxRetries         int
+	RetryMax           int
+	Retries            int
+	RetryDelay         time.Duration
 }
 
 // AcquireManyOpts configures an atomic multi-key union lock.
 type AcquireManyOpts struct {
-	Keys   []string
-	Holder string
-	TTLMs  int64
-	Wait   bool
+	Keys               []string
+	Holder             string
+	TTLMs              int64
+	Wait               bool
+	Context            context.Context
+	RequestTimeout     time.Duration
+	LockRequestTimeout time.Duration
+	MaxRetries         int
+	RetryMax           int
+	Retries            int
+	RetryDelay         time.Duration
 }
 
 // ReleaseOpts identifies the current holder and fencing token.
@@ -89,10 +106,25 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("fiducia: HTTP %d", e.Status) }
 
+type requestControl struct {
+	Context            context.Context
+	RequestTimeout     time.Duration
+	LockRequestTimeout time.Duration
+	MaxRetries         int
+	RetryMax           int
+	Retries            int
+	RetryDelay         time.Duration
+	LockAcquire        bool
+}
+
 // Client talks to a fiducia endpoint over HTTP.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL            string
+	HTTP               *http.Client
+	RequestTimeout     time.Duration
+	LockRequestTimeout time.Duration
+	RetryMax           int
+	RetryDelay         time.Duration
 }
 
 // New returns a client for the given base URL.
@@ -101,6 +133,45 @@ func New(baseURL string) *Client {
 }
 
 func (c *Client) request(method, path string, body any) (map[string]any, error) {
+	return c.requestWithControl(method, path, body, requestControl{})
+}
+
+func (c *Client) requestWithControl(method, path string, body any, ctrl requestControl) (map[string]any, error) {
+	maxRetries := c.resolveRetryMax(ctrl)
+	for attempt := 0; ; attempt++ {
+		data, err := c.requestOnce(method, path, body, ctrl)
+		if err == nil {
+			return data, nil
+		}
+		if ctrl.Context != nil && ctrl.Context.Err() != nil {
+			return nil, err
+		}
+		if attempt >= maxRetries || !retryable(err) {
+			return nil, err
+		}
+		if ctrl.RetryDelay > 0 {
+			if err := sleepWithContext(ctrl.Context, ctrl.RetryDelay); err != nil {
+				return nil, err
+			}
+		} else if c.RetryDelay > 0 {
+			if err := sleepWithContext(ctrl.Context, c.RetryDelay); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
+func (c *Client) requestOnce(method, path string, body any, ctrl requestControl) (map[string]any, error) {
+	ctx := ctrl.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout := c.resolveTimeout(ctrl); timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -109,7 +180,7 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.BaseURL+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, rdr)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +203,105 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 	return data, nil
 }
 
+func (c *Client) resolveTimeout(ctrl requestControl) time.Duration {
+	if ctrl.LockRequestTimeout > 0 {
+		return ctrl.LockRequestTimeout
+	}
+	if ctrl.RequestTimeout > 0 {
+		return ctrl.RequestTimeout
+	}
+	if ctrl.LockAcquire && c.LockRequestTimeout > 0 {
+		return c.LockRequestTimeout
+	}
+	return c.RequestTimeout
+}
+
+func (c *Client) resolveRetryMax(ctrl requestControl) int {
+	for _, value := range []int{ctrl.MaxRetries, ctrl.RetryMax, ctrl.Retries} {
+		if value > 0 {
+			return value
+		}
+	}
+	if c.RetryMax > 0 {
+		return c.RetryMax
+	}
+	return 0
+}
+
+func retryable(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var httpErr *Error
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests,
+			http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func acquireControl(o AcquireOpts) requestControl {
+	return requestControl{
+		Context:            o.Context,
+		RequestTimeout:     o.RequestTimeout,
+		LockRequestTimeout: o.LockRequestTimeout,
+		MaxRetries:         o.MaxRetries,
+		RetryMax:           o.RetryMax,
+		Retries:            o.Retries,
+		RetryDelay:         o.RetryDelay,
+		LockAcquire:        true,
+	}
+}
+
+func acquireManyControl(o AcquireManyOpts) requestControl {
+	return requestControl{
+		Context:            o.Context,
+		RequestTimeout:     o.RequestTimeout,
+		LockRequestTimeout: o.LockRequestTimeout,
+		MaxRetries:         o.MaxRetries,
+		RetryMax:           o.RetryMax,
+		Retries:            o.Retries,
+		RetryDelay:         o.RetryDelay,
+		LockAcquire:        true,
+	}
+}
+
 func enc(s string) string { return url.PathEscape(s) }
+
+func setOptionalString(body map[string]any, key, value string) {
+	if value != "" {
+		body[key] = value
+	}
+}
+
+func setOptionalInt64(body map[string]any, key string, value int64) {
+	if value > 0 {
+		body[key] = value
+	}
+}
 
 // --- misc ---
 func (c *Client) Health() (map[string]any, error) { return c.request("GET", "/healthz", nil) }
@@ -140,36 +309,78 @@ func (c *Client) Status() (map[string]any, error) { return c.request("GET", "/v1
 
 // --- locks ---
 func (c *Client) LockGet(key string) (map[string]any, error) {
-	return c.request("GET", "/v1/locks/"+enc(key), nil)
+	return c.request("GET", "/v1/locks?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) LockAcquire(key string, o AcquireOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/"+enc(key)+"/acquire",
-		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait, "max": o.Max})
+	return c.lockAcquireWithWait(key, o, o.Wait)
+}
+func (c *Client) TryLock(key string, o AcquireOpts) (map[string]any, error) {
+	return c.lockAcquireWithWait(key, o, false)
+}
+func (c *Client) MustLock(key string, o AcquireOpts) (map[string]any, error) {
+	return c.lockAcquireWithWait(key, o, true)
+}
+func (c *Client) Lock(key string, o AcquireOpts) (map[string]any, error) {
+	return c.MustLock(key, o)
+}
+func (c *Client) lockAcquireWithWait(key string, o AcquireOpts, wait bool) (map[string]any, error) {
+	body := map[string]any{"key": key, "wait": wait}
+	setOptionalString(body, "holder", o.Holder)
+	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireControl(o))
 }
 func (c *Client) LockAcquireMany(o AcquireManyOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/acquire-many",
-		map[string]any{"keys": o.Keys, "holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait})
+	return c.lockAcquireManyWithWait(o, o.Wait)
+}
+func (c *Client) TryLockMany(o AcquireManyOpts) (map[string]any, error) {
+	return c.lockAcquireManyWithWait(o, false)
+}
+func (c *Client) MustLockMany(o AcquireManyOpts) (map[string]any, error) {
+	return c.lockAcquireManyWithWait(o, true)
+}
+func (c *Client) LockMany(o AcquireManyOpts) (map[string]any, error) {
+	return c.MustLockMany(o)
+}
+func (c *Client) lockAcquireManyWithWait(o AcquireManyOpts, wait bool) (map[string]any, error) {
+	body := map[string]any{"keys": o.Keys, "wait": wait}
+	setOptionalString(body, "holder", o.Holder)
+	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireManyControl(o))
 }
 func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/"+enc(key)+"/release",
+	return c.request("POST", "/v1/locks/release",
 		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
 }
 func (c *Client) LockReleaseMany(lockID string) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/release-many", map[string]any{"lock_id": lockID})
+	return nil, errors.New("fiducia: LockReleaseMany(lockID) is legacy; release union locks with LockRelease(key, ReleaseOpts{Holder, FencingToken})")
 }
 
 // --- semaphores ---
 func (c *Client) SemaphoreAcquire(key string, o AcquireOpts) (map[string]any, error) {
+	return c.semaphoreAcquireWithWait(key, o, o.Wait)
+}
+func (c *Client) TrySemaphore(key string, o AcquireOpts) (map[string]any, error) {
+	return c.semaphoreAcquireWithWait(key, o, false)
+}
+func (c *Client) MustSemaphore(key string, o AcquireOpts) (map[string]any, error) {
+	return c.semaphoreAcquireWithWait(key, o, true)
+}
+func (c *Client) Semaphore(key string, o AcquireOpts) (map[string]any, error) {
+	return c.MustSemaphore(key, o)
+}
+func (c *Client) semaphoreAcquireWithWait(key string, o AcquireOpts, wait bool) (map[string]any, error) {
 	max := o.Max
 	if max == 0 {
 		max = 2
 	}
-	return c.request("POST", "/v1/semaphores/"+enc(key)+"/acquire",
-		map[string]any{"holder": o.Holder, "ttl_ms": o.TTLMs, "wait": o.Wait, "max": max})
+	body := map[string]any{"key": key, "wait": wait, "limit": max}
+	setOptionalString(body, "holder", o.Holder)
+	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	return c.requestWithControl("POST", "/v1/semaphores/acquire", body, acquireControl(o))
 }
 func (c *Client) SemaphoreRelease(key string, o ReleaseOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/semaphores/"+enc(key)+"/release",
-		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
+	return c.request("POST", "/v1/semaphores/release",
+		map[string]any{"key": key, "holder": o.Holder, "fencing_token": o.FencingToken})
 }
 
 // --- reader-writer locks ---
@@ -188,13 +399,15 @@ func (c *Client) RwEndWrite(key, lockID string) (map[string]any, error) {
 
 // --- config KV ---
 func (c *Client) KvGet(key string) (map[string]any, error) {
-	return c.request("GET", "/v1/kv/"+enc(key), nil)
+	return c.request("GET", "/v1/kv?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) KvPut(key, value string, ttlMs int64) (map[string]any, error) {
-	return c.request("PUT", "/v1/kv/"+enc(key), map[string]any{"value": value, "ttl_ms": ttlMs})
+	body := map[string]any{"value": value}
+	setOptionalInt64(body, "ttl_ms", ttlMs)
+	return c.request("PUT", "/v1/kv?key="+url.QueryEscape(key), body)
 }
 func (c *Client) KvDelete(key string) (map[string]any, error) {
-	return c.request("DELETE", "/v1/kv/"+enc(key), nil)
+	return c.request("DELETE", "/v1/kv?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) KvList(prefix string) (map[string]any, error) {
 	return c.request("GET", "/v1/kv?prefix="+url.QueryEscape(prefix), nil)
@@ -271,11 +484,22 @@ func (c *Client) ElectionGet(name string) (map[string]any, error) {
 
 // --- service discovery ---
 func (c *Client) ServiceRegister(service, instanceID, address string, ttlMs int64) (map[string]any, error) {
+	return c.ServiceRegisterWithMetadata(service, instanceID, address, ttlMs, nil)
+}
+func (c *Client) ServiceRegisterWithMetadata(service, instanceID, address string, ttlMs int64, metadata map[string]string) (map[string]any, error) {
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	return c.request("PUT", "/v1/services/"+enc(service)+"/instances/"+enc(instanceID),
-		map[string]any{"address": address, "ttl_ms": ttlMs})
+		map[string]any{"address": address, "ttl_ms": ttlMs, "metadata": metadata})
 }
 func (c *Client) ServiceHeartbeat(service, instanceID string) (map[string]any, error) {
-	return c.request("POST", "/v1/services/"+enc(service)+"/instances/"+enc(instanceID)+"/heartbeat", nil)
+	return c.ServiceHeartbeatWithTTL(service, instanceID, 0)
+}
+func (c *Client) ServiceHeartbeatWithTTL(service, instanceID string, ttlMs int64) (map[string]any, error) {
+	body := map[string]any{}
+	setOptionalInt64(body, "ttl_ms", ttlMs)
+	return c.request("POST", "/v1/services/"+enc(service)+"/instances/"+enc(instanceID)+"/heartbeat", body)
 }
 func (c *Client) ServiceDeregister(service, instanceID string) (map[string]any, error) {
 	return c.request("DELETE", "/v1/services/"+enc(service)+"/instances/"+enc(instanceID), nil)

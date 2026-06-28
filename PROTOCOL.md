@@ -1,49 +1,64 @@
 # Fiducia client protocol (HTTP)
 
-The single source of truth every client in [`clients/`](clients/) targets. All
-clients are thin HTTP wrappers over this contract — same methods, same
-endpoints, language-idiomatic surface.
+The single source of truth every client in [`clients/`](clients/) targets. The
+client SDKs are the customer-facing contract; this HTTP shape is intentionally
+encapsulated inside them so it can evolve without leaking URL/body churn into
+application code.
 
 - **Transport:** HTTP only (no TCP). Clients talk to the edge / load balancer,
   which routes each request to the owning shard's leader.
 - **Encoding:** JSON request/response bodies; `Content-Type: application/json`.
-- **Keys:** the `{key}` / `{name}` / `{service}` path segment is URL-encoded.
+- **Keys:** lock, semaphore, and config keys are slash-safe: reads carry them in
+  `?key=...`, and writes carry them in JSON bodies. Resource names that remain
+  path segments (`{name}`, `{service}`, `{instanceId}`) are URL-encoded.
 - **TTLs:** milliseconds (`ttl_ms`).
 - **Base URL:** e.g. `https://api.fiducia.cloud` (or a regional LB / local node).
 
 ## Endpoints
 
-Legend: **live** = implemented in `fiducia-node` today · **planned** = part of the
-contract, server implementation in progress (clients ship ready for it).
+Legend: **live** = implemented in `fiducia-node` today.
 
 ### Locks — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `lockGet(key)` | `GET /v1/locks/{key}` | — | `{key, lock}` |
-| `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/{key}/acquire` | `{holder, ttl_ms, wait}` | `{committed, result}` |
-| `lockAcquireBody({key, holder, ttlMs, wait, max})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait, max}` | `{committed, result}` |
-| `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire-many` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
-| `lockReleaseMany(lockId)` | `POST /v1/locks/release-many` | `{lock_id}` | `{committed, result}` |
-| `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
-| `lockWatch(key)` | `GET /v1/locks/{key}/watch` | — | SSE stream (**planned**) |
+| `lockGet(key)` | `GET /v1/locks?key=...` | — | `{key, lock}` |
+| `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/release` | `{holder, fencing_token}` | `{committed, result}` |
 
 `wait:false` is try-lock. `wait:true` joins the FIFO wait queue. A successful
-single-key grant returns a monotonic `fencing_token` in `result`. A successful
-multi-key grant returns one `lock_id` plus `fencing_tokens` keyed by member key.
-The server sorts/dedupes `keys`, caps composites at five keys, and conflicts on
-any overlapping member key. Composite locks are exclusive: they block mutexes
-and semaphores on every member key until released by `lock_id`.
+single-key or multi-key grant returns one monotonic `fencing_token` in
+`result.output`. Multi-key locks are union locks: the grant covers the full
+deduped key set, conflicts on any overlapping member key, and releases the whole
+union by `{holder, fencing_token}`.
+
+Clients also expose convenience acquire names over the same wire contract,
+using each language's casing conventions: `tryLock` / `try_lock` /
+`TryLock` force `wait:false`; `mustLock` / `must_lock` / `MustLock` and
+`lock` / `Lock` force `wait:true`. Multi-key helpers follow the same pattern
+where the client already exposes multi-key locks. Blocking calls can be bounded
+with request controls such as lock/request timeout, max retries / retry max,
+retry delay, and cancellation/context controls where supported.
 
 ### Semaphores — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/{key}/acquire` | `{holder, ttl_ms, max, wait}` | `{committed, result}` |
-| `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
+| `semaphoreGet(key)` | `GET /v1/semaphores?key=...` | — | `{key, semaphore}` |
+| `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/acquire` | `{key, holder, ttl_ms, limit, wait}` | `{committed, result}` |
+| `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/release` | `{key, holder, fencing_token}` | `{committed, result}` |
 
-Semaphores are the same lock state machine with `max > 1`: up to `max` holders
-can hold the key at once, and each holder gets a distinct fencing token.
+Semaphores are counting leases: up to `limit` holders can hold the key at once,
+and each holder gets a distinct fencing token.
+Clients mirror the lock helpers with `trySemaphore` / `try_semaphore` /
+`TrySemaphore` for `wait:false` and `mustSemaphore` / `must_semaphore` /
+`MustSemaphore` plus `semaphore` / `Semaphore` for `wait:true`, with the same
+request timeout, retry, delay, and cancellation controls.
 
-### Reader-writer locks — planned
+### Reader-writer locks — client extension
+
+The client SDKs reserve these names for reader-writer lock APIs; the current
+node runtime does not expose them yet.
+
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
 | `rwAcquireRead(key, {ttlMs, wait})` | `POST /v1/rw/{key}/read` | `{ttl_ms, wait}` | `{acquired, fencing_token, lock_id}` |
@@ -54,11 +69,12 @@ can hold the key at once, and each holder gets a distinct fencing token.
 ### Config KV — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `kvGet(key)` | `GET /v1/kv/{key}` | — | `{key, found, entry}` |
-| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv/{key}` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
-| `kvDelete(key)` | `DELETE /v1/kv/{key}` | — | `{committed, result}` |
-| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{keys}` (**planned**) |
-| `kvWatch(key, {startRevision})` | `GET /v1/kv/{key}/watch` | — | SSE stream (**planned**) |
+| `kvGet(key)` | `GET /v1/kv?key=...` | — | `{key, found, entry}` |
+| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv?key=...` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
+| `kvDelete(key)` | `DELETE /v1/kv?key=...` | — | `{committed, result}` |
+| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{prefix, entries}` |
+| `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
+| `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
@@ -86,15 +102,17 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 | `electionRenew(name, candidate, fencingToken)` | `POST /v1/elections/{name}/renew` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionResign(name, candidate, fencingToken)` | `POST /v1/elections/{name}/resign` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionGet(name)` | `GET /v1/elections/{name}` | — | `{name, held, leadership}` |
+| `electionWatch(name)` | `GET /v1/elections/{name}/watch` | — | SSE stream |
 
 ### Service discovery — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `serviceRegister(service, instanceId, address, ttlMs)` | `PUT /v1/services/{service}/instances/{id}` | `{address, ttl_ms}` | `{committed, result}` |
-| `serviceHeartbeat(service, instanceId)` | `POST /v1/services/{service}/instances/{id}/heartbeat` | — | `{committed, result}` |
+| `serviceRegister(service, instanceId, address, ttlMs, metadata)` | `PUT /v1/services/{service}/instances/{id}` | `{address, ttl_ms, metadata}` | `{committed, result}` |
+| `serviceHeartbeat(service, instanceId, ttlMs?)` | `POST /v1/services/{service}/instances/{id}/heartbeat` | `{ttl_ms}` | `{committed, result}` |
 | `serviceDeregister(service, instanceId)` | `DELETE /v1/services/{service}/instances/{id}` | — | `{committed, result}` |
 | `serviceInstances(service)` | `GET /v1/services/{service}` | — | `{service, instances}` |
 | `serviceList()` | `GET /v1/services` | — | `{services}` |
+| `serviceWatch(service)` | `GET /v1/services/{service}/watch` | — | SSE stream |
 
 ### Misc — live
 | Method | Endpoint | Returns |

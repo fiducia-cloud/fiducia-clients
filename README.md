@@ -43,32 +43,48 @@ Each lives under [`clients/`](clients/):
 const c = new FiduciaClient("https://api.fiducia.cloud");
 
 // lock (mutex)
-const lock = await c.lockAcquire("orders/checkout", {
+const maybeLock = await c.tryLock("orders/checkout", {
+  holder: "worker-a",
+  ttlMs: 30000,
+});
+if (maybeLock.committed) {
+  await c.lockRelease("orders/checkout", {
+    holder: "worker-a",
+    fencingToken: maybeLock.result.output.fencing_token,
+  });
+}
+
+const lock = await c.mustLock("orders/checkout", {
+  holder: "worker-a",
+  ttlMs: 30000,
+  lockRequestTimeoutMs: 5000,
+  maxRetries: 2,
+});
+await c.lockRelease("orders/checkout", {
+  holder: "worker-a",
+  fencingToken: lock.result.output.fencing_token,
+});
+
+// multi-key union lock
+const combo = await c.lockMany({
+  keys: ["orders/checkout", "inventory/sku-42"],
   holder: "worker-a",
   ttlMs: 30000,
 });
 await c.lockRelease("orders/checkout", {
   holder: "worker-a",
-  fencingToken: lock.result.fencing_token,
+  fencingToken: combo.result.output.fencing_token,
 });
-
-// multi-key union lock
-const combo = await c.lockAcquireMany({
-  keys: ["orders/checkout", "inventory/sku-42"],
-  holder: "worker-a",
-  ttlMs: 30000,
-});
-await c.lockReleaseMany(combo.result.lock_id);
 
 // semaphore
-const slot = await c.semaphoreAcquire("webhook-delivery", {
+const slot = await c.mustSemaphore("webhook-delivery", {
   holder: "worker-b",
   ttlMs: 30000,
   max: 12,
 });
 await c.semaphoreRelease("webhook-delivery", {
   holder: "worker-b",
-  fencingToken: slot.result.fencing_token,
+  fencingToken: slot.result.output.fencing_token,
 });
 
 // rate limiting
@@ -99,6 +115,12 @@ await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000);
 const live = await c.serviceInstances("api");
 ```
 
+Across client languages, the try helpers force `wait:false` and the must/short
+helpers force `wait:true` using language-idiomatic casing (`tryLock`,
+`try_lock`, `TryLock`, etc.). Blocking lock and semaphore calls can be bounded
+with each client's timeout, retry count, retry delay, and cancellation/context
+controls where that runtime supports them.
+
 ## CLI
 
 The Python client doubles as a dependency-free CLI for local smoke checks and
@@ -117,11 +139,11 @@ python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-m
 
 ## Status
 
-Clients are skeletons that track the live node endpoints (locks, semaphores,
-multi-key locks, rate limiting, cron/scheduling, KV, elections, discovery) and
-ship planned RW/watch shapes ahead of the server (marked *planned* in
-`PROTOCOL.md`). They make HTTP calls and parse JSON; they do not yet add
-retries, auth helpers, or watch/SSE streaming.
+Clients track the live node endpoints for locks, semaphores, multi-key locks,
+rate limiting, cron/scheduling, KV, elections, and discovery. TypeScript and
+Python include SSE watch helpers for KV key/prefix changes, election leadership
+changes, and service discovery changes. Production-tier clients also expose
+request timeout and bounded retry controls around blocking acquisition calls.
 
 ## Related
 
