@@ -82,12 +82,105 @@ public class Fiducia {
     public String health() { return request("GET", "/healthz", null); }
     public String status() { return request("GET", "/v1/status", null); }
 
-    // --- locks & semaphores ---
-    public String lockAcquire(String key, Long ttlMs, boolean wait, int max) {
-        return request("POST", "/v1/locks/" + enc(key) + "/acquire", obj("ttl_ms", ttlMs, "wait", wait, "max", max));
+    // --- locks (current protocol: holder + fencing_token, keys in the body) ---
+    public String lockGet(String key) { return request("GET", "/v1/locks?key=" + enc(key), null); }
+    public String lockAcquire(List<String> keys, String holder, Long ttlMs, boolean wait) {
+        return request("POST", "/v1/locks/acquire", obj("keys", keys, "holder", holder, "ttl_ms", ttlMs, "wait", wait));
     }
-    public String lockRelease(String key, String lockId) {
-        return request("POST", "/v1/locks/" + enc(key) + "/release", obj("lock_id", lockId));
+    public String lockRelease(String holder, long fencingToken) {
+        return request("POST", "/v1/locks/release", obj("holder", holder, "fencing_token", fencingToken));
+    }
+
+    // --- semaphores ---
+    public String semaphoreGet(String key) { return request("GET", "/v1/semaphores?key=" + enc(key), null); }
+    public String semaphoreAcquire(String key, int limit, String holder, Long ttlMs, boolean wait) {
+        return request("POST", "/v1/semaphores/acquire", obj("key", key, "limit", limit, "holder", holder, "ttl_ms", ttlMs, "wait", wait));
+    }
+    public String semaphoreRelease(String key, String holder, long fencingToken) {
+        return request("POST", "/v1/semaphores/release", obj("key", key, "holder", holder, "fencing_token", fencingToken));
+    }
+
+    // --- high-level blocking / try acquisition (live-mutex style) ---
+
+    /** tryLock: wait:false — returns a Lock if free now, else null. */
+    public Lock tryLock(String key) { return tryLock(key, 60_000L); }
+    public Lock tryLock(String key, long ttlMs) {
+        return acquireLock(Arrays.asList(key), false, ttlMs, null, 0, 0, -1);
+    }
+
+    /** lock / mustLock: wait:true — block until acquired, the budget elapses
+     *  (LockTimeoutException), or the server errors. */
+    public Lock lock(String key) { return lock(key, 60_000L, 30_000, 250, -1); }
+    public Lock lock(String key, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
+        Lock l = acquireLock(Arrays.asList(key), true, ttlMs, null, maxWaitMs, retryIntervalMs, maxRetries);
+        if (l == null) throw new LockTimeoutException(Arrays.asList(key), maxWaitMs);
+        return l;
+    }
+    public Lock mustLock(String key) { return lock(key); }
+    public Lock mustLock(String key, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
+        return lock(key, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
+    }
+
+    /** trySemaphore / acquireSemaphore — the same pair for counting semaphores. */
+    public SemaphoreHandle trySemaphore(String key, int limit) { return trySemaphore(key, limit, 60_000L); }
+    public SemaphoreHandle trySemaphore(String key, int limit, long ttlMs) {
+        return acquireSemaphore(key, limit, false, ttlMs, 0, 0, -1);
+    }
+    public SemaphoreHandle acquireSemaphore(String key, int limit) {
+        return acquireSemaphore(key, limit, 60_000L, 30_000, 250, -1);
+    }
+    public SemaphoreHandle acquireSemaphore(String key, int limit, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
+        SemaphoreHandle h = acquireSemaphore(key, limit, true, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
+        if (h == null) throw new LockTimeoutException(Arrays.asList(key), maxWaitMs);
+        return h;
+    }
+
+    private Lock acquireLock(List<String> keys, boolean wait, long ttlMs, String holder,
+                             int maxWaitMs, int retryIntervalMs, int maxRetries) {
+        if (holder == null) holder = genHolder();
+        Map<String, Object> out = output(lockAcquire(keys, holder, ttlMs, wait));
+        if (asBool(out.get("acquired"))) {
+            return new Lock(this, keys, holder, asLong(out.get("fencing_token")), asLongOrNull(out.get("lease_expires_ms")));
+        }
+        if (!wait) return null; // tryLock: held now -> fail fast
+        long deadline = nowMs() + maxWaitMs;
+        for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++) {
+            long remaining = deadline - nowMs();
+            if (remaining <= 0) break;
+            sleep(Math.min(retryIntervalMs, remaining));
+            Map<String, Object> lock = asMap(asMap(Json.parse(lockGet(keys.get(0)))).get("lock"));
+            if (holder.equals(asStr(lock.get("holder"))) && lock.get("fencing_token") != null) {
+                return new Lock(this, keys, holder, asLong(lock.get("fencing_token")), asLongOrNull(lock.get("lease_expires_ms")));
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private SemaphoreHandle acquireSemaphore(String key, int limit, boolean wait, long ttlMs,
+                                             int maxWaitMs, int retryIntervalMs, int maxRetries) {
+        String holder = genHolder();
+        Map<String, Object> out = output(semaphoreAcquire(key, limit, holder, ttlMs, wait));
+        if (asBool(out.get("acquired"))) {
+            return new SemaphoreHandle(this, key, holder, asLong(out.get("fencing_token")), asLongOrNull(out.get("lease_expires_ms")));
+        }
+        if (!wait) return null;
+        long deadline = nowMs() + maxWaitMs;
+        for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++) {
+            long remaining = deadline - nowMs();
+            if (remaining <= 0) break;
+            sleep(Math.min(retryIntervalMs, remaining));
+            Object holders = asMap(asMap(Json.parse(semaphoreGet(key))).get("semaphore")).get("holders");
+            if (holders instanceof List) {
+                for (Object o : (List<Object>) holders) {
+                    Map<String, Object> slot = asMap(o);
+                    if (holder.equals(asStr(slot.get("holder"))) && slot.get("fencing_token") != null) {
+                        return new SemaphoreHandle(this, key, holder, asLong(slot.get("fencing_token")), asLongOrNull(slot.get("lease_expires_ms")));
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     // --- reader-writer locks ---
