@@ -343,13 +343,20 @@ impl FiduciaClient {
     }
 
     // --- service discovery ---
+    /// Register/refresh an instance. `metadata` carries free-form facts (zone,
+    /// capacity, version, …) returned to clients resolving the service.
     pub fn service_register(
         &self,
         service: &str,
         instance_id: &str,
         address: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "address": address, "ttl_ms": ttl_ms });
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
         self.request(
             "PUT",
             &format!(
@@ -357,10 +364,17 @@ impl FiduciaClient {
                 enc(service),
                 enc(instance_id)
             ),
-            Some(json!({ "address": address, "ttl_ms": ttl_ms })),
+            Some(body),
         )
     }
-    pub fn service_heartbeat(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
+    /// Heartbeat to keep an instance live. `ttl_ms` overrides the lease length.
+    pub fn service_heartbeat(
+        &self,
+        service: &str,
+        instance_id: &str,
+        ttl_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        let body = ttl_ms.map(|ttl_ms| json!({ "ttl_ms": ttl_ms }));
         self.request(
             "POST",
             &format!(
@@ -368,7 +382,7 @@ impl FiduciaClient {
                 enc(service),
                 enc(instance_id)
             ),
-            None,
+            body,
         )
     }
     pub fn service_deregister(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
