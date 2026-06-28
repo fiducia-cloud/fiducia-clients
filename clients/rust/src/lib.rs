@@ -287,28 +287,43 @@ impl FiduciaClient {
     }
 
     // --- leader election ---
+    /// Campaign to lead `name`. `metadata` publishes candidate facts (address,
+    /// region, version, …) with the leadership so observers can discover the
+    /// leader's endpoint, not just its id.
     pub fn election_campaign(
         &self,
         name: &str,
         candidate: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "candidate": candidate, "ttl_ms": ttl_ms });
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
         self.request(
             "POST",
             &format!("/v1/elections/{}/campaign", enc(name)),
-            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })),
+            Some(body),
         )
     }
+    /// Renew the lease. `ttl_ms` overrides the lease length; when `None`, the
+    /// original campaign TTL is reused.
     pub fn election_renew(
         &self,
         name: &str,
         candidate: &str,
         fencing_token: u64,
+        ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "candidate": candidate, "fencing_token": fencing_token });
+        if let Some(ttl_ms) = ttl_ms {
+            body["ttl_ms"] = json!(ttl_ms);
+        }
         self.request(
             "POST",
             &format!("/v1/elections/{}/renew", enc(name)),
-            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+            Some(body),
         )
     }
     pub fn election_resign(
