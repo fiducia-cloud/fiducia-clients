@@ -206,8 +206,8 @@ def test_node_unresponsive():
         check("the paused node is not serving as a second leader",
               node_shard0(leader) is None, "paused node still responded")
     finally:
-        out = signal_server(leader, "CONT")
-        print("    %s server CONT (resumed: pid %s)" % (leader, out))
+        restore(leader)
+        print("    %s partition removed (NetworkPolicy deleted)" % leader)
 
     # Rejoin: the resumed node answers /v1/status again and converges to follower.
     rejoined = False
