@@ -184,9 +184,9 @@ def test_node_unresponsive():
     wl.start()
     time.sleep(2)
 
-    pid = signal_server(leader, "STOP")
-    check("paused the leader's server process (SIGSTOP)", pid != "", "no pid found")
-    print("    %s server pid %s STOPped — waiting for re-election..." % (leader, pid))
+    r = isolate(leader)
+    check("isolated the leader (deny-all NetworkPolicy)", r.returncode == 0, r.stderr.strip())
+    print("    %s network-partitioned — waiting for re-election..." % leader)
     try:
         # The frozen leader can't serve; the LB must fail over to the new leader.
         check("cluster still commits a lock write on 2/3 quorum",
