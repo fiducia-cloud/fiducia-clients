@@ -52,12 +52,58 @@ module Fiducia
     def health; request("GET", "/healthz"); end
     def status; request("GET", "/v1/status"); end
 
-    # --- locks & semaphores ---
-    def lock_acquire(key, ttl_ms: nil, wait: true, max: 1)
-      request("POST", "/v1/locks/#{enc key}/acquire", { ttl_ms: ttl_ms, wait: wait, max: max })
+    # --- locks (current protocol: holder + fencing_token, key in the body) ---
+    def lock_get(key); request("GET", "/v1/locks?key=#{enc key}"); end
+    def lock_acquire(keys, holder: nil, ttl_ms: nil, wait: false)
+      request("POST", "/v1/locks/acquire", { keys: Array(keys), holder: holder, ttl_ms: ttl_ms, wait: wait })
     end
-    def lock_release(key, lock_id)
-      request("POST", "/v1/locks/#{enc key}/release", { lock_id: lock_id })
+    def lock_release(holder, fencing_token)
+      request("POST", "/v1/locks/release", { holder: holder, fencing_token: fencing_token })
+    end
+
+    # --- semaphores ---
+    def semaphore_get(key); request("GET", "/v1/semaphores?key=#{enc key}"); end
+    def semaphore_acquire(key, limit, holder: nil, ttl_ms: nil, wait: false)
+      request("POST", "/v1/semaphores/acquire", { key: key, limit: limit, holder: holder, ttl_ms: ttl_ms, wait: wait })
+    end
+    def semaphore_release(key, holder, fencing_token)
+      request("POST", "/v1/semaphores/release", { key: key, holder: holder, fencing_token: fencing_token })
+    end
+
+    # --- high-level blocking / try acquisition (live-mutex style) ---
+    #
+    # try_lock: wait:false — returns a Lock if free right now, else nil.
+    # lock / must_lock: wait:true — blocks (polling) until acquired, the budget
+    #   elapses (LockTimeout), or the server errors.
+    def try_lock(key, ttl_ms: 60_000, holder: nil)
+      _acquire_lock(Array(key), false, ttl_ms, holder, 0, 0, nil)
+    end
+
+    def lock(key, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
+      got = _acquire_lock(Array(key), true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      raise LockTimeout.new(Array(key), max_wait_ms) unless got
+      got
+    end
+    alias_method :must_lock, :lock
+
+    # Acquire, yield the Lock, then always release.
+    def with_lock(key, **opts)
+      held = lock(key, **opts)
+      begin
+        yield held
+      ensure
+        begin; held.release; rescue StandardError; end
+      end
+    end
+
+    def try_semaphore(key, limit, ttl_ms: 60_000, holder: nil)
+      _acquire_semaphore(key, limit, false, ttl_ms, holder, 0, 0, nil)
+    end
+
+    def acquire_semaphore(key, limit, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
+      got = _acquire_semaphore(key, limit, true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      raise LockTimeout.new([key], max_wait_ms) unless got
+      got
     end
 
     # --- reader-writer locks ---
