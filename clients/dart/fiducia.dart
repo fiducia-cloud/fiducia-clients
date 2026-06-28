@@ -77,11 +77,114 @@ class FiduciaClient {
   Future<dynamic> health() => _request('GET', '/healthz');
   Future<dynamic> status() => _request('GET', '/v1/status');
 
-  // --- locks & semaphores ---
-  Future<dynamic> lockAcquire(String key, {int? ttlMs, bool wait = true, int max = 1}) =>
-      _request('POST', '/v1/locks/${_enc(key)}/acquire', {'ttl_ms': ttlMs, 'wait': wait, 'max': max});
-  Future<dynamic> lockRelease(String key, String lockId) =>
-      _request('POST', '/v1/locks/${_enc(key)}/release', {'lock_id': lockId});
+  // --- locks (current protocol: holder + fencing_token, key in the body) ---
+  Future<dynamic> lockGet(String key) => _request('GET', '/v1/locks?key=${_enc(key)}');
+  Future<dynamic> lockAcquire(List<String> keys, {String? holder, int? ttlMs, bool wait = false}) =>
+      _request('POST', '/v1/locks/acquire', {'keys': keys, 'holder': holder, 'ttl_ms': ttlMs, 'wait': wait});
+  Future<dynamic> lockRelease(String holder, int fencingToken) =>
+      _request('POST', '/v1/locks/release', {'holder': holder, 'fencing_token': fencingToken});
+
+  // --- semaphores ---
+  Future<dynamic> semaphoreGet(String key) => _request('GET', '/v1/semaphores?key=${_enc(key)}');
+  Future<dynamic> semaphoreAcquire(String key, int limit, {String? holder, int? ttlMs, bool wait = false}) =>
+      _request('POST', '/v1/semaphores/acquire',
+          {'key': key, 'limit': limit, 'holder': holder, 'ttl_ms': ttlMs, 'wait': wait});
+  Future<dynamic> semaphoreRelease(String key, String holder, int fencingToken) =>
+      _request('POST', '/v1/semaphores/release', {'key': key, 'holder': holder, 'fencing_token': fencingToken});
+
+  // --- high-level blocking / try acquisition (live-mutex style) ---
+
+  /// Take the union of [keys] now (wait:false). Returns null if held.
+  Future<Lock?> tryLock(List<String> keys, {int ttlMs = 60000, String? holder}) =>
+      _acquireLock(keys, false, ttlMs, holder, 0, 0, null);
+
+  /// Block until [keys] are acquired, the budget elapses ([LockTimeoutException]),
+  /// or the server errors (wait:true).
+  Future<Lock> lock(List<String> keys,
+      {int ttlMs = 60000, String? holder, int maxWaitMs = 30000, int retryIntervalMs = 250, int? maxRetries}) async {
+    final got = await _acquireLock(keys, true, ttlMs, holder, maxWaitMs, retryIntervalMs, maxRetries);
+    if (got == null) throw LockTimeoutException(keys, maxWaitMs);
+    return got;
+  }
+
+  /// Alias of [lock] — blocks until acquired (or throws).
+  Future<Lock> mustLock(List<String> keys,
+          {int ttlMs = 60000, String? holder, int maxWaitMs = 30000, int retryIntervalMs = 250, int? maxRetries}) =>
+      lock(keys, ttlMs: ttlMs, holder: holder, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries);
+
+  /// Take a permit now (wait:false). Returns null if at capacity.
+  Future<SemaphoreHandle?> trySemaphore(String key, int limit, {int ttlMs = 60000, String? holder}) =>
+      _acquireSemaphore(key, limit, false, ttlMs, holder, 0, 0, null);
+
+  /// Block until a permit is free, the budget elapses, or the server errors.
+  Future<SemaphoreHandle> acquireSemaphore(String key, int limit,
+      {int ttlMs = 60000, String? holder, int maxWaitMs = 30000, int retryIntervalMs = 250, int? maxRetries}) async {
+    final got = await _acquireSemaphore(key, limit, true, ttlMs, holder, maxWaitMs, retryIntervalMs, maxRetries);
+    if (got == null) throw LockTimeoutException([key], maxWaitMs);
+    return got;
+  }
+
+  Future<Lock?> _acquireLock(List<String> keys, bool wait, int ttlMs, String? holder,
+      int maxWaitMs, int retryIntervalMs, int? maxRetries) async {
+    holder ??= _genHolder();
+    final out = _output(await lockAcquire(keys, holder: holder, ttlMs: ttlMs, wait: wait));
+    if (out['acquired'] == true) {
+      return Lock(this, keys, holder, _asInt(out['fencing_token']), _asIntOrNull(out['lease_expires_ms']));
+    }
+    if (!wait) return null; // tryLock: held now -> fail fast
+
+    final deadline = DateTime.now().millisecondsSinceEpoch + maxWaitMs;
+    var attempts = 0;
+    while (maxRetries == null || attempts < maxRetries) {
+      attempts++;
+      final remaining = deadline - DateTime.now().millisecondsSinceEpoch;
+      if (remaining <= 0) break;
+      await Future<void>.delayed(Duration(milliseconds: min(retryIntervalMs, remaining)));
+      final lk = (await lockGet(keys[0]))?['lock'];
+      if (lk != null && lk['holder'] == holder && lk['fencing_token'] != null) {
+        return Lock(this, keys, holder, _asInt(lk['fencing_token']), _asIntOrNull(lk['lease_expires_ms']));
+      }
+    }
+    return null;
+  }
+
+  Future<SemaphoreHandle?> _acquireSemaphore(String key, int limit, bool wait, int ttlMs, String? holder,
+      int maxWaitMs, int retryIntervalMs, int? maxRetries) async {
+    holder ??= _genHolder();
+    final out = _output(await semaphoreAcquire(key, limit, holder: holder, ttlMs: ttlMs, wait: wait));
+    if (out['acquired'] == true) {
+      return SemaphoreHandle(this, key, holder, _asInt(out['fencing_token']), _asIntOrNull(out['lease_expires_ms']));
+    }
+    if (!wait) return null;
+
+    final deadline = DateTime.now().millisecondsSinceEpoch + maxWaitMs;
+    var attempts = 0;
+    while (maxRetries == null || attempts < maxRetries) {
+      attempts++;
+      final remaining = deadline - DateTime.now().millisecondsSinceEpoch;
+      if (remaining <= 0) break;
+      await Future<void>.delayed(Duration(milliseconds: min(retryIntervalMs, remaining)));
+      final sem = (await semaphoreGet(key))?['semaphore'];
+      final holders = (sem?['holders'] as List?) ?? const [];
+      for (final h in holders) {
+        if (h['holder'] == holder && h['fencing_token'] != null) {
+          return SemaphoreHandle(this, key, holder, _asInt(h['fencing_token']), _asIntOrNull(h['lease_expires_ms']));
+        }
+      }
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _output(dynamic resp) {
+    final r = (resp is Map) ? resp['result'] : null;
+    final o = (r is Map) ? r['output'] : null;
+    return (o is Map) ? o.cast<String, dynamic>() : <String, dynamic>{};
+  }
+
+  int _asInt(dynamic v) => (v is num) ? v.toInt() : 0;
+  int? _asIntOrNull(dynamic v) => (v is num) ? v.toInt() : null;
+  String _genHolder() =>
+      'fdc-${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}-${Random().nextInt(1 << 32).toRadixString(16)}';
 
   // --- reader-writer locks ---
   Future<dynamic> rwAcquireRead(String key, {int? ttlMs, bool wait = true}) =>
