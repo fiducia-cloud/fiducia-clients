@@ -5,8 +5,10 @@
 //   final lock = await c.lockAcquire("orders/checkout", ttlMs: 30000);
 //   await c.lockRelease("orders/checkout", lock["result"]["lock_id"]);
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 class FiduciaException implements Exception {
   final int status;
@@ -14,6 +16,40 @@ class FiduciaException implements Exception {
   FiduciaException(this.status, this.body);
   @override
   String toString() => 'fiducia: HTTP $status';
+}
+
+/// Thrown by the blocking [FiduciaClient.lock] / [FiduciaClient.acquireSemaphore]
+/// when the wait budget elapses before acquisition.
+class LockTimeoutException implements Exception {
+  final List<String> keys;
+  final int waitedMs;
+  LockTimeoutException(this.keys, this.waitedMs);
+  @override
+  String toString() => 'fiducia: timed out after ${waitedMs}ms waiting for ${keys.join(", ")}';
+}
+
+/// A held lock grant. Call [release] (alias [unlock]) when done.
+class Lock {
+  final FiduciaClient _c;
+  final List<String> keys;
+  final String holder;
+  final int fencingToken;
+  final int? leaseExpiresMs;
+  Lock(this._c, this.keys, this.holder, this.fencingToken, this.leaseExpiresMs);
+  Future<dynamic> release() => _c.lockRelease(holder, fencingToken);
+  Future<dynamic> unlock() => release();
+}
+
+/// A held semaphore permit. Call [release] when done.
+class SemaphoreHandle {
+  final FiduciaClient _c;
+  final String key;
+  final String holder;
+  final int fencingToken;
+  final int? leaseExpiresMs;
+  SemaphoreHandle(this._c, this.key, this.holder, this.fencingToken, this.leaseExpiresMs);
+  Future<dynamic> release() => _c.semaphoreRelease(key, holder, fencingToken);
+  Future<dynamic> unlock() => release();
 }
 
 class FiduciaClient {
