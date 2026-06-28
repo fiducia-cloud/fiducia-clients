@@ -166,15 +166,17 @@ def run(args, c):
     raise SystemExit("unknown command")
 
 
-def main(argv=None):
+def main(argv=None, client_factory=FiduciaClient):
+    # client_factory is injectable so the dispatch can be unit-tested offline.
     args = build_parser().parse_args(argv)
-    c = FiduciaClient(args.url)
+    c = client_factory(args.url)
     try:
         _emit(run(args, c))
+        return 0
     except FiduciaError as e:
         _emit({"error": "http", "status": e.status, "body": e.body})
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
