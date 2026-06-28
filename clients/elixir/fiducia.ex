@@ -4,8 +4,9 @@
 #   Application.ensure_all_started(:inets)
 #   Application.ensure_all_started(:ssl)
 #   c = Fiducia.Client.new("https://api.fiducia.cloud")
-#   {:ok, lock} = Fiducia.Client.lock_acquire(c, "orders/checkout", ttl_ms: 30_000)
-#   Fiducia.Client.lock_release(c, "orders/checkout", lock["result"]["lock_id"])
+#   {:ok, lock} = Fiducia.Client.lock(c, "orders/checkout", ttl_ms: 30_000)  # blocks
+#   Fiducia.Client.release(lock)
+#   # non-blocking: {:ok, lock} = Fiducia.Client.try_lock(c, "orders/checkout")
 
 defmodule Fiducia.Client do
   defstruct base: nil
