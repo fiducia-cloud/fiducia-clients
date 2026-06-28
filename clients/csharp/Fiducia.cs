@@ -6,6 +6,7 @@
 //   await c.LockRelease("orders/checkout", lock.GetProperty("result").GetProperty("lock_id").GetString());
 
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +23,47 @@ namespace Fiducia
             Status = status;
             Body = body;
         }
+    }
+
+    /// <summary>Thrown by blocking Lock()/AcquireSemaphore() when the wait budget elapses.</summary>
+    public class LockTimeoutException : Exception
+    {
+        public IReadOnlyList<string> Keys { get; }
+        public long WaitedMs { get; }
+        public LockTimeoutException(IReadOnlyList<string> keys, long waitedMs)
+            : base($"fiducia: timed out after {waitedMs}ms waiting for {string.Join(", ", keys)}")
+        {
+            Keys = keys;
+            WaitedMs = waitedMs;
+        }
+    }
+
+    /// <summary>A held lock grant. Call ReleaseAsync (alias UnlockAsync) when done.</summary>
+    public class Lock
+    {
+        private readonly FiduciaClient _c;
+        public IReadOnlyList<string> Keys { get; }
+        public string Holder { get; }
+        public long FencingToken { get; }
+        public long? LeaseExpiresMs { get; }
+        public Lock(FiduciaClient c, IReadOnlyList<string> keys, string holder, long token, long? lease)
+        { _c = c; Keys = keys; Holder = holder; FencingToken = token; LeaseExpiresMs = lease; }
+        public Task<JsonElement> ReleaseAsync() => _c.LockRelease(Holder, FencingToken);
+        public Task<JsonElement> UnlockAsync() => ReleaseAsync();
+    }
+
+    /// <summary>A held semaphore permit. Call ReleaseAsync when done.</summary>
+    public class SemaphoreHandle
+    {
+        private readonly FiduciaClient _c;
+        public string Key { get; }
+        public string Holder { get; }
+        public long FencingToken { get; }
+        public long? LeaseExpiresMs { get; }
+        public SemaphoreHandle(FiduciaClient c, string key, string holder, long token, long? lease)
+        { _c = c; Key = key; Holder = holder; FencingToken = token; LeaseExpiresMs = lease; }
+        public Task<JsonElement> ReleaseAsync() => _c.SemaphoreRelease(Key, Holder, FencingToken);
+        public Task<JsonElement> UnlockAsync() => ReleaseAsync();
     }
 
     public class FiduciaClient
