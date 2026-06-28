@@ -13,8 +13,7 @@ endpoints, language-idiomatic surface.
 
 ## Endpoints
 
-Legend: **live** = implemented in `fiducia-node` today · **planned** = part of the
-contract, server implementation in progress (clients ship ready for it).
+Legend: **live** = implemented in `fiducia-node` today.
 
 ### Locks — live
 | Method | Endpoint | Body | Returns |
@@ -25,7 +24,6 @@ contract, server implementation in progress (clients ship ready for it).
 | `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire-many` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
 | `lockReleaseMany(lockId)` | `POST /v1/locks/release-many` | `{lock_id}` | `{committed, result}` |
 | `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
-| `lockWatch(key)` | `GET /v1/locks/{key}/watch` | — | SSE stream (**planned**) |
 
 `wait:false` is try-lock. `wait:true` joins the FIFO wait queue. A successful
 single-key grant returns a monotonic `fencing_token` in `result`. A successful
@@ -43,7 +41,11 @@ and semaphores on every member key until released by `lock_id`.
 Semaphores are the same lock state machine with `max > 1`: up to `max` holders
 can hold the key at once, and each holder gets a distinct fencing token.
 
-### Reader-writer locks — planned
+### Reader-writer locks — client extension
+
+The client SDKs reserve these names for reader-writer lock APIs; the current
+node runtime does not expose them yet.
+
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
 | `rwAcquireRead(key, {ttlMs, wait})` | `POST /v1/rw/{key}/read` | `{ttl_ms, wait}` | `{acquired, fencing_token, lock_id}` |
@@ -54,11 +56,12 @@ can hold the key at once, and each holder gets a distinct fencing token.
 ### Config KV — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `kvGet(key)` | `GET /v1/kv/{key}` | — | `{key, found, entry}` |
-| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv/{key}` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
-| `kvDelete(key)` | `DELETE /v1/kv/{key}` | — | `{committed, result}` |
-| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{keys}` (**planned**) |
-| `kvWatch(key, {startRevision})` | `GET /v1/kv/{key}/watch` | — | SSE stream (**planned**) |
+| `kvGet(key)` | `GET /v1/kv?key=...` | — | `{key, found, entry}` |
+| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv?key=...` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
+| `kvDelete(key)` | `DELETE /v1/kv?key=...` | — | `{committed, result}` |
+| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{prefix, entries}` |
+| `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
+| `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
@@ -86,6 +89,7 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 | `electionRenew(name, candidate, fencingToken)` | `POST /v1/elections/{name}/renew` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionResign(name, candidate, fencingToken)` | `POST /v1/elections/{name}/resign` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionGet(name)` | `GET /v1/elections/{name}` | — | `{name, held, leadership}` |
+| `electionWatch(name)` | `GET /v1/elections/{name}/watch` | — | SSE stream |
 
 ### Service discovery — live
 | Method | Endpoint | Body | Returns |
@@ -95,6 +99,7 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 | `serviceDeregister(service, instanceId)` | `DELETE /v1/services/{service}/instances/{id}` | — | `{committed, result}` |
 | `serviceInstances(service)` | `GET /v1/services/{service}` | — | `{service, instances}` |
 | `serviceList()` | `GET /v1/services` | — | `{services}` |
+| `serviceWatch(service)` | `GET /v1/services/{service}/watch` | — | SSE stream |
 
 ### Misc — live
 | Method | Endpoint | Returns |

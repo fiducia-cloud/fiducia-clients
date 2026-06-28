@@ -87,12 +87,12 @@ class Client
     }
 
     // --- config KV ---
-    public function kvGet(string $key) { return $this->request("GET", "/v1/kv/" . self::enc($key)); }
+    public function kvGet(string $key) { return $this->request("GET", "/v1/kv?key=" . self::enc($key)); }
     public function kvPut(string $key, string $value, ?int $ttlMs = null)
     {
-        return $this->request("PUT", "/v1/kv/" . self::enc($key), ["value" => $value, "ttl_ms" => $ttlMs]);
+        return $this->request("PUT", "/v1/kv?key=" . self::enc($key), ["value" => $value, "ttl_ms" => $ttlMs]);
     }
-    public function kvDelete(string $key) { return $this->request("DELETE", "/v1/kv/" . self::enc($key)); }
+    public function kvDelete(string $key) { return $this->request("DELETE", "/v1/kv?key=" . self::enc($key)); }
     public function kvList(string $prefix) { return $this->request("GET", "/v1/kv?prefix=" . self::enc($prefix)); }
 
     // --- leader election ---

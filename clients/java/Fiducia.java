@@ -99,11 +99,11 @@ public class Fiducia {
     }
 
     // --- config KV ---
-    public String kvGet(String key) { return request("GET", "/v1/kv/" + enc(key), null); }
+    public String kvGet(String key) { return request("GET", "/v1/kv?key=" + enc(key), null); }
     public String kvPut(String key, String value, Long ttlMs) {
-        return request("PUT", "/v1/kv/" + enc(key), obj("value", value, "ttl_ms", ttlMs));
+        return request("PUT", "/v1/kv?key=" + enc(key), obj("value", value, "ttl_ms", ttlMs));
     }
-    public String kvDelete(String key) { return request("DELETE", "/v1/kv/" + enc(key), null); }
+    public String kvDelete(String key) { return request("DELETE", "/v1/kv?key=" + enc(key), null); }
     public String kvList(String prefix) { return request("GET", "/v1/kv?prefix=" + enc(prefix), null); }
 
     // --- leader election ---

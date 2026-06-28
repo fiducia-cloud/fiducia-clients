@@ -65,10 +65,10 @@ namespace Fiducia
             Request(HttpMethod.Post, $"/v1/rw/{Enc(key)}/write/end", new { lock_id = lockId });
 
         // --- config KV ---
-        public Task<JsonElement> KvGet(string key) => Request(HttpMethod.Get, $"/v1/kv/{Enc(key)}");
+        public Task<JsonElement> KvGet(string key) => Request(HttpMethod.Get, $"/v1/kv?key={Enc(key)}");
         public Task<JsonElement> KvPut(string key, string value, long? ttlMs = null) =>
-            Request(HttpMethod.Put, $"/v1/kv/{Enc(key)}", new { value, ttl_ms = ttlMs });
-        public Task<JsonElement> KvDelete(string key) => Request(HttpMethod.Delete, $"/v1/kv/{Enc(key)}");
+            Request(HttpMethod.Put, $"/v1/kv?key={Enc(key)}", new { value, ttl_ms = ttlMs });
+        public Task<JsonElement> KvDelete(string key) => Request(HttpMethod.Delete, $"/v1/kv?key={Enc(key)}");
         public Task<JsonElement> KvList(string prefix) => Request(HttpMethod.Get, $"/v1/kv?prefix={Enc(prefix)}");
 
         // --- leader election ---

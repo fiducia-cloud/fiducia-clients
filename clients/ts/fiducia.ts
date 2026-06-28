@@ -45,6 +45,11 @@ export interface ScheduleUpsertOpts {
   delivery?: "at_least_once" | "exactly_once";
   maxRetries?: number;
 }
+export interface WatchEvent<T = any> {
+  event: string;
+  data: T;
+  id?: string;
+}
 
 export class FiduciaError extends Error {
   constructor(public status: number, public body: any) {
@@ -70,6 +75,43 @@ export class FiduciaClient {
     const data = text ? JSON.parse(text) : null;
     if (!res.ok) throw new FiduciaError(res.status, data);
     return data;
+  }
+
+  private async *watch(path: string): AsyncGenerator<WatchEvent> {
+    const res = await fetch(this.base + path, {
+      method: "GET",
+      headers: { accept: "text/event-stream" },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : null;
+      throw new FiduciaError(res.status, data);
+    }
+    if (!res.body?.getReader) throw new Error("fiducia: response body is not streamable");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const event = parseSseBlock(block);
+          if (event) yield event;
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+      buffer += decoder.decode();
+      const event = parseSseBlock(buffer);
+      if (event) yield event;
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   // --- misc ---
@@ -121,13 +163,15 @@ export class FiduciaClient {
   }
 
   // --- config KV ---
-  kvGet(key: string) { return this.request("GET", `/v1/kv/${enc(key)}`); }
+  kvGet(key: string) { return this.request("GET", `/v1/kv?key=${enc(key)}`); }
   kvPut(key: string, value: string, opts: KvPutOpts = {}) {
-    return this.request("PUT", `/v1/kv/${enc(key)}`,
+    return this.request("PUT", `/v1/kv?key=${enc(key)}`,
       { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision });
   }
-  kvDelete(key: string) { return this.request("DELETE", `/v1/kv/${enc(key)}`); }
+  kvDelete(key: string) { return this.request("DELETE", `/v1/kv?key=${enc(key)}`); }
   kvList(prefix: string) { return this.request("GET", `/v1/kv?prefix=${enc(prefix)}`); }
+  kvWatch(key: string) { return this.watch(`/v1/kv?key=${enc(key)}&watch=true`); }
+  kvWatchPrefix(prefix: string) { return this.watch(`/v1/kv?prefix=${enc(prefix)}&watch=true`); }
 
   // --- rate limiting ---
   rateLimitCheck(tenant: string, key: string, opts: RateLimitCheckOpts) {
@@ -175,6 +219,7 @@ export class FiduciaClient {
     return this.request("POST", `/v1/elections/${enc(name)}/resign`, { candidate, fencing_token: fencingToken });
   }
   electionGet(name: string) { return this.request("GET", `/v1/elections/${enc(name)}`); }
+  electionWatch(name: string) { return this.watch(`/v1/elections/${enc(name)}/watch`); }
 
   // --- service discovery ---
   serviceRegister(service: string, instanceId: string, address: string, ttlMs: number) {
@@ -189,4 +234,30 @@ export class FiduciaClient {
   }
   serviceInstances(service: string) { return this.request("GET", `/v1/services/${enc(service)}`); }
   serviceList() { return this.request("GET", "/v1/services"); }
+  serviceWatch(service: string) { return this.watch(`/v1/services/${enc(service)}/watch`); }
+}
+
+function parseSseBlock(block: string): WatchEvent | undefined {
+  let event = "message";
+  let id: string | undefined;
+  const data: string[] = [];
+  for (const rawLine of block.replace(/\r\n/g, "\n").split("\n")) {
+    if (!rawLine || rawLine.startsWith(":")) continue;
+    const colon = rawLine.indexOf(":");
+    const field = colon >= 0 ? rawLine.slice(0, colon) : rawLine;
+    let value = colon >= 0 ? rawLine.slice(colon + 1) : "";
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") event = value;
+    if (field === "id") id = value;
+    if (field === "data") data.push(value);
+  }
+  if (!data.length) return undefined;
+  const raw = data.join("\n");
+  let decoded: any = raw;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    decoded = raw;
+  }
+  return { event, id, data: decoded };
 }

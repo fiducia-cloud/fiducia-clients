@@ -181,12 +181,12 @@ impl FiduciaClient {
 
     // --- config KV ---
     pub fn kv_get(&self, key: &str) -> Result<Value, Error> {
-        self.request("GET", &format!("/v1/kv/{}", enc(key)), None)
+        self.request("GET", &format!("/v1/kv?key={}", enc(key)), None)
     }
     pub fn kv_put(&self, key: &str, value: &str, ttl_ms: Option<u64>) -> Result<Value, Error> {
         self.request(
             "PUT",
-            &format!("/v1/kv/{}", enc(key)),
+            &format!("/v1/kv?key={}", enc(key)),
             Some(json!({ "value": value, "ttl_ms": ttl_ms })),
         )
     }
@@ -199,12 +199,12 @@ impl FiduciaClient {
     ) -> Result<Value, Error> {
         self.request(
             "PUT",
-            &format!("/v1/kv/{}", enc(key)),
+            &format!("/v1/kv?key={}", enc(key)),
             Some(json!({ "value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision })),
         )
     }
     pub fn kv_delete(&self, key: &str) -> Result<Value, Error> {
-        self.request("DELETE", &format!("/v1/kv/{}", enc(key)), None)
+        self.request("DELETE", &format!("/v1/kv?key={}", enc(key)), None)
     }
     pub fn kv_list(&self, prefix: &str) -> Result<Value, Error> {
         self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)

@@ -52,11 +52,11 @@ module Fiducia
     end
 
     # --- config KV ---
-    def kv_get(key); request("GET", "/v1/kv/#{enc key}"); end
+    def kv_get(key); request("GET", "/v1/kv?key=#{enc key}"); end
     def kv_put(key, value, ttl_ms: nil)
-      request("PUT", "/v1/kv/#{enc key}", { value: value, ttl_ms: ttl_ms })
+      request("PUT", "/v1/kv?key=#{enc key}", { value: value, ttl_ms: ttl_ms })
     end
-    def kv_delete(key); request("DELETE", "/v1/kv/#{enc key}"); end
+    def kv_delete(key); request("DELETE", "/v1/kv?key=#{enc key}"); end
     def kv_list(prefix); request("GET", "/v1/kv?prefix=#{enc prefix}"); end
 
     # --- leader election ---

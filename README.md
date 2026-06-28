@@ -101,11 +101,10 @@ const live = await c.serviceInstances("api");
 
 ## Status
 
-Clients are skeletons that track the live node endpoints (locks, semaphores,
-multi-key locks, rate limiting, cron/scheduling, KV, elections, discovery) and
-ship planned RW/watch shapes ahead of the server (marked *planned* in
-`PROTOCOL.md`). They make HTTP calls and parse JSON; they do not yet add
-retries, auth helpers, or watch/SSE streaming.
+Clients track the live node endpoints for locks, semaphores, multi-key locks,
+rate limiting, cron/scheduling, KV, elections, and discovery. TypeScript and
+Python include SSE watch helpers for KV key/prefix changes, election leadership
+changes, and service discovery changes. They make HTTP calls and parse JSON.
 
 ## Related
 

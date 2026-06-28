@@ -58,10 +58,10 @@ class FiduciaClient {
       _request('POST', '/v1/rw/${_enc(key)}/write/end', {'lock_id': lockId});
 
   // --- config KV ---
-  Future<dynamic> kvGet(String key) => _request('GET', '/v1/kv/${_enc(key)}');
+  Future<dynamic> kvGet(String key) => _request('GET', '/v1/kv?key=${_enc(key)}');
   Future<dynamic> kvPut(String key, String value, {int? ttlMs}) =>
-      _request('PUT', '/v1/kv/${_enc(key)}', {'value': value, 'ttl_ms': ttlMs});
-  Future<dynamic> kvDelete(String key) => _request('DELETE', '/v1/kv/${_enc(key)}');
+      _request('PUT', '/v1/kv?key=${_enc(key)}', {'value': value, 'ttl_ms': ttlMs});
+  Future<dynamic> kvDelete(String key) => _request('DELETE', '/v1/kv?key=${_enc(key)}');
   Future<dynamic> kvList(String prefix) => _request('GET', '/v1/kv?prefix=${_enc(prefix)}');
 
   // --- leader election ---

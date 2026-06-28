@@ -50,11 +50,11 @@ class FiduciaClient {
     }
 
     # --- config KV ---
-    [object] KvGet([string] $key) { return $this.Request('GET', "/v1/kv/$([FiduciaClient]::Enc($key))", $null) }
+    [object] KvGet([string] $key) { return $this.Request('GET', "/v1/kv?key=$([FiduciaClient]::Enc($key))", $null) }
     [object] KvPut([string] $key, [string] $value, [object] $ttlMs) {
-        return $this.Request('PUT', "/v1/kv/$([FiduciaClient]::Enc($key))", @{ value = $value; ttl_ms = $ttlMs })
+        return $this.Request('PUT', "/v1/kv?key=$([FiduciaClient]::Enc($key))", @{ value = $value; ttl_ms = $ttlMs })
     }
-    [object] KvDelete([string] $key) { return $this.Request('DELETE', "/v1/kv/$([FiduciaClient]::Enc($key))", $null) }
+    [object] KvDelete([string] $key) { return $this.Request('DELETE', "/v1/kv?key=$([FiduciaClient]::Enc($key))", $null) }
     [object] KvList([string] $prefix) { return $this.Request('GET', "/v1/kv?prefix=$([FiduciaClient]::Enc($prefix))", $null) }
 
     # --- leader election ---

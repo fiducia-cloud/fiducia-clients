@@ -40,6 +40,14 @@ def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
 
+def _query(path, **params):
+    qs = urllib.parse.urlencode(
+        {key: value for key, value in params.items() if value is not None},
+        doseq=True,
+    )
+    return "%s?%s" % (path, qs) if qs else path
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30):
         self.base = base_url.rstrip("/")
@@ -54,6 +62,39 @@ class FiduciaClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 text = r.read().decode()
                 return json.loads(text) if text else None
+        except urllib.error.HTTPError as e:
+            text = e.read().decode()
+            raise FiduciaError(e.code, json.loads(text) if text else None)
+
+    def _watch(self, path):
+        req = urllib.request.Request(self.base + path, method="GET")
+        req.add_header("accept", "text/event-stream")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                event = {}
+                data = []
+                for raw_line in r:
+                    line = raw_line.decode().rstrip("\r\n")
+                    if not line:
+                        decoded = _decode_sse_event(event, data)
+                        if decoded is not None:
+                            yield decoded
+                        event, data = {}, []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    field, _, value = line.partition(":")
+                    if value.startswith(" "):
+                        value = value[1:]
+                    if field == "event":
+                        event["event"] = value
+                    elif field == "id":
+                        event["id"] = value
+                    elif field == "data":
+                        data.append(value)
+                decoded = _decode_sse_event(event, data)
+                if decoded is not None:
+                    yield decoded
         except urllib.error.HTTPError as e:
             text = e.read().decode()
             raise FiduciaError(e.code, json.loads(text) if text else None)
@@ -108,17 +149,23 @@ class FiduciaClient:
 
     # --- config KV ---
     def kv_get(self, key):
-        return self._request("GET", "/v1/kv/%s" % _enc(key))
+        return self._request("GET", _query("/v1/kv", key=key))
 
     def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
-        return self._request("PUT", "/v1/kv/%s" % _enc(key),
+        return self._request("PUT", _query("/v1/kv", key=key),
                              {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
 
     def kv_delete(self, key):
-        return self._request("DELETE", "/v1/kv/%s" % _enc(key))
+        return self._request("DELETE", _query("/v1/kv", key=key))
 
     def kv_list(self, prefix):
-        return self._request("GET", "/v1/kv?prefix=%s" % _enc(prefix))
+        return self._request("GET", _query("/v1/kv", prefix=prefix))
+
+    def kv_watch(self, key):
+        return self._watch(_query("/v1/kv", key=key, watch="true"))
+
+    def kv_watch_prefix(self, prefix):
+        return self._watch(_query("/v1/kv", prefix=prefix, watch="true"))
 
     # --- rate limiting ---
     def rate_limit_check(self, tenant, key, algorithm, limit, window_ms,
@@ -173,6 +220,9 @@ class FiduciaClient:
     def election_get(self, name):
         return self._request("GET", "/v1/elections/%s" % _enc(name))
 
+    def election_watch(self, name):
+        return self._watch("/v1/elections/%s/watch" % _enc(name))
+
     # --- service discovery ---
     def service_register(self, service, instance_id, address, ttl_ms):
         return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)),
@@ -189,3 +239,20 @@ class FiduciaClient:
 
     def service_list(self):
         return self._request("GET", "/v1/services")
+
+    def service_watch(self, service):
+        return self._watch("/v1/services/%s/watch" % _enc(service))
+
+
+def _decode_sse_event(event, data):
+    if not data:
+        return None
+    raw = "\n".join(data)
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = raw
+    out = {"event": event.get("event", "message"), "data": decoded}
+    if "id" in event:
+        out["id"] = event["id"]
+    return out

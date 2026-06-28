@@ -188,13 +188,13 @@ func (c *Client) RwEndWrite(key, lockID string) (map[string]any, error) {
 
 // --- config KV ---
 func (c *Client) KvGet(key string) (map[string]any, error) {
-	return c.request("GET", "/v1/kv/"+enc(key), nil)
+	return c.request("GET", "/v1/kv?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) KvPut(key, value string, ttlMs int64) (map[string]any, error) {
-	return c.request("PUT", "/v1/kv/"+enc(key), map[string]any{"value": value, "ttl_ms": ttlMs})
+	return c.request("PUT", "/v1/kv?key="+url.QueryEscape(key), map[string]any{"value": value, "ttl_ms": ttlMs})
 }
 func (c *Client) KvDelete(key string) (map[string]any, error) {
-	return c.request("DELETE", "/v1/kv/"+enc(key), nil)
+	return c.request("DELETE", "/v1/kv?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) KvList(prefix string) (map[string]any, error) {
 	return c.request("GET", "/v1/kv?prefix="+url.QueryEscape(prefix), nil)

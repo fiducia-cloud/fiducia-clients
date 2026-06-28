@@ -42,9 +42,9 @@ fiducia_rw_acquire_write() { _fiducia_req POST "/v1/rw/$(_fiducia_enc "$1")/writ
 fiducia_rw_end_write()     { _fiducia_req POST "/v1/rw/$(_fiducia_enc "$1")/write/end" "$(jq -nc --arg l "$2" '{lock_id:$l}')"; }
 
 # --- config KV ---
-fiducia_kv_get()    { _fiducia_req GET    "/v1/kv/$(_fiducia_enc "$1")"; }
-fiducia_kv_put()    { _fiducia_req PUT    "/v1/kv/$(_fiducia_enc "$1")" "$(jq -nc --arg v "$2" --argjson t "${3:-null}" '{value:$v,ttl_ms:$t}')"; }
-fiducia_kv_delete() { _fiducia_req DELETE "/v1/kv/$(_fiducia_enc "$1")"; }
+fiducia_kv_get()    { _fiducia_req GET    "/v1/kv?key=$(_fiducia_enc "$1")"; }
+fiducia_kv_put()    { _fiducia_req PUT    "/v1/kv?key=$(_fiducia_enc "$1")" "$(jq -nc --arg v "$2" --argjson t "${3:-null}" '{value:$v,ttl_ms:$t}')"; }
+fiducia_kv_delete() { _fiducia_req DELETE "/v1/kv?key=$(_fiducia_enc "$1")"; }
 fiducia_kv_list()   { _fiducia_req GET    "/v1/kv?prefix=$(_fiducia_enc "$1")"; }
 
 # --- leader election ---

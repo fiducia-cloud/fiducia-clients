@@ -39,11 +39,11 @@ defmodule Fiducia.Client do
     do: request(c, :post, "/v1/rw/#{enc(key)}/write/end", %{lock_id: lock_id})
 
   # --- config KV ---
-  def kv_get(c, key), do: request(c, :get, "/v1/kv/#{enc(key)}")
+  def kv_get(c, key), do: request(c, :get, "/v1/kv?key=#{enc(key)}")
   def kv_put(c, key, value, opts \\ []),
-    do: request(c, :put, "/v1/kv/#{enc(key)}", %{value: value, ttl_ms: opts[:ttl_ms]})
+    do: request(c, :put, "/v1/kv?key=#{enc(key)}", %{value: value, ttl_ms: opts[:ttl_ms]})
 
-  def kv_delete(c, key), do: request(c, :delete, "/v1/kv/#{enc(key)}")
+  def kv_delete(c, key), do: request(c, :delete, "/v1/kv?key=#{enc(key)}")
   def kv_list(c, prefix), do: request(c, :get, "/v1/kv?prefix=#{enc(prefix)}")
 
   # --- leader election ---
