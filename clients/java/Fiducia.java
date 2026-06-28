@@ -237,4 +237,151 @@ public class Fiducia {
     }
     public String serviceInstances(String service) { return request("GET", "/v1/services/" + enc(service), null); }
     public String serviceList() { return request("GET", "/v1/services", null); }
+
+    // --- high-level support types + helpers ----------------------------------
+
+    /** A held lock grant. Call {@link #release()} (alias {@link #unlock()}) when done. */
+    public static final class Lock {
+        private final Fiducia c;
+        public final List<String> keys;
+        public final String holder;
+        public final long fencingToken;
+        public final Long leaseExpiresMs;
+        Lock(Fiducia c, List<String> keys, String holder, long fencingToken, Long leaseExpiresMs) {
+            this.c = c; this.keys = keys; this.holder = holder;
+            this.fencingToken = fencingToken; this.leaseExpiresMs = leaseExpiresMs;
+        }
+        public String release() { return c.lockRelease(holder, fencingToken); }
+        public String unlock() { return release(); }
+    }
+
+    /** A held semaphore permit. Call {@link #release()} when done. */
+    public static final class SemaphoreHandle {
+        private final Fiducia c;
+        public final String key;
+        public final String holder;
+        public final long fencingToken;
+        public final Long leaseExpiresMs;
+        SemaphoreHandle(Fiducia c, String key, String holder, long fencingToken, Long leaseExpiresMs) {
+            this.c = c; this.key = key; this.holder = holder;
+            this.fencingToken = fencingToken; this.leaseExpiresMs = leaseExpiresMs;
+        }
+        public String release() { return c.semaphoreRelease(key, holder, fencingToken); }
+        public String unlock() { return release(); }
+    }
+
+    /** Thrown by blocking lock()/acquireSemaphore() when the wait budget elapses. */
+    public static final class LockTimeoutException extends RuntimeException {
+        public final List<String> keys;
+        public final long waitedMs;
+        public LockTimeoutException(List<String> keys, long waitedMs) {
+            super("fiducia: timed out after " + waitedMs + "ms waiting for " + keys);
+            this.keys = keys; this.waitedMs = waitedMs;
+        }
+    }
+
+    private static String genHolder() { return "fdc-" + UUID.randomUUID().toString().replace("-", ""); }
+    private static long nowMs() { return System.nanoTime() / 1_000_000L; }
+    private static void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object o) {
+        return (o instanceof Map) ? (Map<String, Object>) o : new HashMap<>();
+    }
+    private static Map<String, Object> output(String resp) {
+        return asMap(asMap(Json.parse(resp)).get("result")).getOrDefault("output", null) instanceof Map
+                ? asMap(asMap(asMap(Json.parse(resp)).get("result")).get("output"))
+                : asMap(asMap(asMap(Json.parse(resp)).get("result")).get("output"));
+    }
+    private static boolean asBool(Object o) { return Boolean.TRUE.equals(o); }
+    private static String asStr(Object o) { return (o instanceof String) ? (String) o : null; }
+    private static long asLong(Object o) { return (o instanceof Number) ? ((Number) o).longValue() : 0L; }
+    private static Long asLongOrNull(Object o) { return (o instanceof Number) ? ((Number) o).longValue() : null; }
+
+    /** Minimal recursive-descent JSON parser → Map / List / String / Double / Boolean / null. */
+    static final class Json {
+        private final String s;
+        private int i;
+        private Json(String s) { this.s = s; }
+        static Object parse(String s) {
+            if (s == null || s.isEmpty()) return null;
+            Json j = new Json(s);
+            j.ws();
+            return j.value();
+        }
+        private Object value() {
+            ws();
+            char c = s.charAt(i);
+            switch (c) {
+                case '{': return obj();
+                case '[': return arr();
+                case '"': return str();
+                case 't': i += 4; return Boolean.TRUE;
+                case 'f': i += 5; return Boolean.FALSE;
+                case 'n': i += 4; return null;
+                default:  return num();
+            }
+        }
+        private Map<String, Object> obj() {
+            Map<String, Object> m = new HashMap<>();
+            i++; ws();
+            if (s.charAt(i) == '}') { i++; return m; }
+            while (true) {
+                ws();
+                String k = str();
+                ws(); i++; // ':'
+                m.put(k, value());
+                ws();
+                char c = s.charAt(i++);
+                if (c == '}') break; // else ','
+            }
+            return m;
+        }
+        private List<Object> arr() {
+            List<Object> l = new ArrayList<>();
+            i++; ws();
+            if (s.charAt(i) == ']') { i++; return l; }
+            while (true) {
+                l.add(value());
+                ws();
+                char c = s.charAt(i++);
+                if (c == ']') break; // else ','
+            }
+            return l;
+        }
+        private String str() {
+            StringBuilder b = new StringBuilder();
+            i++; // opening quote
+            while (true) {
+                char c = s.charAt(i++);
+                if (c == '"') break;
+                if (c == '\\') {
+                    char e = s.charAt(i++);
+                    switch (e) {
+                        case '"': b.append('"'); break;
+                        case '\\': b.append('\\'); break;
+                        case '/': b.append('/'); break;
+                        case 'n': b.append('\n'); break;
+                        case 't': b.append('\t'); break;
+                        case 'r': b.append('\r'); break;
+                        case 'b': b.append('\b'); break;
+                        case 'f': b.append('\f'); break;
+                        case 'u': b.append((char) Integer.parseInt(s.substring(i, i + 4), 16)); i += 4; break;
+                        default: b.append(e);
+                    }
+                } else b.append(c);
+            }
+            return b.toString();
+        }
+        private Object num() {
+            int start = i;
+            while (i < s.length() && "+-0123456789.eE".indexOf(s.charAt(i)) >= 0) i++;
+            return Double.parseDouble(s.substring(start, i));
+        }
+        private void ws() {
+            while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        }
+    }
 }
