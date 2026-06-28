@@ -291,9 +291,8 @@ public class Fiducia {
         return (o instanceof Map) ? (Map<String, Object>) o : new HashMap<>();
     }
     private static Map<String, Object> output(String resp) {
-        return asMap(asMap(Json.parse(resp)).get("result")).getOrDefault("output", null) instanceof Map
-                ? asMap(asMap(asMap(Json.parse(resp)).get("result")).get("output"))
-                : asMap(asMap(asMap(Json.parse(resp)).get("result")).get("output"));
+        Map<String, Object> result = asMap(asMap(Json.parse(resp)).get("result"));
+        return asMap(result.get("output"));
     }
     private static boolean asBool(Object o) { return Boolean.TRUE.equals(o); }
     private static String asStr(Object o) { return (o instanceof String) ? (String) o : null; }
