@@ -1,6 +1,6 @@
 # Fiducia HTTP client (PowerShell module). Uses Invoke-RestMethod. Implements PROTOCOL.md.
 #
-#   Import-Module ./Fiducia.psm1
+#   using module ./Fiducia.psm1
 #   $c = [FiduciaClient]::new("https://api.fiducia.cloud")
 #   $lock = $c.LockAcquire("orders/checkout", 30000, $true, 1)
 #   $c.LockRelease("orders/checkout", "worker-a", $lock.result.output.fencing_token)
@@ -174,6 +174,93 @@ class FiduciaClient {
     [object] SemaphoreRelease([string] $key, [string] $holder, [long] $fencingToken) {
         return $this.Request('POST', '/v1/semaphores/release', @{ key = $key; holder = $holder; fencing_token = $fencingToken })
     }
+    [object] LockRelease([string] $holder, [long] $fencingToken) {
+        return $this.Request('POST', '/v1/locks/release', @{ holder = $holder; fencing_token = $fencingToken })
+    }
+
+    # --- semaphores ---
+    [object] SemaphoreGet([string] $key) {
+        return $this.Request('GET', "/v1/semaphores?key=$([FiduciaClient]::Enc($key))", $null)
+    }
+    [object] SemaphoreAcquire([string] $key, [int] $limit, [string] $holder, [object] $ttlMs, [bool] $wait) {
+        return $this.Request('POST', '/v1/semaphores/acquire', @{ key = $key; limit = $limit; holder = $holder; ttl_ms = $ttlMs; wait = $wait })
+    }
+    [object] SemaphoreRelease([string] $key, [string] $holder, [long] $fencingToken) {
+        return $this.Request('POST', '/v1/semaphores/release', @{ key = $key; holder = $holder; fencing_token = $fencingToken })
+    }
+
+    # --- high-level blocking / try acquisition (live-mutex style) ---
+
+    # TryLock: wait:false — returns a FiduciaLock if free now, else $null.
+    [object] TryLock([string] $key, [long] $ttlMs) {
+        return $this.AcquireLock(@($key), $false, $ttlMs, 0, 0)
+    }
+
+    # Lock: wait:true — blocks (polling) until acquired or the budget elapses (throws).
+    [object] Lock([string] $key, [long] $ttlMs, [int] $maxWaitMs, [int] $retryIntervalMs) {
+        $got = $this.AcquireLock(@($key), $true, $ttlMs, $maxWaitMs, $retryIntervalMs)
+        if ($null -eq $got) { throw "fiducia: timed out after ${maxWaitMs}ms waiting for $key" }
+        return $got
+    }
+
+    # MustLock is an alias of Lock.
+    [object] MustLock([string] $key, [long] $ttlMs, [int] $maxWaitMs, [int] $retryIntervalMs) {
+        return $this.Lock($key, $ttlMs, $maxWaitMs, $retryIntervalMs)
+    }
+
+    # TrySemaphore: wait:false — returns a FiduciaSemaphore if a permit is free, else $null.
+    [object] TrySemaphore([string] $key, [int] $limit, [long] $ttlMs) {
+        return $this.AcquireSemaphoreInner($key, $limit, $false, $ttlMs, 0, 0)
+    }
+
+    # AcquireSemaphore: wait:true — blocks until a permit frees or the budget elapses (throws).
+    [object] AcquireSemaphore([string] $key, [int] $limit, [long] $ttlMs, [int] $maxWaitMs, [int] $retryIntervalMs) {
+        $got = $this.AcquireSemaphoreInner($key, $limit, $true, $ttlMs, $maxWaitMs, $retryIntervalMs)
+        if ($null -eq $got) { throw "fiducia: timed out after ${maxWaitMs}ms waiting for $key" }
+        return $got
+    }
+
+    hidden [object] AcquireLock([string[]] $keys, [bool] $wait, [long] $ttlMs, [int] $maxWaitMs, [int] $retryIntervalMs) {
+        $holder = [FiduciaClient]::GenHolder()
+        $out = $this.LockAcquire($keys, $holder, $ttlMs, $wait).result.output
+        if ($out.acquired) {
+            return [FiduciaLock]@{ Client = $this; Keys = $keys; Holder = $holder; FencingToken = [long]$out.fencing_token; LeaseExpiresMs = $out.lease_expires_ms }
+        }
+        if (-not $wait) { return $null }  # TryLock: held now -> fail fast
+        $deadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $maxWaitMs
+        while ($true) {
+            $remaining = $deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if ($remaining -le 0) { break }
+            Start-Sleep -Milliseconds ([Math]::Min($retryIntervalMs, $remaining))
+            $lk = $this.LockGet($keys[0]).lock
+            if ($lk -and $lk.holder -eq $holder -and $null -ne $lk.fencing_token) {
+                return [FiduciaLock]@{ Client = $this; Keys = $keys; Holder = $holder; FencingToken = [long]$lk.fencing_token; LeaseExpiresMs = $lk.lease_expires_ms }
+            }
+        }
+        return $null
+    }
+
+    hidden [object] AcquireSemaphoreInner([string] $key, [int] $limit, [bool] $wait, [long] $ttlMs, [int] $maxWaitMs, [int] $retryIntervalMs) {
+        $holder = [FiduciaClient]::GenHolder()
+        $out = $this.SemaphoreAcquire($key, $limit, $holder, $ttlMs, $wait).result.output
+        if ($out.acquired) {
+            return [FiduciaSemaphore]@{ Client = $this; Key = $key; Holder = $holder; FencingToken = [long]$out.fencing_token; LeaseExpiresMs = $out.lease_expires_ms }
+        }
+        if (-not $wait) { return $null }
+        $deadline = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + $maxWaitMs
+        while ($true) {
+            $remaining = $deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if ($remaining -le 0) { break }
+            Start-Sleep -Milliseconds ([Math]::Min($retryIntervalMs, $remaining))
+            $slot = $this.SemaphoreGet($key).semaphore.holders | Where-Object { $_.holder -eq $holder } | Select-Object -First 1
+            if ($slot -and $null -ne $slot.fencing_token) {
+                return [FiduciaSemaphore]@{ Client = $this; Key = $key; Holder = $holder; FencingToken = [long]$slot.fencing_token; LeaseExpiresMs = $slot.lease_expires_ms }
+            }
+        }
+        return $null
+    }
+
+    hidden static [string] GenHolder() { return "fdc-$([guid]::NewGuid().ToString('N'))" }
 
     # --- reader-writer locks ---
     [object] RwAcquireRead([string] $key, [object] $ttlMs, [bool] $wait) {

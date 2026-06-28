@@ -3,7 +3,8 @@
 #
 #   source fiducia.sh
 #   export FIDUCIA_URL=https://api.fiducia.cloud
-#   fiducia_lock_acquire orders/checkout 30000
+#   handle=$(fiducia_lock orders/checkout) && fiducia_release "$handle"   # blocks
+#   handle=$(fiducia_try_lock orders/checkout) && fiducia_release "$handle" # non-blocking
 #   fiducia_kv_put flags/new-ui on 60000
 #
 # Every function prints the JSON response to stdout (pipe to `jq`).
@@ -31,6 +32,10 @@ _fiducia_req() { # method path [json-body] [max_retries] [timeout_seconds] [retr
 }
 
 _fiducia_enc() { jq -rn --arg s "$1" '$s|@uri'; }
+_fiducia_now_ms() { jq -n 'now*1000|floor'; }
+_fiducia_gen_holder() {
+  printf 'fdc-%s' "$( (uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$RANDOM$RANDOM$RANDOM") | tr 'A-Z' 'a-z' | tr -d '-' )"
+}
 
 # --- misc ---
 fiducia_health() { _fiducia_req GET /healthz; }

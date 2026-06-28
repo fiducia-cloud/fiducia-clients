@@ -10,6 +10,10 @@
 use serde_json::{json, Value};
 use std::{thread, time::Duration};
 
+/// High-level blocking/try lock + semaphore acquisition (live-mutex-style).
+mod locking;
+pub use locking::{LockError, LockHandle, LockOptions, SemaphoreHandle};
+
 /// The shared, generated payload/error contract (from `fiducia-interfaces`),
 /// re-exported so callers can deserialize responses into typed structs, e.g.
 /// `serde_json::from_value::<fiducia_client::types::KvEntry>(resp["entry"].clone())`.
@@ -584,13 +588,25 @@ impl FiduciaClient {
     }
 
     // --- leader election ---
+    /// Campaign to lead `name`. `metadata` publishes candidate facts (address,
+    /// region, version, …) with the leadership so observers can discover the
+    /// leader's endpoint, not just its id.
     pub fn election_campaign(
         &self,
         name: &str,
         candidate: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
-        self.election_campaign_with_metadata(name, candidate, ttl_ms, json!({}))
+        let mut body = json!({ "candidate": candidate, "ttl_ms": ttl_ms });
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
+        self.request(
+            "POST",
+            &format!("/v1/elections/{}/campaign", enc(name)),
+            Some(body),
+        )
     }
     pub fn election_campaign_with_metadata(
         &self,
@@ -599,22 +615,25 @@ impl FiduciaClient {
         ttl_ms: u64,
         metadata: Value,
     ) -> Result<Value, Error> {
-        self.request(
-            "POST",
-            &format!("/v1/elections/{}/campaign", enc(name)),
-            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms, "metadata": metadata })),
-        )
+        self.election_campaign(name, candidate, ttl_ms, Some(metadata))
     }
+    /// Renew the lease. `ttl_ms` overrides the lease length; when `None`, the
+    /// original campaign TTL is reused.
     pub fn election_renew(
         &self,
         name: &str,
         candidate: &str,
         fencing_token: u64,
+        ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "candidate": candidate, "fencing_token": fencing_token });
+        if let Some(ttl_ms) = ttl_ms {
+            body["ttl_ms"] = json!(ttl_ms);
+        }
         self.request(
             "POST",
             &format!("/v1/elections/{}/renew", enc(name)),
-            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+            Some(body),
         )
     }
     pub fn election_resign(
@@ -634,14 +653,23 @@ impl FiduciaClient {
     }
 
     // --- service discovery ---
+    /// Register/refresh an instance. `metadata` carries free-form facts (zone,
+    /// capacity, version, …) returned to clients resolving the service.
     pub fn service_register(
         &self,
         service: &str,
         instance_id: &str,
         address: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
-        self.service_register_with_metadata(service, instance_id, address, ttl_ms, json!({}))
+        self.service_register_with_metadata(
+            service,
+            instance_id,
+            address,
+            ttl_ms,
+            metadata.unwrap_or_else(|| json!({})),
+        )
     }
     pub fn service_register_with_metadata(
         &self,

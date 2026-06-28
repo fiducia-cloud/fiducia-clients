@@ -47,6 +47,17 @@ where the client already exposes multi-key locks. Blocking calls can be bounded
 with request controls such as lock/request timeout, max retries / retry max,
 retry delay, and cancellation/context controls where supported.
 
+**Waiting is client-driven.** The server does **not** hold a request open on
+`wait:true` — it reserves the FIFO slot and returns `{acquired:false, queued:true,
+position}` immediately. The client then polls `lockGet`/`semaphoreGet` until its
+`holder` appears as the current holder (with a `fencing_token`), backing off
+between polls, until acquired or its own deadline. The clients expose this as the
+high-level **`tryLock` (`wait:false`)** and **`lock`/`mustLock` (`wait:true`,
+retries + timeout)** methods (see the README); the retry budget (`ttl`,
+`maxWaitTime`, `retryInterval`, `maxRetries`) is entirely client-side. A client
+that abandons a wait leaves a queue slot that self-heals once promoted: the grant
+then carries a lease TTL and expires if no one holds it.
+
 ### Semaphores — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

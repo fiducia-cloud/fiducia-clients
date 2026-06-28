@@ -20,6 +20,61 @@ class FiduciaException extends \Exception
     }
 }
 
+/** Thrown by the blocking lock()/acquireSemaphore() when the wait budget elapses. */
+class LockTimeout extends \Exception
+{
+    public array $keys;
+    public int $waitedMs;
+    public function __construct(array $keys, int $waitedMs)
+    {
+        parent::__construct("fiducia: timed out after {$waitedMs}ms waiting for " . implode(", ", $keys));
+        $this->keys = $keys;
+        $this->waitedMs = $waitedMs;
+    }
+}
+
+/** A held lock grant. Call release() (alias unlock()) when done. */
+class Lock
+{
+    public function __construct(
+        private Client $client,
+        public array $keys,
+        public string $holder,
+        public int $fencingToken,
+        public $leaseExpiresMs = null
+    ) {
+    }
+    public function release()
+    {
+        return $this->client->lockRelease($this->holder, $this->fencingToken);
+    }
+    public function unlock()
+    {
+        return $this->release();
+    }
+}
+
+/** A held semaphore permit. Call release() when done. */
+class SemaphoreHandle
+{
+    public function __construct(
+        private Client $client,
+        public string $key,
+        public string $holder,
+        public int $fencingToken,
+        public $leaseExpiresMs = null
+    ) {
+    }
+    public function release()
+    {
+        return $this->client->semaphoreRelease($this->key, $this->holder, $this->fencingToken);
+    }
+    public function unlock()
+    {
+        return $this->release();
+    }
+}
+
 class Client
 {
     private string $base;
