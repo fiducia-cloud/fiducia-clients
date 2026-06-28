@@ -3,8 +3,9 @@
 // (String); parse it with your JSON library of choice.
 //
 //   Fiducia c = new Fiducia("https://api.fiducia.cloud");
-//   String lock = c.lockAcquire("orders/checkout", 30000L, true, 1);
-//   c.lockRelease("orders/checkout", "<lock_id from the JSON>");
+//   Fiducia.Lock lock = c.lock("orders/checkout");  // blocks until acquired
+//   lock.release();
+//   // non-blocking: Fiducia.Lock l = c.tryLock("orders/checkout"); if (l != null) l.release();
 
 package cloud.fiducia;
 
