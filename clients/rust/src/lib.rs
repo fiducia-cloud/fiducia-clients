@@ -1,10 +1,18 @@
 //! Fiducia HTTP client (Rust), built on `ureq`. Implements PROTOCOL.md.
 //!
 //! ```no_run
-//! let c = fiducia_client::FiduciaClient::new("https://api.fiducia.cloud");
-//! let lock = c.lock_acquire("orders/checkout", Some("worker-a"), Some(30_000), false, None).unwrap();
-//! let token = lock["result"]["fencing_token"].as_u64().unwrap();
-//! c.lock_release("orders/checkout", "worker-a", token).unwrap();
+//! use fiducia_client::{FiduciaClient, LockOptions};
+//! let c = FiduciaClient::new("https://api.fiducia.cloud");
+//!
+//! // try-lock: fail fast if it's held right now.
+//! if let Some(lock) = c.try_lock(&["orders/checkout"], LockOptions::default()).unwrap() {
+//!     // ... critical section ...
+//!     c.release_lock(&lock).unwrap();
+//! }
+//!
+//! // blocking lock: wait (with retries) until acquired or the budget elapses.
+//! let lock = c.lock(&["orders/checkout"], LockOptions::default()).unwrap();
+//! c.release_lock(&lock).unwrap();
 //! ```
 
 use serde_json::{json, Value};
