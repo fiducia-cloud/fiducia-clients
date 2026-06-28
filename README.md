@@ -99,6 +99,22 @@ await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000);
 const live = await c.serviceInstances("api");
 ```
 
+## CLI
+
+The Python client doubles as a dependency-free CLI for local smoke checks and
+operator scripts:
+
+```sh
+FIDUCIA_BASE_URL=https://api.fiducia.cloud \
+  python3 clients/python/fiducia.py lock acquire orders/checkout --holder worker-a --ttl-ms 30000
+
+python3 clients/python/fiducia.py kv put flags/new-ui on --prev-revision 0
+python3 clients/python/fiducia.py rate-limit check tenant-a checkout --algorithm token_bucket --limit 100 --window-ms 60000
+python3 clients/python/fiducia.py cron upsert nightly --cron "0 0 * * *" --target-kind webhook --target-url https://example.com/hook
+python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15000
+python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-ms 10000 --metadata az=a
+```
+
 ## Status
 
 Clients are skeletons that track the live node endpoints (locks, semaphores,
