@@ -8,6 +8,7 @@
 
 require "net/http"
 require "json"
+require "securerandom"
 require "uri"
 
 module Fiducia
@@ -18,6 +19,28 @@ module Fiducia
       @status = status
       @body = body
     end
+  end
+
+  # Raised by the blocking +lock+/+acquire_semaphore+ when the wait budget elapses.
+  class LockTimeout < StandardError
+    attr_reader :keys, :waited_ms
+    def initialize(keys, waited_ms)
+      super("fiducia: timed out after #{waited_ms}ms waiting for #{keys.join(', ')}")
+      @keys = keys
+      @waited_ms = waited_ms
+    end
+  end
+
+  # A held lock grant. Call +release+ (alias +unlock+) when done.
+  Lock = Struct.new(:client, :keys, :holder, :fencing_token, :lease_expires_ms) do
+    def release; client.lock_release(holder, fencing_token); end
+    alias_method :unlock, :release
+  end
+
+  # A held semaphore permit. Call +release+ when done.
+  SemaphoreHandle = Struct.new(:client, :key, :holder, :fencing_token, :lease_expires_ms) do
+    def release; client.semaphore_release(key, holder, fencing_token); end
+    alias_method :unlock, :release
   end
 
   class Client
