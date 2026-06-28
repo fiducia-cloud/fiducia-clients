@@ -90,11 +90,112 @@ namespace Fiducia
         public Task<JsonElement> Health() => Request(HttpMethod.Get, "/healthz");
         public Task<JsonElement> Status() => Request(HttpMethod.Get, "/v1/status");
 
-        // --- locks & semaphores ---
-        public Task<JsonElement> LockAcquire(string key, long? ttlMs = null, bool wait = true, int max = 1) =>
-            Request(HttpMethod.Post, $"/v1/locks/{Enc(key)}/acquire", new { ttl_ms = ttlMs, wait, max });
-        public Task<JsonElement> LockRelease(string key, string lockId) =>
-            Request(HttpMethod.Post, $"/v1/locks/{Enc(key)}/release", new { lock_id = lockId });
+        // --- locks (current protocol: holder + fencing_token, keys in the body) ---
+        public Task<JsonElement> LockGet(string key) => Request(HttpMethod.Get, $"/v1/locks?key={Enc(key)}");
+        public Task<JsonElement> LockAcquire(IReadOnlyList<string> keys, string holder = null, long? ttlMs = null, bool wait = false) =>
+            Request(HttpMethod.Post, "/v1/locks/acquire", new { keys, holder, ttl_ms = ttlMs, wait });
+        public Task<JsonElement> LockRelease(string holder, long fencingToken) =>
+            Request(HttpMethod.Post, "/v1/locks/release", new { holder, fencing_token = fencingToken });
+
+        // --- semaphores ---
+        public Task<JsonElement> SemaphoreGet(string key) => Request(HttpMethod.Get, $"/v1/semaphores?key={Enc(key)}");
+        public Task<JsonElement> SemaphoreAcquire(string key, int limit, string holder = null, long? ttlMs = null, bool wait = false) =>
+            Request(HttpMethod.Post, "/v1/semaphores/acquire", new { key, limit, holder, ttl_ms = ttlMs, wait });
+        public Task<JsonElement> SemaphoreRelease(string key, string holder, long fencingToken) =>
+            Request(HttpMethod.Post, "/v1/semaphores/release", new { key, holder, fencing_token = fencingToken });
+
+        // --- high-level blocking / try acquisition (live-mutex style) ---
+
+        /// <summary>tryLock: wait:false — returns a Lock if free now, else null.</summary>
+        public Task<Lock> TryLock(string key, long ttlMs = 60_000) =>
+            AcquireLock(new[] { key }, false, ttlMs, null, 0, 0, -1);
+
+        /// <summary>lock / mustLock: wait:true — block until acquired, the budget
+        /// elapses (LockTimeoutException), or the server errors.</summary>
+        public async Task<Lock> Lock(string key, long ttlMs = 60_000, int maxWaitMs = 30_000, int retryIntervalMs = 250, int maxRetries = -1)
+        {
+            var l = await AcquireLock(new[] { key }, true, ttlMs, null, maxWaitMs, retryIntervalMs, maxRetries);
+            if (l == null) throw new LockTimeoutException(new[] { key }, maxWaitMs);
+            return l;
+        }
+        public Task<Lock> MustLock(string key, long ttlMs = 60_000, int maxWaitMs = 30_000, int retryIntervalMs = 250, int maxRetries = -1) =>
+            Lock(key, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
+
+        /// <summary>trySemaphore / acquireSemaphore — the same pair for counting semaphores.</summary>
+        public Task<SemaphoreHandle> TrySemaphore(string key, int limit, long ttlMs = 60_000) =>
+            AcquireSemaphoreInner(key, limit, false, ttlMs, 0, 0, -1);
+        public async Task<SemaphoreHandle> AcquireSemaphore(string key, int limit, long ttlMs = 60_000, int maxWaitMs = 30_000, int retryIntervalMs = 250, int maxRetries = -1)
+        {
+            var h = await AcquireSemaphoreInner(key, limit, true, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
+            if (h == null) throw new LockTimeoutException(new[] { key }, maxWaitMs);
+            return h;
+        }
+
+        private async Task<Lock> AcquireLock(IReadOnlyList<string> keys, bool wait, long ttlMs, string holder, int maxWaitMs, int retryIntervalMs, int maxRetries)
+        {
+            holder ??= GenHolder();
+            var outp = Output(await LockAcquire(keys, holder, ttlMs, wait));
+            if (GetBool(outp, "acquired"))
+                return new Lock(this, keys, holder, GetLong(outp, "fencing_token"), GetLongOrNull(outp, "lease_expires_ms"));
+            if (!wait) return null; // tryLock: held now -> fail fast
+
+            var deadline = NowMs() + maxWaitMs;
+            for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++)
+            {
+                var remaining = deadline - NowMs();
+                if (remaining <= 0) break;
+                await Task.Delay((int)Math.Min(retryIntervalMs, remaining));
+                var resp = await LockGet(keys[0]);
+                if (resp.ValueKind == JsonValueKind.Object && resp.TryGetProperty("lock", out var lk) && lk.ValueKind == JsonValueKind.Object)
+                {
+                    if (GetStr(lk, "holder") == holder && lk.TryGetProperty("fencing_token", out var ft) && ft.ValueKind == JsonValueKind.Number)
+                        return new Lock(this, keys, holder, ft.GetInt64(), GetLongOrNull(lk, "lease_expires_ms"));
+                }
+            }
+            return null;
+        }
+
+        private async Task<SemaphoreHandle> AcquireSemaphoreInner(string key, int limit, bool wait, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries)
+        {
+            var holder = GenHolder();
+            var outp = Output(await SemaphoreAcquire(key, limit, holder, ttlMs, wait));
+            if (GetBool(outp, "acquired"))
+                return new SemaphoreHandle(this, key, holder, GetLong(outp, "fencing_token"), GetLongOrNull(outp, "lease_expires_ms"));
+            if (!wait) return null;
+
+            var deadline = NowMs() + maxWaitMs;
+            for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++)
+            {
+                var remaining = deadline - NowMs();
+                if (remaining <= 0) break;
+                await Task.Delay((int)Math.Min(retryIntervalMs, remaining));
+                var resp = await SemaphoreGet(key);
+                if (resp.ValueKind == JsonValueKind.Object && resp.TryGetProperty("semaphore", out var sem)
+                    && sem.TryGetProperty("holders", out var holders) && holders.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var slot in holders.EnumerateArray())
+                    {
+                        if (GetStr(slot, "holder") == holder && slot.TryGetProperty("fencing_token", out var ft) && ft.ValueKind == JsonValueKind.Number)
+                            return new SemaphoreHandle(this, key, holder, ft.GetInt64(), GetLongOrNull(slot, "lease_expires_ms"));
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static string GenHolder() => "fdc-" + Guid.NewGuid().ToString("N");
+        private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        private static JsonElement Output(JsonElement resp) =>
+            resp.ValueKind == JsonValueKind.Object && resp.TryGetProperty("result", out var r)
+                && r.TryGetProperty("output", out var o) ? o : default;
+        private static bool GetBool(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
+        private static string GetStr(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        private static long GetLong(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : 0L;
+        private static long? GetLongOrNull(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : (long?)null;
 
         // --- reader-writer locks ---
         public Task<JsonElement> RwAcquireRead(string key, long? ttlMs = null, bool wait = true) =>
