@@ -3,7 +3,8 @@
 #
 #   source fiducia.sh
 #   export FIDUCIA_URL=https://api.fiducia.cloud
-#   fiducia_lock_acquire orders/checkout 30000
+#   handle=$(fiducia_lock orders/checkout) && fiducia_release "$handle"   # blocks
+#   handle=$(fiducia_try_lock orders/checkout) && fiducia_release "$handle" # non-blocking
 #   fiducia_kv_put flags/new-ui on 60000
 #
 # Every function prints the JSON response to stdout (pipe to `jq`).
