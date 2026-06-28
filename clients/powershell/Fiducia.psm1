@@ -1,9 +1,10 @@
 # Fiducia HTTP client (PowerShell module). Uses Invoke-RestMethod. Implements PROTOCOL.md.
 #
-#   Import-Module ./Fiducia.psm1
+#   using module ./Fiducia.psm1
 #   $c = [FiduciaClient]::new("https://api.fiducia.cloud")
-#   $lock = $c.LockAcquire("orders/checkout", 30000, $true, 1)
-#   $c.LockRelease("orders/checkout", $lock.result.lock_id)
+#   $lock = $c.Lock("orders/checkout", 30000, 30000, 250)  # blocks until acquired
+#   $lock.Release()
+#   # non-blocking: $lock = $c.TryLock("orders/checkout", 30000); if ($lock) { $lock.Release() }
 
 # A held lock grant. Call Release() (alias Unlock()) when done. `Client` is kept
 # untyped to avoid a forward-reference cycle with FiduciaClient at parse time.
