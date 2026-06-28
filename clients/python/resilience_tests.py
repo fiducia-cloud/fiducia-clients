@@ -74,16 +74,34 @@ def find_leader():
     return None
 
 
-# SIGSTOP/SIGCONT the server child by its comm — pure /proc, no procps needed,
-# same-uid signal (the exec runs as the container user, like the server).
-_FIND = ('for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = fiducia-node ] '
-         '&& echo "${p#/proc/}" && break; done')
+# Make a node "unresponsive" with a deny-all NetworkPolicy — a real network
+# partition. (We can't SIGSTOP the server from inside the pod: it's PID 1, and the
+# kernel ignores SIGSTOP to a PID-namespace init sent from within the namespace.
+# A partition is also closer to a real-world unresponsive node, and needs a
+# policy-enforcing CNI — e.g. Cilium on the Hetzner cluster.)
+def _isolate_policy(pod):
+    return (
+        "apiVersion: networking.k8s.io/v1\n"
+        "kind: NetworkPolicy\n"
+        "metadata:\n"
+        "  name: resil-isolate-%s\n"
+        "  namespace: %s\n"
+        "spec:\n"
+        "  podSelector:\n"
+        "    matchLabels:\n"
+        "      statefulset.kubernetes.io/pod-name: %s\n"
+        "  policyTypes: [Ingress, Egress]\n"  # empty ingress/egress rules = deny all
+        % (pod, NS, pod)
+    )
 
 
-def signal_server(pod, sig):
-    out = kubectl("exec", pod, "--", "bash", "-c",
-                  'pid=$(%s); [ -n "$pid" ] && kill -%s "$pid" && echo "$pid"' % (_FIND, sig))
-    return out.stdout.strip()
+def isolate(pod):
+    return subprocess.run(["kubectl", "apply", "-f", "-"], input=_isolate_policy(pod),
+                          text=True, capture_output=True, timeout=30)
+
+
+def restore(pod):
+    return kubectl("delete", "networkpolicy", "resil-isolate-%s" % pod, "--ignore-not-found")
 
 
 class Workload:
