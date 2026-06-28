@@ -160,11 +160,11 @@ python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-m
 
 ## Status
 
-Clients are skeletons that track the live node endpoints (locks, semaphores,
-multi-key locks, rate limiting, cron/scheduling, KV, elections, discovery) and
-ship planned RW/watch shapes ahead of the server (marked *planned* in
-`PROTOCOL.md`). They make HTTP calls and parse JSON; they do not yet add
-retries, auth helpers, or watch/SSE streaming.
+Clients track the live node endpoints (locks, semaphores, multi-key locks, rate
+limiting, cron/scheduling, KV, elections, discovery) and ship planned RW/watch
+shapes ahead of the server (marked *planned* in `PROTOCOL.md`). All twelve now
+include **blocking/try lock + semaphore acquisition with client-side retries**
+(see above). Auth helpers and watch/SSE streaming are still to come.
 
 ## Related
 
