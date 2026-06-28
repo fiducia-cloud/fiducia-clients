@@ -1,13 +1,25 @@
 //! Fiducia HTTP client (Rust), built on `ureq`. Implements PROTOCOL.md.
 //!
 //! ```no_run
-//! let c = fiducia_client::FiduciaClient::new("https://api.fiducia.cloud");
-//! let lock = c.lock_acquire("orders/checkout", Some("worker-a"), Some(30_000), false, None).unwrap();
-//! let token = lock["result"]["fencing_token"].as_u64().unwrap();
-//! c.lock_release("orders/checkout", "worker-a", token).unwrap();
+//! use fiducia_client::{FiduciaClient, LockOptions};
+//! let c = FiduciaClient::new("https://api.fiducia.cloud");
+//!
+//! // try-lock: fail fast if it's held right now.
+//! if let Some(lock) = c.try_lock(&["orders/checkout"], LockOptions::default()).unwrap() {
+//!     // ... critical section ...
+//!     c.release_lock(&lock).unwrap();
+//! }
+//!
+//! // blocking lock: wait (with retries) until acquired or the budget elapses.
+//! let lock = c.lock(&["orders/checkout"], LockOptions::default()).unwrap();
+//! c.release_lock(&lock).unwrap();
 //! ```
 
 use serde_json::{json, Value};
+
+/// High-level blocking/try lock + semaphore acquisition (live-mutex-style).
+mod locking;
+pub use locking::{LockError, LockHandle, LockOptions, SemaphoreHandle};
 
 /// The shared, generated payload/error contract (from `fiducia-interfaces`),
 /// re-exported so callers can deserialize responses into typed structs, e.g.
@@ -287,28 +299,43 @@ impl FiduciaClient {
     }
 
     // --- leader election ---
+    /// Campaign to lead `name`. `metadata` publishes candidate facts (address,
+    /// region, version, …) with the leadership so observers can discover the
+    /// leader's endpoint, not just its id.
     pub fn election_campaign(
         &self,
         name: &str,
         candidate: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "candidate": candidate, "ttl_ms": ttl_ms });
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
         self.request(
             "POST",
             &format!("/v1/elections/{}/campaign", enc(name)),
-            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })),
+            Some(body),
         )
     }
+    /// Renew the lease. `ttl_ms` overrides the lease length; when `None`, the
+    /// original campaign TTL is reused.
     pub fn election_renew(
         &self,
         name: &str,
         candidate: &str,
         fencing_token: u64,
+        ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "candidate": candidate, "fencing_token": fencing_token });
+        if let Some(ttl_ms) = ttl_ms {
+            body["ttl_ms"] = json!(ttl_ms);
+        }
         self.request(
             "POST",
             &format!("/v1/elections/{}/renew", enc(name)),
-            Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+            Some(body),
         )
     }
     pub fn election_resign(
@@ -328,13 +355,20 @@ impl FiduciaClient {
     }
 
     // --- service discovery ---
+    /// Register/refresh an instance. `metadata` carries free-form facts (zone,
+    /// capacity, version, …) returned to clients resolving the service.
     pub fn service_register(
         &self,
         service: &str,
         instance_id: &str,
         address: &str,
         ttl_ms: u64,
+        metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        let mut body = json!({ "address": address, "ttl_ms": ttl_ms });
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
         self.request(
             "PUT",
             &format!(
@@ -342,10 +376,17 @@ impl FiduciaClient {
                 enc(service),
                 enc(instance_id)
             ),
-            Some(json!({ "address": address, "ttl_ms": ttl_ms })),
+            Some(body),
         )
     }
-    pub fn service_heartbeat(&self, service: &str, instance_id: &str) -> Result<Value, Error> {
+    /// Heartbeat to keep an instance live. `ttl_ms` overrides the lease length.
+    pub fn service_heartbeat(
+        &self,
+        service: &str,
+        instance_id: &str,
+        ttl_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        let body = ttl_ms.map(|ttl_ms| json!({ "ttl_ms": ttl_ms }));
         self.request(
             "POST",
             &format!(
@@ -353,7 +394,7 @@ impl FiduciaClient {
                 enc(service),
                 enc(instance_id)
             ),
-            None,
+            body,
         )
     }
     pub fn service_deregister(&self, service: &str, instance_id: &str) -> Result<Value, Error> {

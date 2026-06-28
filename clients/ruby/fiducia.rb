@@ -3,11 +3,13 @@
 #
 #   require_relative "fiducia"
 #   c = Fiducia::Client.new("https://api.fiducia.cloud")
-#   lock = c.lock_acquire("orders/checkout", ttl_ms: 30000)
-#   c.lock_release("orders/checkout", lock["result"]["lock_id"])
+#   lock = c.lock("orders/checkout", ttl_ms: 30_000)  # blocks until acquired
+#   lock.release
+#   # non-blocking: lock = c.try_lock("orders/checkout"); lock&.release
 
 require "net/http"
 require "json"
+require "securerandom"
 require "uri"
 
 module Fiducia
@@ -20,6 +22,28 @@ module Fiducia
     end
   end
 
+  # Raised by the blocking +lock+/+acquire_semaphore+ when the wait budget elapses.
+  class LockTimeout < StandardError
+    attr_reader :keys, :waited_ms
+    def initialize(keys, waited_ms)
+      super("fiducia: timed out after #{waited_ms}ms waiting for #{keys.join(', ')}")
+      @keys = keys
+      @waited_ms = waited_ms
+    end
+  end
+
+  # A held lock grant. Call +release+ (alias +unlock+) when done.
+  Lock = Struct.new(:client, :keys, :holder, :fencing_token, :lease_expires_ms) do
+    def release; client.lock_release(holder, fencing_token); end
+    alias_method :unlock, :release
+  end
+
+  # A held semaphore permit. Call +release+ when done.
+  SemaphoreHandle = Struct.new(:client, :key, :holder, :fencing_token, :lease_expires_ms) do
+    def release; client.semaphore_release(key, holder, fencing_token); end
+    alias_method :unlock, :release
+  end
+
   class Client
     def initialize(base_url)
       @base = base_url.sub(%r{/+\z}, "")
@@ -29,12 +53,58 @@ module Fiducia
     def health; request("GET", "/healthz"); end
     def status; request("GET", "/v1/status"); end
 
-    # --- locks & semaphores ---
-    def lock_acquire(key, ttl_ms: nil, wait: true, max: 1)
-      request("POST", "/v1/locks/#{enc key}/acquire", { ttl_ms: ttl_ms, wait: wait, max: max })
+    # --- locks (current protocol: holder + fencing_token, key in the body) ---
+    def lock_get(key); request("GET", "/v1/locks?key=#{enc key}"); end
+    def lock_acquire(keys, holder: nil, ttl_ms: nil, wait: false)
+      request("POST", "/v1/locks/acquire", { keys: Array(keys), holder: holder, ttl_ms: ttl_ms, wait: wait })
     end
-    def lock_release(key, lock_id)
-      request("POST", "/v1/locks/#{enc key}/release", { lock_id: lock_id })
+    def lock_release(holder, fencing_token)
+      request("POST", "/v1/locks/release", { holder: holder, fencing_token: fencing_token })
+    end
+
+    # --- semaphores ---
+    def semaphore_get(key); request("GET", "/v1/semaphores?key=#{enc key}"); end
+    def semaphore_acquire(key, limit, holder: nil, ttl_ms: nil, wait: false)
+      request("POST", "/v1/semaphores/acquire", { key: key, limit: limit, holder: holder, ttl_ms: ttl_ms, wait: wait })
+    end
+    def semaphore_release(key, holder, fencing_token)
+      request("POST", "/v1/semaphores/release", { key: key, holder: holder, fencing_token: fencing_token })
+    end
+
+    # --- high-level blocking / try acquisition (live-mutex style) ---
+    #
+    # try_lock: wait:false — returns a Lock if free right now, else nil.
+    # lock / must_lock: wait:true — blocks (polling) until acquired, the budget
+    #   elapses (LockTimeout), or the server errors.
+    def try_lock(key, ttl_ms: 60_000, holder: nil)
+      _acquire_lock(Array(key), false, ttl_ms, holder, 0, 0, nil)
+    end
+
+    def lock(key, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
+      got = _acquire_lock(Array(key), true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      raise LockTimeout.new(Array(key), max_wait_ms) unless got
+      got
+    end
+    alias_method :must_lock, :lock
+
+    # Acquire, yield the Lock, then always release.
+    def with_lock(key, **opts)
+      held = lock(key, **opts)
+      begin
+        yield held
+      ensure
+        begin; held.release; rescue StandardError; end
+      end
+    end
+
+    def try_semaphore(key, limit, ttl_ms: 60_000, holder: nil)
+      _acquire_semaphore(key, limit, false, ttl_ms, holder, 0, 0, nil)
+    end
+
+    def acquire_semaphore(key, limit, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
+      got = _acquire_semaphore(key, limit, true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      raise LockTimeout.new([key], max_wait_ms) unless got
+      got
     end
 
     # --- reader-writer locks ---
@@ -85,6 +155,59 @@ module Fiducia
     def service_list; request("GET", "/v1/services"); end
 
     private
+
+    def _gen_holder; "fdc-#{SecureRandom.uuid}"; end
+
+    def _output(resp)
+      ((resp || {})["result"] || {})["output"] || {}
+    end
+
+    def _acquire_lock(keys, wait, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      holder ||= _gen_holder
+      out = _output(lock_acquire(keys, holder: holder, ttl_ms: ttl_ms, wait: wait))
+      return Lock.new(self, keys, holder, out["fencing_token"], out["lease_expires_ms"]) if out["acquired"]
+      return nil unless wait # try_lock: held now -> fail fast
+
+      deadline = _now_ms + max_wait_ms
+      attempts = 0
+      while max_retries.nil? || attempts < max_retries
+        attempts += 1
+        remaining = deadline - _now_ms
+        break if remaining <= 0
+        sleep([retry_interval_ms, remaining].min / 1000.0)
+        lk = (lock_get(keys[0]) || {})["lock"] || {}
+        if lk["holder"] == holder && !lk["fencing_token"].nil?
+          return Lock.new(self, keys, holder, lk["fencing_token"], lk["lease_expires_ms"])
+        end
+      end
+      nil
+    end
+
+    def _acquire_semaphore(key, limit, wait, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
+      holder ||= _gen_holder
+      out = _output(semaphore_acquire(key, limit, holder: holder, ttl_ms: ttl_ms, wait: wait))
+      return SemaphoreHandle.new(self, key, holder, out["fencing_token"], out["lease_expires_ms"]) if out["acquired"]
+      return nil unless wait
+
+      deadline = _now_ms + max_wait_ms
+      attempts = 0
+      while max_retries.nil? || attempts < max_retries
+        attempts += 1
+        remaining = deadline - _now_ms
+        break if remaining <= 0
+        sleep([retry_interval_ms, remaining].min / 1000.0)
+        sem = (semaphore_get(key) || {})["semaphore"] || {}
+        slot = (sem["holders"] || []).find { |h| h["holder"] == holder }
+        if slot && !slot["fencing_token"].nil?
+          return SemaphoreHandle.new(self, key, holder, slot["fencing_token"], slot["lease_expires_ms"])
+        end
+      end
+      nil
+    end
+
+    def _now_ms
+      (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).to_i
+    end
 
     def enc(s)
       URI.encode_www_form_component(s.to_s)

@@ -99,6 +99,49 @@ await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000);
 const live = await c.serviceInstances("api");
 ```
 
+## Blocking vs. try locks (and semaphores)
+
+Beyond the raw `lockAcquire`/`semaphoreAcquire` calls, every client ships the
+two high-level shapes you usually want — modeled on the
+[live-mutex](https://github.com/oresoftware/live-mutex) client:
+
+- **`tryLock` (`wait:false`)** — returns immediately: you get the lock if it was
+  free *right now*, otherwise a "not acquired" result (no waiting).
+- **`lock` / `mustLock` (`wait:true`)** — **blocks** until the lock is acquired,
+  the wait budget elapses (a timeout error), or the server errors. Retries are
+  *client-side and fully tunable*: `ttl`, `maxWaitTime`, `retryInterval`,
+  `maxRetries`.
+
+The server never holds a request open: `wait:true` reserves a FIFO queue slot
+and returns at once, then the client polls until it's been promoted to holder.
+That's why retry cadence and budget live in the client, giving the caller full
+control. Each acquisition returns a handle carrying the **fencing token**; call
+`.unlock()` / `.release()` (or `release_lock`) to free it. Counting semaphores
+get the same pair: `trySemaphore` / `acquireSemaphore`.
+
+```ts
+import { FiduciaLockClient } from "./clients/ts/locking";
+const c = new FiduciaLockClient("https://api.fiducia.cloud");
+
+// fail fast if it's held right now
+const maybe = await c.tryLock("orders/checkout", { ttl: 30000 });
+if (maybe) { try { /* critical section */ } finally { await maybe.unlock(); } }
+
+// block (with retries) until acquired or the budget elapses
+const lock = await c.lock("orders/checkout", { ttl: 30000, maxWaitTime: 10000, retryInterval: 250 });
+try { /* critical section */ } finally { await lock.unlock(); }
+
+// or scoped: acquire → run → always release
+await c.withLock("orders/checkout", { ttl: 30000 }, async (lock) => { /* ... */ });
+```
+
+Method names per language (`tryLock` / `lock` / `mustLock`, plus the semaphore
+pair) follow each language's casing — e.g. Rust `try_lock`/`lock`, Go
+`TryLock`/`Lock`, Python `try_lock`/`lock`, Ruby `try_lock`/`lock`, Elixir
+`try_lock/3`/`lock/3`, shell `fiducia_try_lock`/`fiducia_lock`. For TS/Python/Go
+the helpers live in a `locking.*` companion alongside the generated client; for
+the other languages they're built into the client.
+
 ## CLI
 
 The Python client doubles as a dependency-free CLI for local smoke checks and
@@ -117,11 +160,11 @@ python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-m
 
 ## Status
 
-Clients are skeletons that track the live node endpoints (locks, semaphores,
-multi-key locks, rate limiting, cron/scheduling, KV, elections, discovery) and
-ship planned RW/watch shapes ahead of the server (marked *planned* in
-`PROTOCOL.md`). They make HTTP calls and parse JSON; they do not yet add
-retries, auth helpers, or watch/SSE streaming.
+Clients track the live node endpoints (locks, semaphores, multi-key locks, rate
+limiting, cron/scheduling, KV, elections, discovery) and ship planned RW/watch
+shapes ahead of the server (marked *planned* in `PROTOCOL.md`). All twelve now
+include **blocking/try lock + semaphore acquisition with client-side retries**
+(see above). Auth helpers and watch/SSE streaming are still to come.
 
 ## Related
 

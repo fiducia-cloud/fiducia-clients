@@ -3,8 +3,9 @@
 //
 //   require "Fiducia.php";
 //   $c = new Fiducia\Client("https://api.fiducia.cloud");
-//   $lock = $c->lockAcquire("orders/checkout", 30000);
-//   $c->lockRelease("orders/checkout", $lock["result"]["lock_id"]);
+//   $lock = $c->lock("orders/checkout");   // blocks until acquired
+//   $lock->release();
+//   // non-blocking: $lock = $c->tryLock("orders/checkout"); if ($lock) $lock->release();
 
 namespace Fiducia;
 
@@ -17,6 +18,61 @@ class FiduciaException extends \Exception
         parent::__construct("fiducia: HTTP $status");
         $this->status = $status;
         $this->body = $body;
+    }
+}
+
+/** Thrown by the blocking lock()/acquireSemaphore() when the wait budget elapses. */
+class LockTimeout extends \Exception
+{
+    public array $keys;
+    public int $waitedMs;
+    public function __construct(array $keys, int $waitedMs)
+    {
+        parent::__construct("fiducia: timed out after {$waitedMs}ms waiting for " . implode(", ", $keys));
+        $this->keys = $keys;
+        $this->waitedMs = $waitedMs;
+    }
+}
+
+/** A held lock grant. Call release() (alias unlock()) when done. */
+class Lock
+{
+    public function __construct(
+        private Client $client,
+        public array $keys,
+        public string $holder,
+        public int $fencingToken,
+        public $leaseExpiresMs = null
+    ) {
+    }
+    public function release()
+    {
+        return $this->client->lockRelease($this->holder, $this->fencingToken);
+    }
+    public function unlock()
+    {
+        return $this->release();
+    }
+}
+
+/** A held semaphore permit. Call release() when done. */
+class SemaphoreHandle
+{
+    public function __construct(
+        private Client $client,
+        public string $key,
+        public string $holder,
+        public int $fencingToken,
+        public $leaseExpiresMs = null
+    ) {
+    }
+    public function release()
+    {
+        return $this->client->semaphoreRelease($this->key, $this->holder, $this->fencingToken);
+    }
+    public function unlock()
+    {
+        return $this->release();
     }
 }
 
@@ -57,15 +113,153 @@ class Client
     public function health() { return $this->request("GET", "/healthz"); }
     public function status() { return $this->request("GET", "/v1/status"); }
 
-    // --- locks & semaphores ---
-    public function lockAcquire(string $key, ?int $ttlMs = null, bool $wait = true, int $max = 1)
+    // --- locks (current protocol: holder + fencing_token, key in the body) ---
+    public function lockGet(string $key)
     {
-        return $this->request("POST", "/v1/locks/" . self::enc($key) . "/acquire",
-            ["ttl_ms" => $ttlMs, "wait" => $wait, "max" => $max]);
+        return $this->request("GET", "/v1/locks?key=" . self::enc($key));
     }
-    public function lockRelease(string $key, string $lockId)
+    public function lockAcquire($keys, ?string $holder = null, ?int $ttlMs = null, bool $wait = false)
     {
-        return $this->request("POST", "/v1/locks/" . self::enc($key) . "/release", ["lock_id" => $lockId]);
+        return $this->request("POST", "/v1/locks/acquire",
+            ["keys" => is_array($keys) ? $keys : [$keys], "holder" => $holder, "ttl_ms" => $ttlMs, "wait" => $wait]);
+    }
+    public function lockRelease(string $holder, int $fencingToken)
+    {
+        return $this->request("POST", "/v1/locks/release", ["holder" => $holder, "fencing_token" => $fencingToken]);
+    }
+
+    // --- semaphores ---
+    public function semaphoreGet(string $key)
+    {
+        return $this->request("GET", "/v1/semaphores?key=" . self::enc($key));
+    }
+    public function semaphoreAcquire(string $key, int $limit, ?string $holder = null, ?int $ttlMs = null, bool $wait = false)
+    {
+        return $this->request("POST", "/v1/semaphores/acquire",
+            ["key" => $key, "limit" => $limit, "holder" => $holder, "ttl_ms" => $ttlMs, "wait" => $wait]);
+    }
+    public function semaphoreRelease(string $key, string $holder, int $fencingToken)
+    {
+        return $this->request("POST", "/v1/semaphores/release",
+            ["key" => $key, "holder" => $holder, "fencing_token" => $fencingToken]);
+    }
+
+    // --- high-level blocking / try acquisition (live-mutex style) ---
+
+    /** tryLock: wait:false — returns a Lock if free right now, else null. */
+    public function tryLock($key, int $ttlMs = 60000, ?string $holder = null): ?Lock
+    {
+        return $this->acquireLock(is_array($key) ? $key : [$key], false, $ttlMs, $holder, 0, 0, null);
+    }
+
+    /** lock: wait:true — blocks until acquired, the budget elapses (LockTimeout), or error. */
+    public function lock($key, int $ttlMs = 60000, ?string $holder = null,
+        int $maxWaitMs = 30000, int $retryIntervalMs = 250, ?int $maxRetries = null): Lock
+    {
+        $keys = is_array($key) ? $key : [$key];
+        $got = $this->acquireLock($keys, true, $ttlMs, $holder, $maxWaitMs, $retryIntervalMs, $maxRetries);
+        if ($got === null) {
+            throw new LockTimeout($keys, $maxWaitMs);
+        }
+        return $got;
+    }
+
+    /** mustLock is an alias of lock. */
+    public function mustLock($key, int $ttlMs = 60000, ?string $holder = null,
+        int $maxWaitMs = 30000, int $retryIntervalMs = 250, ?int $maxRetries = null): Lock
+    {
+        return $this->lock($key, $ttlMs, $holder, $maxWaitMs, $retryIntervalMs, $maxRetries);
+    }
+
+    /** trySemaphore: wait:false — returns a handle if a permit is free, else null. */
+    public function trySemaphore(string $key, int $limit, int $ttlMs = 60000, ?string $holder = null): ?SemaphoreHandle
+    {
+        return $this->acquireSemaphoreInner($key, $limit, false, $ttlMs, $holder, 0, 0, null);
+    }
+
+    /** acquireSemaphore: wait:true — blocks until a permit frees, budget elapses, or error. */
+    public function acquireSemaphore(string $key, int $limit, int $ttlMs = 60000, ?string $holder = null,
+        int $maxWaitMs = 30000, int $retryIntervalMs = 250, ?int $maxRetries = null): SemaphoreHandle
+    {
+        $got = $this->acquireSemaphoreInner($key, $limit, true, $ttlMs, $holder, $maxWaitMs, $retryIntervalMs, $maxRetries);
+        if ($got === null) {
+            throw new LockTimeout([$key], $maxWaitMs);
+        }
+        return $got;
+    }
+
+    private function acquireLock(array $keys, bool $wait, int $ttlMs, ?string $holder,
+        int $maxWaitMs, int $retryIntervalMs, ?int $maxRetries): ?Lock
+    {
+        $holder = $holder ?? self::genHolder();
+        $out = self::output($this->lockAcquire($keys, $holder, $ttlMs, $wait));
+        if (!empty($out["acquired"])) {
+            return new Lock($this, $keys, $holder, (int)($out["fencing_token"] ?? 0), $out["lease_expires_ms"] ?? null);
+        }
+        if (!$wait) {
+            return null; // tryLock: held now -> fail fast
+        }
+        $deadline = self::nowMs() + $maxWaitMs;
+        $attempts = 0;
+        while ($maxRetries === null || $attempts < $maxRetries) {
+            $attempts++;
+            $remaining = $deadline - self::nowMs();
+            if ($remaining <= 0) {
+                break;
+            }
+            usleep(min($retryIntervalMs, $remaining) * 1000);
+            $lk = $this->lockGet($keys[0])["lock"] ?? null;
+            if ($lk && ($lk["holder"] ?? null) === $holder && isset($lk["fencing_token"])) {
+                return new Lock($this, $keys, $holder, (int)$lk["fencing_token"], $lk["lease_expires_ms"] ?? null);
+            }
+        }
+        return null;
+    }
+
+    private function acquireSemaphoreInner(string $key, int $limit, bool $wait, int $ttlMs, ?string $holder,
+        int $maxWaitMs, int $retryIntervalMs, ?int $maxRetries): ?SemaphoreHandle
+    {
+        $holder = $holder ?? self::genHolder();
+        $out = self::output($this->semaphoreAcquire($key, $limit, $holder, $ttlMs, $wait));
+        if (!empty($out["acquired"])) {
+            return new SemaphoreHandle($this, $key, $holder, (int)($out["fencing_token"] ?? 0), $out["lease_expires_ms"] ?? null);
+        }
+        if (!$wait) {
+            return null;
+        }
+        $deadline = self::nowMs() + $maxWaitMs;
+        $attempts = 0;
+        while ($maxRetries === null || $attempts < $maxRetries) {
+            $attempts++;
+            $remaining = $deadline - self::nowMs();
+            if ($remaining <= 0) {
+                break;
+            }
+            usleep(min($retryIntervalMs, $remaining) * 1000);
+            $sem = $this->semaphoreGet($key)["semaphore"] ?? null;
+            foreach (($sem["holders"] ?? []) as $slot) {
+                if (($slot["holder"] ?? null) === $holder && isset($slot["fencing_token"])) {
+                    return new SemaphoreHandle($this, $key, $holder, (int)$slot["fencing_token"], $slot["lease_expires_ms"] ?? null);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static function output($resp): array
+    {
+        $out = $resp["result"]["output"] ?? null;
+        return is_array($out) ? $out : [];
+    }
+
+    private static function genHolder(): string
+    {
+        return "fdc-" . bin2hex(random_bytes(8));
+    }
+
+    private static function nowMs(): int
+    {
+        return (int)(hrtime(true) / 1000000);
     }
 
     // --- reader-writer locks ---
