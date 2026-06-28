@@ -2,8 +2,9 @@
 // Implements PROTOCOL.md.
 //
 //   var c = new Fiducia.FiduciaClient("https://api.fiducia.cloud");
-//   var lock = await c.LockAcquire("orders/checkout", 30000);
-//   await c.LockRelease("orders/checkout", lock.GetProperty("result").GetProperty("lock_id").GetString());
+//   var lk = await c.Lock("orders/checkout");   // blocks until acquired
+//   await lk.ReleaseAsync();
+//   // non-blocking: var l = await c.TryLock("orders/checkout"); if (l != null) await l.ReleaseAsync();
 
 using System;
 using System.Collections.Generic;
