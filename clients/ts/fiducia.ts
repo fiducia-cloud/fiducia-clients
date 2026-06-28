@@ -10,6 +10,7 @@
 // Shared payload/error contract — re-exported from @fiducia/interfaces so callers
 // type responses from one source of truth (these are type-only; no runtime cost).
 export type {
+  IdempotencyRecord,
   KvEntry,
   KvGetResponse,
   LockGrant,
@@ -29,6 +30,7 @@ export interface RequestControlOpts {
   retries?: number;
   retryDelayMs?: number;
   signal?: AbortSignal;
+  idempotencyKey?: string;
 }
 
 export interface FiduciaClientOpts extends RequestControlOpts {
@@ -48,10 +50,21 @@ export interface AcquireManyOpts extends RequestControlOpts {
   ttlMs?: number;
   wait?: boolean;
 }
-export interface ReleaseOpts { holder: string; fencingToken: number; }
-export interface RwOpts { ttlMs?: number; wait?: boolean; }
-export interface KvPutOpts { ttlMs?: number; prevRevision?: number; }
-export interface RateLimitCheckOpts {
+export interface ReleaseOpts extends RequestControlOpts { holder: string; fencingToken: number; }
+export interface RwOpts extends RequestControlOpts { ttlMs?: number; wait?: boolean; }
+export interface KvPutOpts extends RequestControlOpts { ttlMs?: number; prevRevision?: number; }
+export interface IdempotencyClaimOpts extends RequestControlOpts {
+  owner?: string;
+  ttlMs?: number;
+  ttl?: string;
+  metadata?: Record<string, string>;
+}
+export interface IdempotencyCompleteOpts extends RequestControlOpts {
+  owner: string;
+  fencingToken: number;
+  result?: Record<string, unknown>;
+}
+export interface RateLimitCheckOpts extends RequestControlOpts {
   algorithm: "token_bucket" | "sliding_window";
   limit: number;
   windowMs: number;
@@ -64,13 +77,17 @@ export interface ScheduleTarget {
   name?: string;
   endpoint?: string;
 }
-export interface ScheduleUpsertOpts {
+export interface ScheduleUpsertOpts extends RequestControlOpts {
   cron?: string;
   oneShotAtMs?: number;
   target: ScheduleTarget;
   delivery?: "at_least_once" | "exactly_once";
   maxRetries?: number;
 }
+export interface ElectionCampaignOpts extends RequestControlOpts {
+  metadata?: Record<string, string>;
+}
+export type ServiceMetadataFilter = Record<string, string>;
 export interface WatchEvent<T = any> {
   event: string;
   data: T;
@@ -112,6 +129,15 @@ export class FiduciaTimeoutError extends Error {
 }
 
 const enc = encodeURIComponent;
+
+function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(metadata)) {
+    if (key.trim() && value !== undefined) params.set(`metadata.${key}`, String(value));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
 
 export class FiduciaClient {
   private base: string;
@@ -247,10 +273,13 @@ export class FiduciaClient {
     }
 
     try {
+      const headers: Record<string, string> = {};
+      if (body !== undefined) headers["content-type"] = "application/json";
+      if (opts.idempotencyKey) headers["idempotency-key"] = opts.idempotencyKey;
       const res = await this.fetchImpl(this.base + path, {
         signal: controller?.signal,
         method,
-        headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
       const text = await res.text();
@@ -395,7 +424,7 @@ export class FiduciaClient {
   }
   lockRelease(key: string, opts: ReleaseOpts) {
     return this.request("POST", "/v1/locks/release",
-      { holder: opts.holder, fencing_token: opts.fencingToken });
+      { holder: opts.holder, fencing_token: opts.fencingToken }, opts);
   }
   lockReleaseMany(lockId: string) {
     void lockId;
@@ -420,30 +449,52 @@ export class FiduciaClient {
   }
   semaphoreRelease(key: string, opts: ReleaseOpts) {
     return this.request("POST", "/v1/semaphores/release",
-      { key, holder: opts.holder, fencing_token: opts.fencingToken });
+      { key, holder: opts.holder, fencing_token: opts.fencingToken }, opts);
+  }
+
+  // --- idempotency keys ---
+  idempotencyGet(key: string) {
+    return this.request("GET", `/v1/idempotency?key=${enc(key)}`);
+  }
+  idempotencyClaim(key: string, opts: IdempotencyClaimOpts = {}) {
+    return this.request("POST", "/v1/idempotency/claim", {
+      key,
+      owner: opts.owner,
+      ttl_ms: opts.ttlMs,
+      ttl: opts.ttl,
+      metadata: opts.metadata,
+    }, opts);
+  }
+  idempotencyComplete(key: string, opts: IdempotencyCompleteOpts) {
+    return this.request("POST", "/v1/idempotency/complete", {
+      key,
+      owner: opts.owner,
+      fencing_token: opts.fencingToken,
+      result: opts.result,
+    }, opts);
   }
 
   // --- reader-writer locks ---
   rwAcquireRead(key: string, opts: RwOpts = {}) {
-    return this.request("POST", `/v1/rw/${enc(key)}/read`, { ttl_ms: opts.ttlMs, wait: opts.wait ?? true });
+    return this.request("POST", `/v1/rw/${enc(key)}/read`, { ttl_ms: opts.ttlMs, wait: opts.wait ?? true }, opts);
   }
-  rwEndRead(key: string, lockId: string) {
-    return this.request("POST", `/v1/rw/${enc(key)}/read/end`, { lock_id: lockId });
+  rwEndRead(key: string, lockId: string, opts: RequestControlOpts = {}) {
+    return this.request("POST", `/v1/rw/${enc(key)}/read/end`, { lock_id: lockId }, opts);
   }
   rwAcquireWrite(key: string, opts: RwOpts = {}) {
-    return this.request("POST", `/v1/rw/${enc(key)}/write`, { ttl_ms: opts.ttlMs, wait: opts.wait ?? true });
+    return this.request("POST", `/v1/rw/${enc(key)}/write`, { ttl_ms: opts.ttlMs, wait: opts.wait ?? true }, opts);
   }
-  rwEndWrite(key: string, lockId: string) {
-    return this.request("POST", `/v1/rw/${enc(key)}/write/end`, { lock_id: lockId });
+  rwEndWrite(key: string, lockId: string, opts: RequestControlOpts = {}) {
+    return this.request("POST", `/v1/rw/${enc(key)}/write/end`, { lock_id: lockId }, opts);
   }
 
   // --- config KV ---
   kvGet(key: string) { return this.request("GET", `/v1/kv?key=${enc(key)}`); }
   kvPut(key: string, value: string, opts: KvPutOpts = {}) {
     return this.request("PUT", `/v1/kv?key=${enc(key)}`,
-      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision });
+      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision }, opts);
   }
-  kvDelete(key: string) { return this.request("DELETE", `/v1/kv?key=${enc(key)}`); }
+  kvDelete(key: string, opts: RequestControlOpts = {}) { return this.request("DELETE", `/v1/kv?key=${enc(key)}`, undefined, opts); }
   kvList(prefix: string) { return this.request("GET", `/v1/kv?prefix=${enc(prefix)}`); }
   kvWatch(key: string, opts: RequestControlOpts = {}) {
     return this.watch(`/v1/kv?key=${enc(key)}&watch=true`, opts);
@@ -460,7 +511,7 @@ export class FiduciaClient {
       window_ms: opts.windowMs,
       refill_per_second: opts.refillPerSecond,
       cost: opts.cost,
-    });
+    }, opts);
   }
   rateLimitGet(tenant: string, key: string) {
     return this.request("GET", `/v1/rate-limit/${enc(tenant)}/${enc(key)}`);
@@ -474,7 +525,7 @@ export class FiduciaClient {
       target: opts.target,
       delivery: opts.delivery,
       max_retries: opts.maxRetries,
-    });
+    }, opts);
   }
   scheduleGet(name: string) {
     return this.request("GET", `/v1/cron/schedules/${enc(name)}`);
@@ -488,8 +539,12 @@ export class FiduciaClient {
   }
 
   // --- leader election ---
-  electionCampaign(name: string, candidate: string, ttlMs: number) {
-    return this.request("POST", `/v1/elections/${enc(name)}/campaign`, { candidate, ttl_ms: ttlMs });
+  electionCampaign(name: string, candidate: string, ttlMs: number, opts: ElectionCampaignOpts = {}) {
+    return this.request("POST", `/v1/elections/${enc(name)}/campaign`, {
+      candidate,
+      ttl_ms: ttlMs,
+      metadata: opts.metadata ?? {},
+    }, opts);
   }
   electionRenew(name: string, candidate: string, fencingToken: number) {
     return this.request("POST", `/v1/elections/${enc(name)}/renew`, { candidate, fencing_token: fencingToken });
@@ -514,7 +569,9 @@ export class FiduciaClient {
   serviceDeregister(service: string, instanceId: string) {
     return this.request("DELETE", `/v1/services/${enc(service)}/instances/${enc(instanceId)}`);
   }
-  serviceInstances(service: string) { return this.request("GET", `/v1/services/${enc(service)}`); }
+  serviceInstances(service: string, metadata: ServiceMetadataFilter = {}) {
+    return this.request("GET", `/v1/services/${enc(service)}${serviceMetadataQuery(metadata)}`);
+  }
   serviceList() { return this.request("GET", "/v1/services"); }
   serviceWatch(service: string, opts: RequestControlOpts = {}) {
     return this.watch(`/v1/services/${enc(service)}/watch`, opts);

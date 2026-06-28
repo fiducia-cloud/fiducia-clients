@@ -59,6 +59,14 @@ def _query(path, **params):
     return "%s?%s" % (path, qs) if qs else path
 
 
+def _metadata_query(metadata):
+    return {
+        "metadata.%s" % str(key).strip(): value
+        for key, value in (metadata or {}).items()
+        if str(key).strip()
+    }
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30, max_retries=0, retry_delay=0):
         self.base = base_url.rstrip("/")
@@ -84,6 +92,9 @@ class FiduciaClient:
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
             req.add_header("content-type", "application/json")
+        idempotency_key = request_opts.get("idempotency_key") or request_opts.get("idempotencyKey")
+        if idempotency_key:
+            req.add_header("Idempotency-Key", str(idempotency_key))
         try:
             with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 text = r.read().decode()
@@ -202,7 +213,7 @@ class FiduciaClient:
 
     lock_many = must_lock_many
 
-    def lock_release(self, key_or_holder, holder=None, fencing_token=None):
+    def lock_release(self, key_or_holder, holder=None, fencing_token=None, **request_opts):
         if fencing_token is None:
             if holder is None:
                 raise TypeError("lock_release requires holder and fencing_token")
@@ -211,7 +222,8 @@ class FiduciaClient:
         elif holder is None:
             raise TypeError("lock_release requires holder")
         return self._request("POST", "/v1/locks/release",
-                             {"holder": holder, "fencing_token": fencing_token})
+                             {"holder": holder, "fencing_token": fencing_token},
+                             **request_opts)
 
     # --- semaphores (counting: up to `limit` concurrent holders) ---
     def semaphore_get(self, key):
@@ -233,9 +245,35 @@ class FiduciaClient:
 
     semaphore = must_semaphore
 
-    def semaphore_release(self, key, holder, fencing_token):
+    def semaphore_release(self, key, holder, fencing_token, **request_opts):
         return self._request("POST", "/v1/semaphores/release",
-                             {"key": key, "holder": holder, "fencing_token": fencing_token})
+                             {"key": key, "holder": holder, "fencing_token": fencing_token},
+                             **request_opts)
+
+    # --- idempotency keys ---
+    def idempotency_get(self, key):
+        return self._request("GET", _query("/v1/idempotency", key=key))
+
+    def idempotency_claim(self, key, owner=None, ttl_ms=None, ttl=None, metadata=None, **request_opts):
+        return self._request("POST", "/v1/idempotency/claim",
+                             {
+                                 "key": key,
+                                 "owner": owner,
+                                 "ttl_ms": ttl_ms,
+                                 "ttl": ttl,
+                                 "metadata": metadata or {},
+                             },
+                             **request_opts)
+
+    def idempotency_complete(self, key, owner, fencing_token, result=None, **request_opts):
+        return self._request("POST", "/v1/idempotency/complete",
+                             {
+                                 "key": key,
+                                 "owner": owner,
+                                 "fencing_token": fencing_token,
+                                 "result": result,
+                             },
+                             **request_opts)
 
     # --- reader-writer locks ---
     def rw_acquire_read(self, key, ttl_ms=None, wait=True):
@@ -254,12 +292,13 @@ class FiduciaClient:
     def kv_get(self, key):
         return self._request("GET", _query("/v1/kv", key=key))
 
-    def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
+    def kv_put(self, key, value, ttl_ms=None, prev_revision=None, **request_opts):
         return self._request("PUT", _query("/v1/kv", key=key),
-                             {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
+                             {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision},
+                             **request_opts)
 
-    def kv_delete(self, key):
-        return self._request("DELETE", _query("/v1/kv", key=key))
+    def kv_delete(self, key, **request_opts):
+        return self._request("DELETE", _query("/v1/kv", key=key), **request_opts)
 
     def kv_list(self, prefix):
         return self._request("GET", _query("/v1/kv", prefix=prefix))
@@ -272,7 +311,7 @@ class FiduciaClient:
 
     # --- rate limiting ---
     def rate_limit_check(self, tenant, key, algorithm, limit, window_ms,
-                         refill_per_second=None, cost=None):
+                         refill_per_second=None, cost=None, **request_opts):
         return self._request("POST", "/v1/rate-limit/%s/%s/check" % (_enc(tenant), _enc(key)),
                              {
                                  "algorithm": algorithm,
@@ -280,14 +319,15 @@ class FiduciaClient:
                                  "window_ms": window_ms,
                                  "refill_per_second": refill_per_second,
                                  "cost": cost,
-                             })
+                             },
+                             **request_opts)
 
     def rate_limit_get(self, tenant, key):
         return self._request("GET", "/v1/rate-limit/%s/%s" % (_enc(tenant), _enc(key)))
 
     # --- cron / scheduling ---
     def schedule_upsert(self, name, target, cron=None, one_shot_at_ms=None,
-                        delivery=None, max_retries=None):
+                        delivery=None, max_retries=None, **request_opts):
         return self._request("PUT", "/v1/cron/schedules/%s" % _enc(name),
                              {
                                  "cron": cron,
@@ -295,7 +335,8 @@ class FiduciaClient:
                                  "target": target,
                                  "delivery": delivery,
                                  "max_retries": max_retries,
-                             })
+                             },
+                             **request_opts)
 
     def schedule_get(self, name):
         return self._request("GET", "/v1/cron/schedules/%s" % _enc(name))
@@ -308,9 +349,9 @@ class FiduciaClient:
         return self._request("GET", "/v1/cron/schedules/%s/history" % _enc(name))
 
     # --- leader election ---
-    def election_campaign(self, name, candidate, ttl_ms):
+    def election_campaign(self, name, candidate, ttl_ms, metadata=None):
         return self._request("POST", "/v1/elections/%s/campaign" % _enc(name),
-                             {"candidate": candidate, "ttl_ms": ttl_ms})
+                             {"candidate": candidate, "ttl_ms": ttl_ms, "metadata": metadata or {}})
 
     def election_renew(self, name, candidate, fencing_token):
         return self._request("POST", "/v1/elections/%s/renew" % _enc(name),
@@ -339,8 +380,8 @@ class FiduciaClient:
     def service_deregister(self, service, instance_id):
         return self._request("DELETE", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)))
 
-    def service_instances(self, service):
-        return self._request("GET", "/v1/services/%s" % _enc(service))
+    def service_instances(self, service, metadata=None):
+        return self._request("GET", _query("/v1/services/%s" % _enc(service), **_metadata_query(metadata)))
 
     def service_list(self):
         return self._request("GET", "/v1/services")
@@ -433,6 +474,22 @@ def build_parser():
     p.add_argument("--holder", required=True)
     p.add_argument("--fencing-token", type=int, required=True)
 
+    idem = sub.add_parser("idempotency")
+    idem_sub = idem.add_subparsers(dest="action", required=True)
+    p = idem_sub.add_parser("get")
+    p.add_argument("key")
+    p = idem_sub.add_parser("claim")
+    p.add_argument("key")
+    p.add_argument("--owner")
+    p.add_argument("--ttl-ms", type=int)
+    p.add_argument("--ttl")
+    p.add_argument("--metadata", action="append", default=[])
+    p = idem_sub.add_parser("complete")
+    p.add_argument("key")
+    p.add_argument("--owner", required=True)
+    p.add_argument("--fencing-token", type=int, required=True)
+    p.add_argument("--result-json")
+
     kv = sub.add_parser("kv")
     kv_sub = kv.add_subparsers(dest="action", required=True)
     p = kv_sub.add_parser("get")
@@ -489,6 +546,7 @@ def build_parser():
     p.add_argument("name")
     p.add_argument("candidate")
     p.add_argument("--ttl-ms", type=int, required=True)
+    p.add_argument("--metadata", action="append", default=[])
     for action in ("renew", "resign"):
         p = election_sub.add_parser(action)
         p.add_argument("name")
@@ -514,6 +572,7 @@ def build_parser():
     p.add_argument("instance_id")
     p = service_sub.add_parser("instances")
     p.add_argument("service")
+    p.add_argument("--metadata", action="append", default=[])
     service_sub.add_parser("list")
 
     return parser
@@ -544,6 +603,15 @@ def main(argv=None, client_factory=FiduciaClient):
                                              max=args.limit, wait=args.wait)
         elif args.action == "release":
             value = client.semaphore_release(args.key, args.holder, args.fencing_token)
+    elif args.resource == "idempotency":
+        if args.action == "get":
+            value = client.idempotency_get(args.key)
+        elif args.action == "claim":
+            value = client.idempotency_claim(args.key, owner=args.owner, ttl_ms=args.ttl_ms,
+                                             ttl=args.ttl, metadata=_metadata(args.metadata))
+        elif args.action == "complete":
+            result = json.loads(args.result_json) if args.result_json else None
+            value = client.idempotency_complete(args.key, args.owner, args.fencing_token, result=result)
     elif args.resource == "kv":
         if args.action == "get":
             value = client.kv_get(args.key)
@@ -572,7 +640,8 @@ def main(argv=None, client_factory=FiduciaClient):
             value = client.schedule_history(args.name)
     elif args.resource == "election":
         if args.action == "campaign":
-            value = client.election_campaign(args.name, args.candidate, args.ttl_ms)
+            value = client.election_campaign(args.name, args.candidate, args.ttl_ms,
+                                             metadata=_metadata(args.metadata))
         elif args.action == "renew":
             value = client.election_renew(args.name, args.candidate, args.fencing_token)
         elif args.action == "resign":
@@ -588,7 +657,7 @@ def main(argv=None, client_factory=FiduciaClient):
         elif args.action == "deregister":
             value = client.service_deregister(args.service, args.instance_id)
         elif args.action == "instances":
-            value = client.service_instances(args.service)
+            value = client.service_instances(args.service, metadata=_metadata(args.metadata))
         elif args.action == "list":
             value = client.service_list()
     else:

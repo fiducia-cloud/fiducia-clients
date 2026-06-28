@@ -6,8 +6,8 @@ thin, dependency-light wrapper over one shared contract, so they all expose the
 same operations with a language-idiomatic surface.
 
 Unlike a lock-only client, these cover the **whole** API: locks, semaphores,
-reader-writer locks, rate limiting, cron/scheduling, **config KV**, **leader
-election**, and **service discovery**.
+idempotency keys, reader-writer locks, rate limiting, cron/scheduling,
+**config KV**, **leader election**, and **service discovery**.
 
 ## The contract
 
@@ -87,6 +87,20 @@ await c.semaphoreRelease("webhook-delivery", {
   fencingToken: slot.result.output.fencing_token,
 });
 
+// idempotency
+const claim = await c.idempotencyClaim("stripe-webhook/event_123", {
+  owner: "worker-a",
+  ttl: "24h",
+  metadata: { source: "stripe" },
+});
+if (claim.result.output.status === "claimed") {
+  await c.idempotencyComplete("stripe-webhook/event_123", {
+    owner: "worker-a",
+    fencingToken: claim.result.output.fencing_token,
+    result: { status: "ok" },
+  });
+}
+
 // rate limiting
 await c.rateLimitCheck("tenant-a", "checkout", {
   algorithm: "token_bucket",
@@ -104,22 +118,49 @@ await c.scheduleUpsert("nightly", {
 const r = await c.rwAcquireRead("report");      await c.rwEndRead("report", r.lock_id);
 
 // config KV
-await c.kvPut("flags/new-ui", "on", { ttlMs: 60000 });
+await c.kvPut("flags/new-ui", "on", {
+  ttlMs: 60000,
+  idempotencyKey: "req_01J4Y3M8C9T9",
+});
 const v = await c.kvGet("flags/new-ui");
 
 // leader election
-await c.electionCampaign("cron", "node-a", 15000);
+const campaign = await c.electionCampaign("prod/invoice-reconciler/leader", "pod-a", 15000, {
+  metadata: {
+    service: "invoice-reconciler",
+    region: "us-east-1",
+    version: "2026.06.27",
+    address: "10.2.4.18:8080",
+  },
+});
 
 // service discovery
-await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000);
+await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000, {
+  region: "us-east-1",
+  version: "blue",
+});
 const live = await c.serviceInstances("api");
+const sameRegion = await c.serviceInstances("api", { region: "us-east-1" });
+const currentLeaders = await c.serviceInstances("api", { leader: "true" });
 ```
 
 Across client languages, the try helpers force `wait:false` and the must/short
 helpers force `wait:true` using language-idiomatic casing (`tryLock`,
 `try_lock`, `TryLock`, etc.). Blocking lock and semaphore calls can be bounded
 with each client's timeout, retry count, retry delay, and cancellation/context
-controls where that runtime supports them.
+controls where that runtime supports them. Mutating request controls also accept
+customer retry idempotency keys: TypeScript `idempotencyKey`, Python
+`idempotency_key`, Go `IdempotencyKey`, and Rust
+`RequestControl.idempotency_key`.
+
+For the hosted B2B flow, each service replica registers itself, campaigns for a
+named role, renews before its lease expires, and stops leader-only work if renew
+fails or returns `not_leader`. The winning replica gets a monotonic
+`fencing_token`; pass that token to downstream databases, queues, or external
+systems so stale leaders can be rejected after failover. Discovery metadata is
+an exact-match string map, so leader-aware clients can filter on fields such as
+`leader=true`, `region=us-east-1`, or `version=blue` while SSE watches track
+election and service changes.
 
 ## CLI
 
@@ -131,19 +172,21 @@ FIDUCIA_BASE_URL=https://api.fiducia.cloud \
   python3 clients/python/fiducia.py lock acquire orders/checkout --holder worker-a --ttl-ms 30000
 
 python3 clients/python/fiducia.py kv put flags/new-ui on --prev-revision 0
+python3 clients/python/fiducia.py idempotency claim stripe-webhook/event_123 --owner worker-a --ttl 24h
 python3 clients/python/fiducia.py rate-limit check tenant-a checkout --algorithm token_bucket --limit 100 --window-ms 60000
 python3 clients/python/fiducia.py cron upsert nightly --cron "0 0 * * *" --target-kind webhook --target-url https://example.com/hook
-python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15000
+python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15000 --metadata region=us-east-1 --metadata address=10.2.4.18:8080
 python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-ms 10000 --metadata az=a
 ```
 
 ## Status
 
-Clients track the live node endpoints for locks, semaphores, multi-key locks,
-rate limiting, cron/scheduling, KV, elections, and discovery. TypeScript and
-Python include SSE watch helpers for KV key/prefix changes, election leadership
-changes, and service discovery changes. Production-tier clients also expose
-request timeout and bounded retry controls around blocking acquisition calls.
+Clients track the live node endpoints for locks, semaphores, idempotency keys,
+multi-key locks, rate limiting, cron/scheduling, KV, elections, and discovery.
+TypeScript and Python include SSE watch helpers for KV key/prefix changes,
+election leadership changes, and service discovery changes. Production-tier
+clients also expose request timeout and bounded retry controls around blocking
+acquisition calls.
 
 ## Related
 

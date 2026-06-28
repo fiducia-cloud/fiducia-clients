@@ -23,12 +23,25 @@ pub enum Error {
 }
 
 /// Per-request controls for blocking lock/semaphore acquires.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RequestControl {
     pub timeout: Option<Duration>,
     pub lock_request_timeout: Option<Duration>,
     pub max_retries: usize,
     pub retry_delay: Duration,
+    pub idempotency_key: Option<String>,
+}
+
+/// Parameters for a rate-limit check.
+#[derive(Clone, Copy, Debug)]
+pub struct RateLimitCheckRequest<'a> {
+    pub tenant: &'a str,
+    pub key: &'a str,
+    pub algorithm: &'a str,
+    pub limit: u32,
+    pub window_ms: u64,
+    pub refill_per_second: Option<f64>,
+    pub cost: Option<u32>,
 }
 
 /// HTTP client for a fiducia endpoint (edge / load balancer / node).
@@ -71,7 +84,7 @@ impl FiduciaClient {
             self.retry_max
         };
         for attempt in 0..=max_retries {
-            match self.request_once(method, path, body.clone(), control, lock_acquire) {
+            match self.request_once(method, path, body.clone(), control.clone(), lock_acquire) {
                 Ok(value) => return Ok(value),
                 Err(err) if attempt < max_retries && Self::retryable(&err) => {
                     let delay = if control.retry_delay > Duration::ZERO {
@@ -99,8 +112,11 @@ impl FiduciaClient {
     ) -> Result<Value, Error> {
         let url = format!("{}{}", self.base, path);
         let mut req = self.agent.request(method, &url);
-        if let Some(timeout) = self.resolve_timeout(control, lock_acquire) {
+        if let Some(timeout) = self.resolve_timeout(&control, lock_acquire) {
             req = req.timeout(timeout);
+        }
+        if let Some(key) = control.idempotency_key.as_deref() {
+            req = req.set("Idempotency-Key", key);
         }
         let resp = match body {
             Some(b) => req.send_json(b),
@@ -116,7 +132,7 @@ impl FiduciaClient {
         }
     }
 
-    fn resolve_timeout(&self, control: RequestControl, lock_acquire: bool) -> Option<Duration> {
+    fn resolve_timeout(&self, control: &RequestControl, lock_acquire: bool) -> Option<Duration> {
         control
             .lock_request_timeout
             .or(control.timeout)
@@ -393,6 +409,38 @@ impl FiduciaClient {
         )
     }
 
+    // --- idempotency keys ---
+    pub fn idempotency_get(&self, key: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/idempotency?key={}", enc(key)), None)
+    }
+    pub fn idempotency_claim(
+        &self,
+        key: &str,
+        owner: Option<&str>,
+        ttl_ms: Option<u64>,
+        ttl: Option<&str>,
+        metadata: Value,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/idempotency/claim",
+            Some(json!({ "key": key, "owner": owner, "ttl_ms": ttl_ms, "ttl": ttl, "metadata": metadata })),
+        )
+    }
+    pub fn idempotency_complete(
+        &self,
+        key: &str,
+        owner: &str,
+        fencing_token: u64,
+        result: Option<Value>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/idempotency/complete",
+            Some(json!({ "key": key, "owner": owner, "fencing_token": fencing_token, "result": result })),
+        )
+    }
+
     // --- reader-writer locks ---
     pub fn rw_acquire_read(
         &self,
@@ -465,25 +513,20 @@ impl FiduciaClient {
     }
 
     // --- rate limiting ---
-    pub fn rate_limit_check(
-        &self,
-        tenant: &str,
-        key: &str,
-        algorithm: &str,
-        limit: u32,
-        window_ms: u64,
-        refill_per_second: Option<f64>,
-        cost: Option<u32>,
-    ) -> Result<Value, Error> {
+    pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
             "POST",
-            &format!("/v1/rate-limit/{}/{}/check", enc(tenant), enc(key)),
+            &format!(
+                "/v1/rate-limit/{}/{}/check",
+                enc(request.tenant),
+                enc(request.key)
+            ),
             Some(json!({
-                "algorithm": algorithm,
-                "limit": limit,
-                "window_ms": window_ms,
-                "refill_per_second": refill_per_second,
-                "cost": cost,
+                "algorithm": request.algorithm,
+                "limit": request.limit,
+                "window_ms": request.window_ms,
+                "refill_per_second": request.refill_per_second,
+                "cost": request.cost,
             })),
         )
     }
@@ -547,10 +590,19 @@ impl FiduciaClient {
         candidate: &str,
         ttl_ms: u64,
     ) -> Result<Value, Error> {
+        self.election_campaign_with_metadata(name, candidate, ttl_ms, json!({}))
+    }
+    pub fn election_campaign_with_metadata(
+        &self,
+        name: &str,
+        candidate: &str,
+        ttl_ms: u64,
+        metadata: Value,
+    ) -> Result<Value, Error> {
         self.request(
             "POST",
             &format!("/v1/elections/{}/campaign", enc(name)),
-            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms })),
+            Some(json!({ "candidate": candidate, "ttl_ms": ttl_ms, "metadata": metadata })),
         )
     }
     pub fn election_renew(
@@ -640,7 +692,22 @@ impl FiduciaClient {
         )
     }
     pub fn service_instances(&self, service: &str) -> Result<Value, Error> {
-        self.request("GET", &format!("/v1/services/{}", enc(service)), None)
+        self.service_instances_with_metadata(service, &[])
+    }
+    pub fn service_instances_with_metadata(
+        &self,
+        service: &str,
+        metadata: &[(&str, &str)],
+    ) -> Result<Value, Error> {
+        self.request(
+            "GET",
+            &format!(
+                "/v1/services/{}{}",
+                enc(service),
+                service_metadata_query(metadata)
+            ),
+            None,
+        )
     }
     pub fn service_list(&self) -> Result<Value, Error> {
         self.request("GET", "/v1/services", None)
@@ -661,6 +728,23 @@ fn enc(s: &str) -> String {
     out
 }
 
+fn service_metadata_query(metadata: &[(&str, &str)]) -> String {
+    let mut pairs = metadata
+        .iter()
+        .filter(|(key, _)| !key.trim().is_empty())
+        .collect::<Vec<_>>();
+    pairs.sort_by_key(|(key, _)| *key);
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let query = pairs
+        .into_iter()
+        .map(|(key, value)| format!("metadata.{}={}", enc(key), enc(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("?{query}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +757,7 @@ mod tests {
         method: String,
         path: String,
         body: Value,
+        idempotency_key: Option<String>,
     }
 
     fn recording_server() -> (String, Receiver<RecordedRequest>) {
@@ -713,6 +798,7 @@ mod tests {
                 let mut first_line = headers.lines().next().unwrap().split_whitespace();
                 let method = first_line.next().unwrap().to_string();
                 let path = first_line.next().unwrap().to_string();
+                let idempotency_key = header_value(&headers, "idempotency-key");
                 let body_start = header_end + 4;
                 let body = if content_len == 0 {
                     Value::Null
@@ -720,7 +806,13 @@ mod tests {
                     serde_json::from_slice(&buf[body_start..body_start + content_len]).unwrap()
                 };
 
-                tx.send(RecordedRequest { method, path, body }).unwrap();
+                tx.send(RecordedRequest {
+                    method,
+                    path,
+                    body,
+                    idempotency_key,
+                })
+                .unwrap();
                 stream
                     .write_all(
                         b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}",
@@ -747,6 +839,14 @@ mod tests {
             .unwrap_or(0)
     }
 
+    fn header_value(headers: &str, name: &str) -> Option<String> {
+        headers.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+    }
+
     fn assert_next(rx: &Receiver<RecordedRequest>, method: &str, path: &str, body: Value) {
         let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(got.method, method);
@@ -769,6 +869,21 @@ mod tests {
         let kv: types::KvEntry =
             serde_json::from_value(json!({ "value": "on", "mod_revision": 9 })).unwrap();
         assert_eq!(kv.value, "on");
+
+        let idempotency: types::IdempotencyRecord = serde_json::from_value(json!({
+            "key": "stripe-webhook/event_123",
+            "owner": "worker-a",
+            "fencing_token": 11,
+            "status": "claimed",
+            "first_seen_ms": 100,
+            "lease_expires_ms": 200,
+            "metadata": { "source": "stripe" }
+        }))
+        .unwrap();
+        assert!(matches!(
+            idempotency.status,
+            types::IdempotencyRecordStatus::Claimed
+        ));
     }
 
     #[test]
@@ -832,6 +947,75 @@ mod tests {
             "/v1/semaphores/release",
             json!({ "key": "pools/db/primary", "holder": "worker-b", "fencing_token": 12 }),
         );
+
+        client.idempotency_get("stripe-webhook/event_123").unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/idempotency?key=stripe-webhook%2Fevent_123",
+            Value::Null,
+        );
+
+        client
+            .idempotency_claim(
+                "stripe-webhook/event_123",
+                Some("worker-a"),
+                None,
+                Some("24h"),
+                json!({ "source": "stripe" }),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/idempotency/claim",
+            json!({
+                "key": "stripe-webhook/event_123",
+                "owner": "worker-a",
+                "ttl_ms": null,
+                "ttl": "24h",
+                "metadata": { "source": "stripe" }
+            }),
+        );
+
+        client
+            .idempotency_complete(
+                "stripe-webhook/event_123",
+                "worker-a",
+                11,
+                Some(json!({ "status": "ok" })),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/idempotency/complete",
+            json!({
+                "key": "stripe-webhook/event_123",
+                "owner": "worker-a",
+                "fencing_token": 11,
+                "result": { "status": "ok" }
+            }),
+        );
+
+        client
+            .election_campaign_with_metadata(
+                "prod/invoice-reconciler/leader",
+                "pod-a",
+                15_000,
+                json!({ "address": "10.2.4.18:8080", "region": "us-east-1" }),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/elections/prod%2Finvoice-reconciler%2Fleader/campaign",
+            json!({
+                "candidate": "pod-a",
+                "ttl_ms": 15_000,
+                "metadata": { "address": "10.2.4.18:8080", "region": "us-east-1" }
+            }),
+        );
     }
 
     #[test]
@@ -862,5 +1046,74 @@ mod tests {
             "/v1/services/api/instances/i-1/heartbeat",
             json!({ "ttl_ms": null }),
         );
+
+        client
+            .service_instances_with_metadata(
+                "api",
+                &[("version", "blue/1"), ("region", "eu central")],
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/services/api?metadata.region=eu%20central&metadata.version=blue%2F1",
+            Value::Null,
+        );
+    }
+
+    #[test]
+    fn rate_limit_check_uses_structured_request_options() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .rate_limit_check(RateLimitCheckRequest {
+                tenant: "tenant/a",
+                key: "checkout",
+                algorithm: "token_bucket",
+                limit: 100,
+                window_ms: 60_000,
+                refill_per_second: Some(2.5),
+                cost: Some(3),
+            })
+            .unwrap();
+
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/rate-limit/tenant%2Fa/checkout/check",
+            json!({
+                "algorithm": "token_bucket",
+                "limit": 100,
+                "window_ms": 60_000,
+                "refill_per_second": 2.5,
+                "cost": 3,
+            }),
+        );
+    }
+
+    #[test]
+    fn request_control_sends_idempotency_key_header() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .try_lock_with_options(
+                "orders/42",
+                Some("worker-a"),
+                None,
+                None,
+                RequestControl {
+                    idempotency_key: Some("req_order_42".to_string()),
+                    ..RequestControl::default()
+                },
+            )
+            .unwrap();
+        let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        assert_eq!(got.method, "POST");
+        assert_eq!(got.path, "/v1/locks/acquire");
+        assert_eq!(got.idempotency_key.as_deref(), Some("req_order_42"));
+        assert!(got.body.get("idempotency_key").is_none());
     }
 }

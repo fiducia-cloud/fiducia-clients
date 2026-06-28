@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,12 +28,13 @@ import (
 // Shared payload/error types, re-exported from fiducia-interfaces so callers can
 // decode responses into typed structs from one source of truth.
 type (
-	ProposeOutcome  = types.ProposeOutcome
-	ProposeError    = types.ProposeError
-	KvEntry         = types.KvEntry
-	LockGrant       = types.LockGrant
-	Leadership      = types.Leadership
-	ServiceInstance = types.ServiceInstance
+	ProposeOutcome    = types.ProposeOutcome
+	ProposeError      = types.ProposeError
+	KvEntry           = types.KvEntry
+	LockGrant         = types.LockGrant
+	IdempotencyRecord = types.IdempotencyRecord
+	Leadership        = types.Leadership
+	ServiceInstance   = types.ServiceInstance
 )
 
 // AcquireOpts configures a lock acquire.
@@ -48,6 +50,7 @@ type AcquireOpts struct {
 	RetryMax           int
 	Retries            int
 	RetryDelay         time.Duration
+	IdempotencyKey     string
 }
 
 // AcquireManyOpts configures an atomic multi-key union lock.
@@ -63,18 +66,38 @@ type AcquireManyOpts struct {
 	RetryMax           int
 	Retries            int
 	RetryDelay         time.Duration
+	IdempotencyKey     string
 }
 
 // ReleaseOpts identifies the current holder and fencing token.
 type ReleaseOpts struct {
-	Holder       string
-	FencingToken uint64
+	Holder         string
+	FencingToken   uint64
+	IdempotencyKey string
+}
+
+// IdempotencyClaimOpts configures an idempotency claim.
+type IdempotencyClaimOpts struct {
+	Owner          string
+	TTLMs          int64
+	TTL            string
+	Metadata       map[string]string
+	IdempotencyKey string
+}
+
+// IdempotencyCompleteOpts completes a previously claimed idempotency key.
+type IdempotencyCompleteOpts struct {
+	Owner          string
+	FencingToken   uint64
+	Result         map[string]any
+	IdempotencyKey string
 }
 
 // RwOpts configures a reader-writer acquire.
 type RwOpts struct {
-	TTLMs int64
-	Wait  bool
+	TTLMs          int64
+	Wait           bool
+	IdempotencyKey string
 }
 
 // RateLimitCheckOpts configures an atomic rate-limit check.
@@ -84,6 +107,7 @@ type RateLimitCheckOpts struct {
 	WindowMs        uint64
 	RefillPerSecond *float64
 	Cost            uint32
+	IdempotencyKey  string
 }
 
 // ScheduleTarget is a webhook, queue, or gRPC target.
@@ -91,11 +115,17 @@ type ScheduleTarget map[string]any
 
 // ScheduleUpsertOpts configures a cron or one-shot schedule.
 type ScheduleUpsertOpts struct {
-	Cron        string
-	OneShotAtMs *uint64
-	Target      ScheduleTarget
-	Delivery    string
-	MaxRetries  uint32
+	Cron           string
+	OneShotAtMs    *uint64
+	Target         ScheduleTarget
+	Delivery       string
+	MaxRetries     uint32
+	IdempotencyKey string
+}
+
+// ElectionCampaignOpts configures a leader-election campaign.
+type ElectionCampaignOpts struct {
+	Metadata map[string]string
 }
 
 // Error is a non-2xx response.
@@ -115,6 +145,7 @@ type requestControl struct {
 	Retries            int
 	RetryDelay         time.Duration
 	LockAcquire        bool
+	IdempotencyKey     string
 }
 
 // Client talks to a fiducia endpoint over HTTP.
@@ -186,6 +217,9 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 	}
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
+	}
+	if ctrl.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", ctrl.IdempotencyKey)
 	}
 	res, err := c.HTTP.Do(req)
 	if err != nil {
@@ -273,6 +307,7 @@ func acquireControl(o AcquireOpts) requestControl {
 		Retries:            o.Retries,
 		RetryDelay:         o.RetryDelay,
 		LockAcquire:        true,
+		IdempotencyKey:     o.IdempotencyKey,
 	}
 }
 
@@ -286,10 +321,36 @@ func acquireManyControl(o AcquireManyOpts) requestControl {
 		Retries:            o.Retries,
 		RetryDelay:         o.RetryDelay,
 		LockAcquire:        true,
+		IdempotencyKey:     o.IdempotencyKey,
 	}
 }
 
+func idempotencyControl(key string) requestControl {
+	return requestControl{IdempotencyKey: key}
+}
+
 func enc(s string) string { return url.PathEscape(s) }
+
+func serviceMetadataQuery(metadata map[string]string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	values := url.Values{}
+	for _, key := range keys {
+		values.Set("metadata."+key, metadata[key])
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return "?" + encoded
+	}
+	return ""
+}
 
 func setOptionalString(body map[string]any, key, value string) {
 	if value != "" {
@@ -348,8 +409,9 @@ func (c *Client) lockAcquireManyWithWait(o AcquireManyOpts, wait bool) (map[stri
 	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireManyControl(o))
 }
 func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/locks/release",
-		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken})
+	return c.requestWithControl("POST", "/v1/locks/release",
+		map[string]any{"holder": o.Holder, "fencing_token": o.FencingToken},
+		idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) LockReleaseMany(lockID string) (map[string]any, error) {
 	return nil, errors.New("fiducia: LockReleaseMany(lockID) is legacy; release union locks with LockRelease(key, ReleaseOpts{Holder, FencingToken})")
@@ -379,19 +441,46 @@ func (c *Client) semaphoreAcquireWithWait(key string, o AcquireOpts, wait bool) 
 	return c.requestWithControl("POST", "/v1/semaphores/acquire", body, acquireControl(o))
 }
 func (c *Client) SemaphoreRelease(key string, o ReleaseOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/semaphores/release",
-		map[string]any{"key": key, "holder": o.Holder, "fencing_token": o.FencingToken})
+	return c.requestWithControl("POST", "/v1/semaphores/release",
+		map[string]any{"key": key, "holder": o.Holder, "fencing_token": o.FencingToken},
+		idempotencyControl(o.IdempotencyKey))
+}
+
+// --- idempotency keys ---
+func (c *Client) IdempotencyGet(key string) (map[string]any, error) {
+	return c.request("GET", "/v1/idempotency?key="+url.QueryEscape(key), nil)
+}
+func (c *Client) IdempotencyClaim(key string, o IdempotencyClaimOpts) (map[string]any, error) {
+	body := map[string]any{"key": key}
+	setOptionalString(body, "owner", o.Owner)
+	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalString(body, "ttl", o.TTL)
+	if o.Metadata != nil {
+		body["metadata"] = o.Metadata
+	}
+	return c.requestWithControl("POST", "/v1/idempotency/claim", body, idempotencyControl(o.IdempotencyKey))
+}
+func (c *Client) IdempotencyComplete(key string, o IdempotencyCompleteOpts) (map[string]any, error) {
+	body := map[string]any{"key": key, "owner": o.Owner, "fencing_token": o.FencingToken}
+	if o.Result != nil {
+		body["result"] = o.Result
+	}
+	return c.requestWithControl("POST", "/v1/idempotency/complete", body, idempotencyControl(o.IdempotencyKey))
 }
 
 // --- reader-writer locks ---
 func (c *Client) RwAcquireRead(key string, o RwOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/rw/"+enc(key)+"/read", map[string]any{"ttl_ms": o.TTLMs, "wait": o.Wait})
+	return c.requestWithControl("POST", "/v1/rw/"+enc(key)+"/read",
+		map[string]any{"ttl_ms": o.TTLMs, "wait": o.Wait},
+		idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) RwEndRead(key, lockID string) (map[string]any, error) {
 	return c.request("POST", "/v1/rw/"+enc(key)+"/read/end", map[string]any{"lock_id": lockID})
 }
 func (c *Client) RwAcquireWrite(key string, o RwOpts) (map[string]any, error) {
-	return c.request("POST", "/v1/rw/"+enc(key)+"/write", map[string]any{"ttl_ms": o.TTLMs, "wait": o.Wait})
+	return c.requestWithControl("POST", "/v1/rw/"+enc(key)+"/write",
+		map[string]any{"ttl_ms": o.TTLMs, "wait": o.Wait},
+		idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) RwEndWrite(key, lockID string) (map[string]any, error) {
 	return c.request("POST", "/v1/rw/"+enc(key)+"/write/end", map[string]any{"lock_id": lockID})
@@ -426,7 +515,7 @@ func (c *Client) RateLimitCheck(tenant, key string, o RateLimitCheckOpts) (map[s
 	if o.Cost > 0 {
 		body["cost"] = o.Cost
 	}
-	return c.request("POST", "/v1/rate-limit/"+enc(tenant)+"/"+enc(key)+"/check", body)
+	return c.requestWithControl("POST", "/v1/rate-limit/"+enc(tenant)+"/"+enc(key)+"/check", body, idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) RateLimitGet(tenant, key string) (map[string]any, error) {
 	return c.request("GET", "/v1/rate-limit/"+enc(tenant)+"/"+enc(key), nil)
@@ -449,7 +538,7 @@ func (c *Client) ScheduleUpsert(name string, o ScheduleUpsertOpts) (map[string]a
 	if o.MaxRetries > 0 {
 		body["max_retries"] = o.MaxRetries
 	}
-	return c.request("PUT", "/v1/cron/schedules/"+enc(name), body)
+	return c.requestWithControl("PUT", "/v1/cron/schedules/"+enc(name), body, idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) ScheduleGet(name string) (map[string]any, error) {
 	return c.request("GET", "/v1/cron/schedules/"+enc(name), nil)
@@ -467,8 +556,17 @@ func (c *Client) ScheduleHistory(name string) (map[string]any, error) {
 
 // --- leader election ---
 func (c *Client) ElectionCampaign(name, candidate string, ttlMs int64) (map[string]any, error) {
+	return c.ElectionCampaignWithMetadata(name, candidate, ttlMs, nil)
+}
+func (c *Client) ElectionCampaignWithMetadata(name, candidate string, ttlMs int64, metadata map[string]string) (map[string]any, error) {
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	return c.request("POST", "/v1/elections/"+enc(name)+"/campaign",
-		map[string]any{"candidate": candidate, "ttl_ms": ttlMs})
+		map[string]any{"candidate": candidate, "ttl_ms": ttlMs, "metadata": metadata})
+}
+func (c *Client) ElectionCampaignWithOpts(name, candidate string, ttlMs int64, opts ElectionCampaignOpts) (map[string]any, error) {
+	return c.ElectionCampaignWithMetadata(name, candidate, ttlMs, opts.Metadata)
 }
 func (c *Client) ElectionRenew(name, candidate string, fencingToken uint64) (map[string]any, error) {
 	return c.request("POST", "/v1/elections/"+enc(name)+"/renew",
@@ -505,7 +603,10 @@ func (c *Client) ServiceDeregister(service, instanceID string) (map[string]any, 
 	return c.request("DELETE", "/v1/services/"+enc(service)+"/instances/"+enc(instanceID), nil)
 }
 func (c *Client) ServiceInstances(service string) (map[string]any, error) {
-	return c.request("GET", "/v1/services/"+enc(service), nil)
+	return c.ServiceInstancesWithMetadata(service, nil)
+}
+func (c *Client) ServiceInstancesWithMetadata(service string, metadata map[string]string) (map[string]any, error) {
+	return c.request("GET", "/v1/services/"+enc(service)+serviceMetadataQuery(metadata), nil)
 }
 func (c *Client) ServiceList() (map[string]any, error) {
 	return c.request("GET", "/v1/services", nil)

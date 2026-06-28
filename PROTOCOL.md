@@ -14,9 +14,10 @@ contract with language-idiomatic surfaces.
 - **Transport:** HTTP only (no TCP). Clients talk to the edge / load balancer,
   which routes each request to the owning shard's leader.
 - **Encoding:** JSON request/response bodies; `Content-Type: application/json`.
-- **Keys:** lock, semaphore, and config keys are slash-safe: reads carry them in
-  `?key=...`, and writes carry them in JSON bodies. Resource names that remain
-  path segments (`{name}`, `{service}`, `{instanceId}`) are URL-encoded.
+- **Keys:** lock, semaphore, idempotency, and config keys are slash-safe: reads
+  carry them in `?key=...`, and writes carry them in JSON bodies. Resource
+  names that remain path segments (`{name}`, `{service}`, `{instanceId}`) are
+  URL-encoded.
 - **TTLs:** milliseconds (`ttl_ms`).
 - **Base URL:** e.g. `https://api.fiducia.cloud` (or a regional LB / local node).
 
@@ -59,6 +60,37 @@ Clients mirror the lock helpers with `trySemaphore` / `try_semaphore` /
 `TrySemaphore` for `wait:false` and `mustSemaphore` / `must_semaphore` /
 `MustSemaphore` plus `semaphore` / `Semaphore` for `wait:true`, with the same
 request timeout, retry, delay, and cancellation controls.
+
+### Idempotency keys — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `idempotencyGet(key)` | `GET /v1/idempotency?key=...` | — | `{key, found, record}` |
+| `idempotencyClaim(key, {owner, ttlMs, ttl, metadata})` | `POST /v1/idempotency/claim` | `{key, owner, ttl_ms, ttl, metadata}` | `{committed, result}` |
+| `idempotencyComplete(key, {owner, fencingToken, result})` | `POST /v1/idempotency/complete` | `{key, owner, fencing_token, result}` | `{committed, result}` |
+
+`claim` is the retry-safe first-writer operation. The first active claim stores
+`owner`, metadata, a fencing token, and the TTL window; duplicate claims for the
+same key return the existing active record instead of creating another run.
+`complete` is guarded by the original owner and fencing token and can attach the
+durable result clients should replay for later duplicates. `ttl_ms` is numeric
+milliseconds; `ttl` also accepts friendly strings such as `60s`, `5m`, `24h`,
+and `7d`.
+
+End-customer API retries can use the HTTP header `Idempotency-Key` on any
+mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) instead of manually calling
+the claim/complete endpoints. The edge preserves the header, and the regional
+load balancer consumes it before the node hop. Keys are scoped to the
+authenticated org, hashed before storage, retained for 24 hours, and bound to a
+request fingerprint made from method, path/query, content type, and body. Exact
+retries replay the original status/body and include `Idempotent-Replayed: true`.
+The same key with a different request returns `409 idempotency_key_conflict`; a
+retry while the original request is still running returns
+`409 idempotency_key_in_progress` with `Retry-After: 1`.
+
+SDKs expose this as a request-control option where supported:
+TypeScript `idempotencyKey`, Python `idempotency_key` (also accepts
+`idempotencyKey`), Go `IdempotencyKey` on option structs, and Rust
+`RequestControl { idempotency_key: Some(...) }`.
 
 ### Reader-writer locks — client extension
 
@@ -104,11 +136,16 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 ### Leader election — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `electionCampaign(name, candidate, ttlMs)` | `POST /v1/elections/{name}/campaign` | `{candidate, ttl_ms}` | `{committed, result}` |
+| `electionCampaign(name, candidate, ttlMs, metadata?)` | `POST /v1/elections/{name}/campaign` | `{candidate, ttl_ms, metadata}` | `{committed, result}` |
 | `electionRenew(name, candidate, fencingToken)` | `POST /v1/elections/{name}/renew` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionResign(name, candidate, fencingToken)` | `POST /v1/elections/{name}/resign` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionGet(name)` | `GET /v1/elections/{name}` | — | `{name, held, leadership}` |
 | `electionWatch(name)` | `GET /v1/elections/{name}/watch` | — | SSE stream |
+
+Campaign metadata is copied onto the returned `leadership` object. Use it for
+customer-facing routing facts such as `address`, `region`, `version`,
+`service`, or `instance_id`; watchers then receive the current leader plus the
+same metadata after failover.
 
 ### Service discovery — live
 | Method | Endpoint | Body | Returns |
@@ -116,9 +153,18 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 | `serviceRegister(service, instanceId, address, ttlMs, metadata)` | `PUT /v1/services/{service}/instances/{id}` | `{address, ttl_ms, metadata}` | `{committed, result}` |
 | `serviceHeartbeat(service, instanceId, ttlMs?)` | `POST /v1/services/{service}/instances/{id}/heartbeat` | `{ttl_ms}` | `{committed, result}` |
 | `serviceDeregister(service, instanceId)` | `DELETE /v1/services/{service}/instances/{id}` | — | `{committed, result}` |
-| `serviceInstances(service)` | `GET /v1/services/{service}` | — | `{service, instances}` |
+| `serviceInstances(service, metadata?)` | `GET /v1/services/{service}?metadata.KEY=VALUE` | — | `{service, instances}` |
 | `serviceList()` | `GET /v1/services` | — | `{services}` |
 | `serviceWatch(service)` | `GET /v1/services/{service}/watch` | — | SSE stream |
+
+`serviceInstances` accepts optional exact-match metadata filters. Multiple
+filters are ANDed by the node, for example `metadata.region=us-east` plus
+`metadata.version=blue` returns only live instances matching both values.
+For primary routing, register each instance with metadata like
+`role=invoice-reconciler`, `leader=true`, `term=42`, or `fencing_token=918273`
+after it wins/renews an election, then query
+`serviceInstances("invoice-reconciler", {leader: "true"})` or watch both the
+service and election streams.
 
 ### Misc — live
 | Method | Endpoint | Returns |
