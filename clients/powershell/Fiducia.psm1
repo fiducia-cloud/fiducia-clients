@@ -5,6 +5,29 @@
 #   $lock = $c.LockAcquire("orders/checkout", 30000, $true, 1)
 #   $c.LockRelease("orders/checkout", $lock.result.lock_id)
 
+# A held lock grant. Call Release() (alias Unlock()) when done. `Client` is kept
+# untyped to avoid a forward-reference cycle with FiduciaClient at parse time.
+class FiduciaLock {
+    [object] $Client
+    [string[]] $Keys
+    [string] $Holder
+    [long] $FencingToken
+    [object] $LeaseExpiresMs
+    [object] Release() { return $this.Client.LockRelease($this.Holder, $this.FencingToken) }
+    [object] Unlock() { return $this.Release() }
+}
+
+# A held semaphore permit. Call Release() when done.
+class FiduciaSemaphore {
+    [object] $Client
+    [string] $Key
+    [string] $Holder
+    [long] $FencingToken
+    [object] $LeaseExpiresMs
+    [object] Release() { return $this.Client.SemaphoreRelease($this.Key, $this.Holder, $this.FencingToken) }
+    [object] Unlock() { return $this.Release() }
+}
+
 class FiduciaClient {
     [string] $Base
 
