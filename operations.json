@@ -34,6 +34,20 @@
       { "name": "holder", "in": "body", "type": "string" },
       { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Return one permit (admits the next FIFO waiter)." },
 
+    { "name": "idempotency_get", "group": "idempotency", "method": "GET", "path": "/v1/idempotency", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Inspect an active idempotency record." },
+    { "name": "idempotency_claim", "group": "idempotency", "method": "POST", "path": "/v1/idempotency/claim", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "owner", "in": "body", "type": "string", "optional": true },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
+      { "name": "ttl", "in": "body", "type": "string", "optional": true },
+      { "name": "metadata", "in": "body", "type": "object", "optional": true } ], "doc": "Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record." },
+    { "name": "idempotency_complete", "group": "idempotency", "method": "POST", "path": "/v1/idempotency/complete", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "owner", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "result", "in": "body", "type": "object", "optional": true } ], "doc": "Mark a claimed idempotency key complete and optionally store a replayable result." },
+
     { "name": "kv_get", "group": "kv", "method": "GET", "path": "/v1/kv", "params": [
       { "name": "key", "in": "query", "type": "string" } ], "doc": "Read a config key." },
     { "name": "kv_put", "group": "kv", "method": "PUT", "path": "/v1/kv", "params": [
@@ -49,7 +63,8 @@
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
       { "name": "name", "in": "path", "type": "string" },
       { "name": "candidate", "in": "body", "type": "string" },
-      { "name": "ttl_ms", "in": "body", "type": "int" } ], "doc": "Campaign for leadership; wins if currently unheld. Returns a fencing token on win." },
+      { "name": "ttl_ms", "in": "body", "type": "int" },
+      { "name": "metadata", "in": "body", "type": "object", "optional": true } ], "doc": "Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win." },
     { "name": "election_renew", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/renew", "params": [
       { "name": "name", "in": "path", "type": "string" },
       { "name": "candidate", "in": "body", "type": "string" },
@@ -60,7 +75,8 @@
       { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Step down; requires the held fencing token." },
 
     { "name": "service_instances", "group": "discovery", "method": "GET", "path": "/v1/services/{service}", "params": [
-      { "name": "service", "in": "path", "type": "string" } ], "doc": "List live instances of a service." },
+      { "name": "service", "in": "path", "type": "string" },
+      { "name": "metadata", "in": "query", "type": "object", "optional": true } ], "doc": "List live instances of a service, optionally filtered by exact metadata matches." },
     { "name": "service_register", "group": "discovery", "method": "PUT", "path": "/v1/services/{service}/instances/{instance_id}", "params": [
       { "name": "service", "in": "path", "type": "string" },
       { "name": "instance_id", "in": "path", "type": "string" },

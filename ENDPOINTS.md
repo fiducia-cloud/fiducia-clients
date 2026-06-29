@@ -15,14 +15,17 @@ too. `?param` marks an optional argument.
 | `GET` | `/v1/semaphores` | `key` | Inspect a semaphore: limit, holders, free permits, queue. |
 | `POST` | `/v1/semaphores/acquire` | `key`, `limit`, `holder`?, `ttl_ms`?, `wait`? | Take a permit of a counting semaphore (up to limit holders). |
 | `POST` | `/v1/semaphores/release` | `key`, `holder`, `fencing_token` | Return one permit (admits the next FIFO waiter). |
+| `GET` | `/v1/idempotency` | `key` | Inspect an active idempotency record. |
+| `POST` | `/v1/idempotency/claim` | `key`, `owner`?, `ttl_ms`?, `ttl`?, `metadata`? | Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record. |
+| `POST` | `/v1/idempotency/complete` | `key`, `owner`, `fencing_token`, `result`? | Mark a claimed idempotency key complete and optionally store a replayable result. |
 | `GET` | `/v1/kv` | `key` | Read a config key. |
 | `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`? | Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist). |
 | `DELETE` | `/v1/kv` | `key` | Delete a config key. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
-| `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms` | Campaign for leadership; wins if currently unheld. Returns a fencing token on win. |
+| `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership; wins if currently unheld. Returns a fencing token on win and echoes candidate metadata on the leadership record. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |
 | `POST` | `/v1/elections/{name}/resign` | `name`, `candidate`, `fencing_token` | Step down; requires the held fencing token. |
-| `GET` | `/v1/services/{service}` | `service` | List live instances of a service. |
+| `GET` | `/v1/services/{service}` | `service`, `metadata.KEY`? | List live instances of a service, optionally filtered by exact metadata matches. |
 | `PUT` | `/v1/services/{service}/instances/{instance_id}` | `service`, `instance_id`, `address`, `ttl_ms`, `metadata`? | Register/refresh an instance with a TTL lease and optional metadata. |
 | `POST` | `/v1/services/{service}/instances/{instance_id}/heartbeat` | `service`, `instance_id`, `ttl_ms`? | Renew an instance lease before it expires. |
 | `DELETE` | `/v1/services/{service}/instances/{instance_id}` | `service`, `instance_id` | Remove an instance from the registry. |

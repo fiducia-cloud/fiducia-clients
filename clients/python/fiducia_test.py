@@ -6,6 +6,7 @@ import pathlib
 import re
 import sys
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -32,6 +33,39 @@ class FiduciaPythonClientTests(unittest.TestCase):
 
     def assert_last_call_with_opts(self, client, method, path, body=None, request_opts=None):
         self.assertEqual(client.calls[-1], (method, path, body, request_opts or {}))
+
+    def test_request_opts_send_idempotency_key_header(self):
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def fake_urlopen(req, timeout):
+            captured["method"] = req.get_method()
+            captured["headers"] = {key.lower(): value for key, value in req.header_items()}
+            captured["body"] = json.loads(req.data.decode())
+            captured["timeout"] = timeout
+            return Response()
+
+        client = fiducia.FiduciaClient("https://fiducia.test", timeout=9)
+        with unittest.mock.patch.object(fiducia.urllib.request, "urlopen", fake_urlopen):
+            self.assertEqual(
+                client.kv_put("orders/42", "paid", idempotency_key="req_order_42"),
+                {"ok": True},
+            )
+
+        self.assertEqual(captured["method"], "PUT")
+        self.assertEqual(captured["headers"]["idempotency-key"], "req_order_42")
+        self.assertEqual(captured["headers"]["content-type"], "application/json")
+        self.assertEqual(captured["body"], {"value": "paid", "ttl_ms": None, "prev_revision": None})
+        self.assertEqual(captured["timeout"], 9)
 
     def test_sdk_sources_use_live_lock_semaphore_and_kv_routes(self):
         repo = pathlib.Path(__file__).resolve().parents[2]
@@ -144,6 +178,39 @@ class FiduciaPythonClientTests(unittest.TestCase):
             {"key": "pools/db/primary", "holder": "worker-b", "fencing_token": 12},
         )
 
+        c.idempotency_get("stripe-webhook/event_123")
+        self.assert_last_call(c, "GET", "/v1/idempotency?key=stripe-webhook%2Fevent_123")
+        c.idempotency_claim(
+            "stripe-webhook/event_123",
+            owner="worker-a",
+            ttl="24h",
+            metadata={"source": "stripe"},
+        )
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/idempotency/claim",
+            {
+                "key": "stripe-webhook/event_123",
+                "owner": "worker-a",
+                "ttl_ms": None,
+                "ttl": "24h",
+                "metadata": {"source": "stripe"},
+            },
+        )
+        c.idempotency_complete("stripe-webhook/event_123", "worker-a", 11, result={"status": "ok"})
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/idempotency/complete",
+            {
+                "key": "stripe-webhook/event_123",
+                "owner": "worker-a",
+                "fencing_token": 11,
+                "result": {"status": "ok"},
+            },
+        )
+
         c.kv_get("flags/new-ui")
         self.assert_last_call(c, "GET", "/v1/kv?key=flags%2Fnew-ui")
         c.kv_put("flags/new-ui", "on", ttl_ms=60_000, prev_revision=7)
@@ -204,8 +271,13 @@ class FiduciaPythonClientTests(unittest.TestCase):
         c.schedule_history("nightly")
         self.assert_last_call(c, "GET", "/v1/cron/schedules/nightly/history")
 
-        c.election_campaign("cron-main", "node-a", 15_000)
-        self.assert_last_call(c, "POST", "/v1/elections/cron-main/campaign", {"candidate": "node-a", "ttl_ms": 15_000})
+        c.election_campaign("cron-main", "node-a", 15_000, metadata={"region": "us-east-1"})
+        self.assert_last_call(
+            c,
+            "POST",
+            "/v1/elections/cron-main/campaign",
+            {"candidate": "node-a", "ttl_ms": 15_000, "metadata": {"region": "us-east-1"}},
+        )
         c.election_renew("cron-main", "node-a", 21)
         self.assert_last_call(c, "POST", "/v1/elections/cron-main/renew", {"candidate": "node-a", "fencing_token": 21})
         c.election_resign("cron-main", "node-a", 21)
@@ -228,6 +300,8 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "DELETE", "/v1/services/api/instances/i-1")
         c.service_instances("api")
         self.assert_last_call(c, "GET", "/v1/services/api")
+        c.service_instances("api", metadata={"region": "eu central", "version": "blue/1"})
+        self.assert_last_call(c, "GET", "/v1/services/api?metadata.region=eu+central&metadata.version=blue%2F1")
         c.service_list()
         self.assert_last_call(c, "GET", "/v1/services")
         c.service_watch("api")
@@ -240,6 +314,19 @@ class FiduciaPythonClientTests(unittest.TestCase):
              ("lock_acquire_many", (["a", "b"],), {"holder": "h", "ttl_ms": 100, "wait": True})),
             (["semaphore", "acquire", "pool", "--holder", "h", "--limit", "4"],
              ("semaphore_acquire", ("pool",), {"holder": "h", "ttl_ms": None, "max": 4, "wait": False})),
+            (["idempotency", "claim", "stripe-webhook/event_123", "--owner", "worker-a", "--ttl", "24h",
+              "--metadata", "source=stripe"],
+             ("idempotency_claim", ("stripe-webhook/event_123",), {
+                 "owner": "worker-a",
+                 "ttl_ms": None,
+                 "ttl": "24h",
+                 "metadata": {"source": "stripe"},
+             })),
+            (["idempotency", "complete", "stripe-webhook/event_123", "--owner", "worker-a",
+              "--fencing-token", "11", "--result-json", "{\"status\":\"ok\"}"],
+             ("idempotency_complete", ("stripe-webhook/event_123", "worker-a", 11), {
+                 "result": {"status": "ok"},
+             })),
             (["kv", "put", "flags/new-ui", "on", "--prev-revision", "3"],
              ("kv_put", ("flags/new-ui", "on"), {"ttl_ms": None, "prev_revision": 3})),
             (["rate-limit", "check", "tenant-a", "checkout", "--algorithm", "sliding_window", "--limit", "5", "--window-ms", "1000"],
@@ -251,10 +338,12 @@ class FiduciaPythonClientTests(unittest.TestCase):
                  "delivery": None,
                  "max_retries": None,
              })),
-            (["election", "campaign", "cron-main", "node-a", "--ttl-ms", "15000"],
-             ("election_campaign", ("cron-main", "node-a", 15_000), {})),
+            (["election", "campaign", "cron-main", "node-a", "--ttl-ms", "15000", "--metadata", "region=us-east-1"],
+             ("election_campaign", ("cron-main", "node-a", 15_000), {"metadata": {"region": "us-east-1"}})),
             (["service", "register", "api", "i-1", "10.0.0.1:9000", "--ttl-ms", "10000", "--metadata", "az=a"],
              ("service_register", ("api", "i-1", "10.0.0.1:9000", 10_000), {"metadata": {"az": "a"}})),
+            (["service", "instances", "api", "--metadata", "region=eu-central-1"],
+             ("service_instances", ("api",), {"metadata": {"region": "eu-central-1"}})),
         ]
 
         for argv, expected in cases:
