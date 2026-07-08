@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Fiducia.Client</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>fiducia.cloud</Authors>
+    <Description>Fiducia HTTP client for .NET applications.</Description>
+    <PackageProjectUrl>https://github.com/fiducia-cloud/fiducia-clients</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/fiducia-cloud/fiducia-clients</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="LICENSE.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

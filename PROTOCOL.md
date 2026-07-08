@@ -4,42 +4,48 @@
 > endpoint manifest every client is generated from (run `python3 generate.py`).
 > The current endpoint list is in [`ENDPOINTS.md`](ENDPOINTS.md) (also generated).
 > This document is the human narrative; if it disagrees with `operations.json`,
-> the manifest wins. (Generated clients today: python, typescript, go — others
-> still hand-written and being migrated onto the generator.)
+> the manifest wins.
 
-A description of the contract every client in [`clients/`](clients/) targets. All
-clients are thin HTTP wrappers over this contract — same methods, same
-endpoints, language-idiomatic surface.
+The client SDKs are the customer-facing contract; this HTTP shape is
+intentionally encapsulated inside them so it can evolve without leaking URL/body
+churn into application code. All clients are thin HTTP wrappers over this
+contract with language-idiomatic surfaces.
 
 - **Transport:** HTTP only (no TCP). Clients talk to the edge / load balancer,
   which routes each request to the owning shard's leader.
 - **Encoding:** JSON request/response bodies; `Content-Type: application/json`.
-- **Keys:** the `{key}` / `{name}` / `{service}` path segment is URL-encoded.
+- **Keys:** lock, semaphore, idempotency, and config keys are slash-safe: reads
+  carry them in `?key=...`, and writes carry them in JSON bodies. Resource
+  names that remain path segments (`{name}`, `{service}`, `{instanceId}`) are
+  URL-encoded.
 - **TTLs:** milliseconds (`ttl_ms`).
 - **Base URL:** e.g. `https://api.fiducia.cloud` (or a regional LB / local node).
 
 ## Endpoints
 
-Legend: **live** = implemented in `fiducia-node` today · **planned** = part of the
-contract, server implementation in progress (clients ship ready for it).
+Legend: **live** = implemented in `fiducia-node` today.
 
 ### Locks — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `lockGet(key)` | `GET /v1/locks/{key}` | — | `{key, lock}` |
-| `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/{key}/acquire` | `{holder, ttl_ms, wait}` | `{committed, result}` |
-| `lockAcquireBody({key, holder, ttlMs, wait, max})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait, max}` | `{committed, result}` |
-| `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire-many` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
-| `lockReleaseMany(lockId)` | `POST /v1/locks/release-many` | `{lock_id}` | `{committed, result}` |
-| `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
-| `lockWatch(key)` | `GET /v1/locks/{key}/watch` | — | SSE stream (**planned**) |
+| `lockGet(key)` | `GET /v1/locks?key=...` | — | `{key, lock}` |
+| `lockAcquire(key, {holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{key, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockAcquireMany({keys, holder, ttlMs, wait})` | `POST /v1/locks/acquire` | `{keys, holder, ttl_ms, wait}` | `{committed, result}` |
+| `lockRelease(key, {holder, fencingToken})` | `POST /v1/locks/release` | `{holder, fencing_token}` | `{committed, result}` |
 
 `wait:false` is try-lock. `wait:true` joins the FIFO wait queue. A successful
-single-key grant returns a monotonic `fencing_token` in `result`. A successful
-multi-key grant returns one `lock_id` plus `fencing_tokens` keyed by member key.
-The server sorts/dedupes `keys`, caps composites at five keys, and conflicts on
-any overlapping member key. Composite locks are exclusive: they block mutexes
-and semaphores on every member key until released by `lock_id`.
+single-key or multi-key grant returns one monotonic `fencing_token` in
+`result.output`. Multi-key locks are union locks: the grant covers the full
+deduped key set, conflicts on any overlapping member key, and releases the whole
+union by `{holder, fencing_token}`.
+
+Clients also expose convenience acquire names over the same wire contract,
+using each language's casing conventions: `tryLock` / `try_lock` /
+`TryLock` force `wait:false`; `mustLock` / `must_lock` / `MustLock` and
+`lock` / `Lock` force `wait:true`. Multi-key helpers follow the same pattern
+where the client already exposes multi-key locks. Blocking calls can be bounded
+with request controls such as lock/request timeout, max retries / retry max,
+retry delay, and cancellation/context controls where supported.
 
 **Waiting is client-driven.** The server does **not** hold a request open on
 `wait:true` — it reserves the FIFO slot and returns `{acquired:false, queued:true,
@@ -55,13 +61,53 @@ then carries a lease TTL and expires if no one holds it.
 ### Semaphores — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/{key}/acquire` | `{holder, ttl_ms, max, wait}` | `{committed, result}` |
-| `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/{key}/release` | `{holder, fencing_token}` | `{committed, result}` |
+| `semaphoreGet(key)` | `GET /v1/semaphores?key=...` | — | `{key, semaphore}` |
+| `semaphoreAcquire(key, {holder, ttlMs, max, wait})` | `POST /v1/semaphores/acquire` | `{key, holder, ttl_ms, limit, wait}` | `{committed, result}` |
+| `semaphoreRelease(key, {holder, fencingToken})` | `POST /v1/semaphores/release` | `{key, holder, fencing_token}` | `{committed, result}` |
 
-Semaphores are the same lock state machine with `max > 1`: up to `max` holders
-can hold the key at once, and each holder gets a distinct fencing token.
+Semaphores are counting leases: up to `limit` holders can hold the key at once,
+and each holder gets a distinct fencing token.
+Clients mirror the lock helpers with `trySemaphore` / `try_semaphore` /
+`TrySemaphore` for `wait:false` and `mustSemaphore` / `must_semaphore` /
+`MustSemaphore` plus `semaphore` / `Semaphore` for `wait:true`, with the same
+request timeout, retry, delay, and cancellation controls.
 
-### Reader-writer locks — planned
+### Idempotency keys — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `idempotencyGet(key)` | `GET /v1/idempotency?key=...` | — | `{key, found, record}` |
+| `idempotencyClaim(key, {owner, ttlMs, ttl, metadata})` | `POST /v1/idempotency/claim` | `{key, owner, ttl_ms, ttl, metadata}` | `{committed, result}` |
+| `idempotencyComplete(key, {owner, fencingToken, result})` | `POST /v1/idempotency/complete` | `{key, owner, fencing_token, result}` | `{committed, result}` |
+
+`claim` is the retry-safe first-writer operation. The first active claim stores
+`owner`, metadata, a fencing token, and the TTL window; duplicate claims for the
+same key return the existing active record instead of creating another run.
+`complete` is guarded by the original owner and fencing token and can attach the
+durable result clients should replay for later duplicates. `ttl_ms` is numeric
+milliseconds; `ttl` also accepts friendly strings such as `60s`, `5m`, `24h`,
+and `7d`.
+
+End-customer API retries can use the HTTP header `Idempotency-Key` on any
+mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) instead of manually calling
+the claim/complete endpoints. The edge preserves the header, and the regional
+load balancer consumes it before the node hop. Keys are scoped to the
+authenticated org, hashed before storage, retained for 24 hours, and bound to a
+request fingerprint made from method, path/query, content type, and body. Exact
+retries replay the original status/body and include `Idempotent-Replayed: true`.
+The same key with a different request returns `409 idempotency_key_conflict`; a
+retry while the original request is still running returns
+`409 idempotency_key_in_progress` with `Retry-After: 1`.
+
+SDKs expose this as a request-control option where supported:
+TypeScript `idempotencyKey`, Python `idempotency_key` (also accepts
+`idempotencyKey`), Go `IdempotencyKey` on option structs, and Rust
+`RequestControl { idempotency_key: Some(...) }`.
+
+### Reader-writer locks — client extension
+
+The client SDKs reserve these names for reader-writer lock APIs; the current
+node runtime does not expose them yet.
+
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
 | `rwAcquireRead(key, {ttlMs, wait})` | `POST /v1/rw/{key}/read` | `{ttl_ms, wait}` | `{acquired, fencing_token, lock_id}` |
@@ -72,11 +118,12 @@ can hold the key at once, and each holder gets a distinct fencing token.
 ### Config KV — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `kvGet(key)` | `GET /v1/kv/{key}` | — | `{key, found, entry}` |
-| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv/{key}` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
-| `kvDelete(key)` | `DELETE /v1/kv/{key}` | — | `{committed, result}` |
-| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{keys}` (**planned**) |
-| `kvWatch(key, {startRevision})` | `GET /v1/kv/{key}/watch` | — | SSE stream (**planned**) |
+| `kvGet(key)` | `GET /v1/kv?key=...` | — | `{key, found, entry}` |
+| `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv?key=...` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
+| `kvDelete(key)` | `DELETE /v1/kv?key=...` | — | `{committed, result}` |
+| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{prefix, entries}` |
+| `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
+| `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
@@ -100,19 +147,35 @@ Exactly one of `cron` or `one_shot_at_ms` is required. `target.kind` is
 ### Leader election — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `electionCampaign(name, candidate, ttlMs)` | `POST /v1/elections/{name}/campaign` | `{candidate, ttl_ms}` | `{committed, result}` |
+| `electionCampaign(name, candidate, ttlMs, metadata?)` | `POST /v1/elections/{name}/campaign` | `{candidate, ttl_ms, metadata}` | `{committed, result}` |
 | `electionRenew(name, candidate, fencingToken)` | `POST /v1/elections/{name}/renew` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionResign(name, candidate, fencingToken)` | `POST /v1/elections/{name}/resign` | `{candidate, fencing_token}` | `{committed, result}` |
 | `electionGet(name)` | `GET /v1/elections/{name}` | — | `{name, held, leadership}` |
+| `electionWatch(name)` | `GET /v1/elections/{name}/watch` | — | SSE stream |
+
+Campaign metadata is copied onto the returned `leadership` object. Use it for
+customer-facing routing facts such as `address`, `region`, `version`,
+`service`, or `instance_id`; watchers then receive the current leader plus the
+same metadata after failover.
 
 ### Service discovery — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| `serviceRegister(service, instanceId, address, ttlMs)` | `PUT /v1/services/{service}/instances/{id}` | `{address, ttl_ms}` | `{committed, result}` |
-| `serviceHeartbeat(service, instanceId)` | `POST /v1/services/{service}/instances/{id}/heartbeat` | — | `{committed, result}` |
+| `serviceRegister(service, instanceId, address, ttlMs, metadata)` | `PUT /v1/services/{service}/instances/{id}` | `{address, ttl_ms, metadata}` | `{committed, result}` |
+| `serviceHeartbeat(service, instanceId, ttlMs?)` | `POST /v1/services/{service}/instances/{id}/heartbeat` | `{ttl_ms}` | `{committed, result}` |
 | `serviceDeregister(service, instanceId)` | `DELETE /v1/services/{service}/instances/{id}` | — | `{committed, result}` |
-| `serviceInstances(service)` | `GET /v1/services/{service}` | — | `{service, instances}` |
+| `serviceInstances(service, metadata?)` | `GET /v1/services/{service}?metadata.KEY=VALUE` | — | `{service, instances}` |
 | `serviceList()` | `GET /v1/services` | — | `{services}` |
+| `serviceWatch(service)` | `GET /v1/services/{service}/watch` | — | SSE stream |
+
+`serviceInstances` accepts optional exact-match metadata filters. Multiple
+filters are ANDed by the node, for example `metadata.region=us-east` plus
+`metadata.version=blue` returns only live instances matching both values.
+For primary routing, register each instance with metadata like
+`role=invoice-reconciler`, `leader=true`, `term=42`, or `fencing_token=918273`
+after it wins/renews an election, then query
+`serviceInstances("invoice-reconciler", {leader: "true"})` or watch both the
+service and election streams.
 
 ### Misc — live
 | Method | Endpoint | Returns |

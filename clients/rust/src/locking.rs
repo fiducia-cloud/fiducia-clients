@@ -3,14 +3,16 @@
 //! Mirrors the live-mutex ergonomics on top of the thin HTTP methods: the two
 //! shapes callers actually want —
 //!
-//!   * [`FiduciaClient::try_lock`]  — `wait:false`. Returns `Ok(None)` at once if
-//!     the lock is held; never blocks.
-//!   * [`FiduciaClient::lock`] / [`FiduciaClient::must_lock`] — `wait:true`. Blocks
-//!     (polling with a fixed interval) until acquired, the wait budget elapses
+//!   * [`FiduciaClient::try_lock_handle`] — `wait:false`. Returns `Ok(None)` at
+//!     once if the lock is held; never blocks.
+//!   * [`FiduciaClient::acquire_lock_handle`] /
+//!     [`FiduciaClient::must_lock_handle`] — `wait:true`. Blocks (polling with a
+//!     fixed interval) until acquired, the wait budget elapses
 //!     ([`LockError::Timeout`]), or the server errors.
 //!
-//! Counting semaphores get the same pair ([`try_semaphore`](FiduciaClient::try_semaphore)
-//! / [`acquire_semaphore`](FiduciaClient::acquire_semaphore)).
+//! Counting semaphores get the same pair
+//! ([`try_semaphore_handle`](FiduciaClient::try_semaphore_handle) /
+//! [`acquire_semaphore`](FiduciaClient::acquire_semaphore)).
 //!
 //! The server never holds a request open: `wait:true` reserves a FIFO queue slot
 //! and returns immediately, so the **client** owns the wait. That's why the retry
@@ -94,7 +96,10 @@ impl std::fmt::Display for LockError {
         match self {
             LockError::Client(e) => write!(f, "fiducia lock: client error: {e:?}"),
             LockError::Timeout { keys, waited } => {
-                write!(f, "fiducia lock: timed out after {waited:?} waiting for {keys:?}")
+                write!(
+                    f,
+                    "fiducia lock: timed out after {waited:?} waiting for {keys:?}"
+                )
             }
         }
     }
@@ -122,13 +127,21 @@ impl FiduciaClient {
     // --- locks ---------------------------------------------------------------
 
     /// Try to take the union of `keys` right now (`wait:false`). `Ok(None)` if held.
-    pub fn try_lock(&self, keys: &[&str], opts: LockOptions) -> Result<Option<LockHandle>, LockError> {
+    pub fn try_lock_handle(
+        &self,
+        keys: &[&str],
+        opts: LockOptions,
+    ) -> Result<Option<LockHandle>, LockError> {
         self.acquire_lock(keys, false, opts)
     }
 
     /// Block until the union of `keys` is acquired, the budget elapses
     /// ([`LockError::Timeout`]), or the server errors (`wait:true`).
-    pub fn lock(&self, keys: &[&str], opts: LockOptions) -> Result<LockHandle, LockError> {
+    pub fn acquire_lock_handle(
+        &self,
+        keys: &[&str],
+        opts: LockOptions,
+    ) -> Result<LockHandle, LockError> {
         match self.acquire_lock(keys, true, opts.clone())? {
             Some(h) => Ok(h),
             None => Err(LockError::Timeout {
@@ -138,9 +151,13 @@ impl FiduciaClient {
         }
     }
 
-    /// Alias of [`lock`](Self::lock) — blocks until acquired (or errors).
-    pub fn must_lock(&self, keys: &[&str], opts: LockOptions) -> Result<LockHandle, LockError> {
-        self.lock(keys, opts)
+    /// Alias of [`acquire_lock_handle`](Self::acquire_lock_handle) — blocks until acquired (or errors).
+    pub fn must_lock_handle(
+        &self,
+        keys: &[&str],
+        opts: LockOptions,
+    ) -> Result<LockHandle, LockError> {
+        self.acquire_lock_handle(keys, opts)
     }
 
     /// Release a held lock grant (every member key) by its fencing token.
@@ -159,7 +176,7 @@ impl FiduciaClient {
         opts: LockOptions,
         f: impl FnOnce(&LockHandle) -> T,
     ) -> Result<T, LockError> {
-        let handle = self.lock(keys, opts)?;
+        let handle = self.acquire_lock_handle(keys, opts)?;
         let result = f(&handle);
         let _ = self.release_lock(&handle); // best-effort; lease TTL is the backstop
         Ok(result)
@@ -182,7 +199,7 @@ impl FiduciaClient {
             return Ok(Some(lock_handle(keys, &holder, o)));
         }
         if !wait {
-            return Ok(None); // try_lock: held now → fail fast
+            return Ok(None); // try_lock_handle: held now -> fail fast
         }
 
         // Queued (FIFO). Poll a member key until we're promoted to holder.
@@ -214,7 +231,7 @@ impl FiduciaClient {
     // --- counting semaphores -------------------------------------------------
 
     /// Take a permit right now (`wait:false`). `Ok(None)` if at capacity.
-    pub fn try_semaphore(
+    pub fn try_semaphore_handle(
         &self,
         key: &str,
         limit: u32,
@@ -340,13 +357,15 @@ mod tests {
     }
 
     #[test]
-    fn try_lock_against_dead_server_is_a_client_error_not_a_panic() {
+    fn try_lock_handle_against_dead_server_is_a_client_error_not_a_panic() {
         // Nothing listening → transport error surfaces as LockError::Client,
         // exercising the acquire path end-to-end without a live server.
         let c = FiduciaClient::new("http://127.0.0.1:1");
-        let mut opts = LockOptions::default();
-        opts.max_wait = Duration::from_millis(50);
-        match c.try_lock(&["k"], opts) {
+        let opts = LockOptions {
+            max_wait: Duration::from_millis(50),
+            ..LockOptions::default()
+        };
+        match c.try_lock_handle(&["k"], opts) {
             Err(LockError::Client(_)) => {}
             other => panic!("expected client error, got {other:?}"),
         }

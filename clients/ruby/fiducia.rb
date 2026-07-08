@@ -3,14 +3,14 @@
 #
 #   require_relative "fiducia"
 #   c = Fiducia::Client.new("https://api.fiducia.cloud")
-#   lock = c.lock("orders/checkout", ttl_ms: 30_000)  # blocks until acquired
-#   lock.release
-#   # non-blocking: lock = c.try_lock("orders/checkout"); lock&.release
+#   lock = c.lock_acquire("orders/checkout", ttl_ms: 30000)
+#   c.lock_release("orders/checkout", "worker-a", lock["result"]["output"]["fencing_token"])
 
 require "net/http"
 require "json"
 require "securerandom"
 require "uri"
+require "timeout"
 
 module Fiducia
   class Error < StandardError
@@ -45,66 +45,52 @@ module Fiducia
   end
 
   class Client
+    attr_accessor :request_timeout, :lock_request_timeout, :retry_max, :retry_delay
+
     def initialize(base_url)
       @base = base_url.sub(%r{/+\z}, "")
+      @request_timeout = nil
+      @lock_request_timeout = nil
+      @retry_max = 0
+      @retry_delay = 0
     end
 
     # --- misc ---
     def health; request("GET", "/healthz"); end
     def status; request("GET", "/v1/status"); end
 
-    # --- locks (current protocol: holder + fencing_token, key in the body) ---
-    def lock_get(key); request("GET", "/v1/locks?key=#{enc key}"); end
-    def lock_acquire(keys, holder: nil, ttl_ms: nil, wait: false)
-      request("POST", "/v1/locks/acquire", { keys: Array(keys), holder: holder, ttl_ms: ttl_ms, wait: wait })
+    # --- locks & semaphores ---
+    def lock_acquire(key, ttl_ms: nil, wait: true, max: 1, **opts)
+      lock_acquire_with_wait(key, ttl_ms: ttl_ms, wait: wait, max: max, opts: opts)
     end
-    def lock_release(holder, fencing_token)
+    def try_lock(key, ttl_ms: nil, max: 1, **opts)
+      lock_acquire_with_wait(key, ttl_ms: ttl_ms, wait: false, max: max, opts: opts)
+    end
+    def must_lock(key, ttl_ms: nil, max: 1, **opts)
+      lock_acquire_with_wait(key, ttl_ms: ttl_ms, wait: true, max: max, opts: opts)
+    end
+    alias lock must_lock
+    def lock_acquire_with_wait(key, ttl_ms:, wait:, max:, opts:)
+      request("POST", "/v1/locks/acquire", { key: key, ttl_ms: ttl_ms, wait: wait, max: max }, opts: opts, lock_acquire: true)
+    end
+    def lock_release(key, holder, fencing_token)
       request("POST", "/v1/locks/release", { holder: holder, fencing_token: fencing_token })
     end
-
-    # --- semaphores ---
-    def semaphore_get(key); request("GET", "/v1/semaphores?key=#{enc key}"); end
-    def semaphore_acquire(key, limit, holder: nil, ttl_ms: nil, wait: false)
-      request("POST", "/v1/semaphores/acquire", { key: key, limit: limit, holder: holder, ttl_ms: ttl_ms, wait: wait })
+    def semaphore_acquire(key, ttl_ms: nil, wait: true, max: 2, **opts)
+      semaphore_acquire_with_wait(key, ttl_ms: ttl_ms, wait: wait, max: max, opts: opts)
+    end
+    def try_semaphore(key, ttl_ms: nil, max: 2, **opts)
+      semaphore_acquire_with_wait(key, ttl_ms: ttl_ms, wait: false, max: max, opts: opts)
+    end
+    def must_semaphore(key, ttl_ms: nil, max: 2, **opts)
+      semaphore_acquire_with_wait(key, ttl_ms: ttl_ms, wait: true, max: max, opts: opts)
+    end
+    alias semaphore must_semaphore
+    def semaphore_acquire_with_wait(key, ttl_ms:, wait:, max:, opts:)
+      request("POST", "/v1/semaphores/acquire", { key: key, ttl_ms: ttl_ms, wait: wait, limit: [max, 2].max }, opts: opts, lock_acquire: true)
     end
     def semaphore_release(key, holder, fencing_token)
       request("POST", "/v1/semaphores/release", { key: key, holder: holder, fencing_token: fencing_token })
-    end
-
-    # --- high-level blocking / try acquisition (live-mutex style) ---
-    #
-    # try_lock: wait:false — returns a Lock if free right now, else nil.
-    # lock / must_lock: wait:true — blocks (polling) until acquired, the budget
-    #   elapses (LockTimeout), or the server errors.
-    def try_lock(key, ttl_ms: 60_000, holder: nil)
-      _acquire_lock(Array(key), false, ttl_ms, holder, 0, 0, nil)
-    end
-
-    def lock(key, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
-      got = _acquire_lock(Array(key), true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
-      raise LockTimeout.new(Array(key), max_wait_ms) unless got
-      got
-    end
-    alias_method :must_lock, :lock
-
-    # Acquire, yield the Lock, then always release.
-    def with_lock(key, **opts)
-      held = lock(key, **opts)
-      begin
-        yield held
-      ensure
-        begin; held.release; rescue StandardError; end
-      end
-    end
-
-    def try_semaphore(key, limit, ttl_ms: 60_000, holder: nil)
-      _acquire_semaphore(key, limit, false, ttl_ms, holder, 0, 0, nil)
-    end
-
-    def acquire_semaphore(key, limit, ttl_ms: 60_000, holder: nil, max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: nil)
-      got = _acquire_semaphore(key, limit, true, ttl_ms, holder, max_wait_ms, retry_interval_ms, max_retries)
-      raise LockTimeout.new([key], max_wait_ms) unless got
-      got
     end
 
     # --- reader-writer locks ---
@@ -122,11 +108,11 @@ module Fiducia
     end
 
     # --- config KV ---
-    def kv_get(key); request("GET", "/v1/kv/#{enc key}"); end
+    def kv_get(key); request("GET", "/v1/kv?key=#{enc key}"); end
     def kv_put(key, value, ttl_ms: nil)
-      request("PUT", "/v1/kv/#{enc key}", { value: value, ttl_ms: ttl_ms })
+      request("PUT", "/v1/kv?key=#{enc key}", { value: value, ttl_ms: ttl_ms })
     end
-    def kv_delete(key); request("DELETE", "/v1/kv/#{enc key}"); end
+    def kv_delete(key); request("DELETE", "/v1/kv?key=#{enc key}"); end
     def kv_list(prefix); request("GET", "/v1/kv?prefix=#{enc prefix}"); end
 
     # --- leader election ---
@@ -213,7 +199,21 @@ module Fiducia
       URI.encode_www_form_component(s.to_s)
     end
 
-    def request(method, path, body = nil)
+    def request(method, path, body = nil, opts: {}, lock_acquire: false)
+      max_retries = resolve_retries(opts)
+      attempt = 0
+      begin
+        return request_once(method, path, body, opts: opts, lock_acquire: lock_acquire)
+      rescue StandardError => e
+        raise unless attempt < max_retries && retryable?(e)
+        attempt += 1
+        delay = resolve_retry_delay(opts)
+        sleep delay if delay.positive?
+        retry
+      end
+    end
+
+    def request_once(method, path, body = nil, opts: {}, lock_acquire: false)
       uri = URI(@base + path)
       klass = {
         "GET" => Net::HTTP::Get, "PUT" => Net::HTTP::Put,
@@ -224,10 +224,48 @@ module Fiducia
         req["content-type"] = "application/json"
         req.body = JSON.generate(body)
       end
-      res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") { |h| h.request(req) }
+      timeout = resolve_timeout(opts, lock_acquire)
+      http_opts = { use_ssl: uri.scheme == "https" }
+      if timeout
+        http_opts[:open_timeout] = timeout
+        http_opts[:read_timeout] = timeout
+      end
+      res = Net::HTTP.start(uri.host, uri.port, **http_opts) { |h| h.request(req) }
       data = res.body && !res.body.empty? ? JSON.parse(res.body) : nil
       raise Error.new(res.code.to_i, data) if res.code.to_i >= 300
       data
+    end
+
+    def resolve_timeout(opts, lock_acquire)
+      return opts[:lock_request_timeout_ms] / 1000.0 if opts[:lock_request_timeout_ms]
+      return opts[:request_timeout_ms] / 1000.0 if opts[:request_timeout_ms]
+      return opts[:timeout_ms] / 1000.0 if opts[:timeout_ms]
+      return opts[:lock_request_timeout] if opts[:lock_request_timeout]
+      return opts[:request_timeout] if opts[:request_timeout]
+      return opts[:timeout] if opts[:timeout]
+      return @lock_request_timeout if lock_acquire && @lock_request_timeout
+      @request_timeout
+    end
+
+    def resolve_retries(opts)
+      [:max_retries, :retry_max, :retries].each do |key|
+        return [opts[key].to_i, 0].max if opts[key]
+      end
+      [@retry_max.to_i, 0].max
+    end
+
+    def resolve_retry_delay(opts)
+      return opts[:retry_delay_ms] / 1000.0 if opts[:retry_delay_ms]
+      return opts[:retry_delay] if opts[:retry_delay]
+      @retry_delay.to_f
+    end
+
+    def retryable?(error)
+      return [408, 425, 429, 500, 502, 503, 504].include?(error.status) if error.is_a?(Error)
+      error.is_a?(Timeout::Error) ||
+        error.is_a?(Errno::ECONNRESET) ||
+        error.is_a?(Errno::ECONNREFUSED) ||
+        error.is_a?(SocketError)
     end
   end
 end

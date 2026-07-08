@@ -6,8 +6,8 @@ thin, dependency-light wrapper over one shared contract, so they all expose the
 same operations with a language-idiomatic surface.
 
 Unlike a lock-only client, these cover the **whole** API: locks, semaphores,
-reader-writer locks, rate limiting, cron/scheduling, **config KV**, **leader
-election**, and **service discovery**.
+idempotency keys, reader-writer locks, rate limiting, cron/scheduling,
+**config KV**, **leader election**, and **service discovery**.
 
 ## The contract
 
@@ -43,33 +43,63 @@ Each lives under [`clients/`](clients/):
 const c = new FiduciaClient("https://api.fiducia.cloud");
 
 // lock (mutex)
-const lock = await c.lockAcquire("orders/checkout", {
+const maybeLock = await c.tryLock("orders/checkout", {
+  holder: "worker-a",
+  ttlMs: 30000,
+});
+if (maybeLock.committed) {
+  await c.lockRelease("orders/checkout", {
+    holder: "worker-a",
+    fencingToken: maybeLock.result.output.fencing_token,
+  });
+}
+
+const lock = await c.mustLock("orders/checkout", {
+  holder: "worker-a",
+  ttlMs: 30000,
+  lockRequestTimeoutMs: 5000,
+  maxRetries: 2,
+});
+await c.lockRelease("orders/checkout", {
+  holder: "worker-a",
+  fencingToken: lock.result.output.fencing_token,
+});
+
+// multi-key union lock
+const combo = await c.lockMany({
+  keys: ["orders/checkout", "inventory/sku-42"],
   holder: "worker-a",
   ttlMs: 30000,
 });
 await c.lockRelease("orders/checkout", {
   holder: "worker-a",
-  fencingToken: lock.result.fencing_token,
+  fencingToken: combo.result.output.fencing_token,
 });
-
-// multi-key union lock
-const combo = await c.lockAcquireMany({
-  keys: ["orders/checkout", "inventory/sku-42"],
-  holder: "worker-a",
-  ttlMs: 30000,
-});
-await c.lockReleaseMany(combo.result.lock_id);
 
 // semaphore
-const slot = await c.semaphoreAcquire("webhook-delivery", {
+const slot = await c.mustSemaphore("webhook-delivery", {
   holder: "worker-b",
   ttlMs: 30000,
   max: 12,
 });
 await c.semaphoreRelease("webhook-delivery", {
   holder: "worker-b",
-  fencingToken: slot.result.fencing_token,
+  fencingToken: slot.result.output.fencing_token,
 });
+
+// idempotency
+const claim = await c.idempotencyClaim("stripe-webhook/event_123", {
+  owner: "worker-a",
+  ttl: "24h",
+  metadata: { source: "stripe" },
+});
+if (claim.result.output.status === "claimed") {
+  await c.idempotencyComplete("stripe-webhook/event_123", {
+    owner: "worker-a",
+    fencingToken: claim.result.output.fencing_token,
+    result: { status: "ok" },
+  });
+}
 
 // rate limiting
 await c.rateLimitCheck("tenant-a", "checkout", {
@@ -88,59 +118,49 @@ await c.scheduleUpsert("nightly", {
 const r = await c.rwAcquireRead("report");      await c.rwEndRead("report", r.lock_id);
 
 // config KV
-await c.kvPut("flags/new-ui", "on", { ttlMs: 60000 });
+await c.kvPut("flags/new-ui", "on", {
+  ttlMs: 60000,
+  idempotencyKey: "req_01J4Y3M8C9T9",
+});
 const v = await c.kvGet("flags/new-ui");
 
 // leader election
-await c.electionCampaign("cron", "node-a", 15000);
+const campaign = await c.electionCampaign("prod/invoice-reconciler/leader", "pod-a", 15000, {
+  metadata: {
+    service: "invoice-reconciler",
+    region: "us-east-1",
+    version: "2026.06.27",
+    address: "10.2.4.18:8080",
+  },
+});
 
 // service discovery
-await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000);
+await c.serviceRegister("api", "i-1", "10.0.0.1:9000", 10000, {
+  region: "us-east-1",
+  version: "blue",
+});
 const live = await c.serviceInstances("api");
+const sameRegion = await c.serviceInstances("api", { region: "us-east-1" });
+const currentLeaders = await c.serviceInstances("api", { leader: "true" });
 ```
 
-## Blocking vs. try locks (and semaphores)
+Across client languages, the try helpers force `wait:false` and the must/short
+helpers force `wait:true` using language-idiomatic casing (`tryLock`,
+`try_lock`, `TryLock`, etc.). Blocking lock and semaphore calls can be bounded
+with each client's timeout, retry count, retry delay, and cancellation/context
+controls where that runtime supports them. Mutating request controls also accept
+customer retry idempotency keys: TypeScript `idempotencyKey`, Python
+`idempotency_key`, Go `IdempotencyKey`, and Rust
+`RequestControl.idempotency_key`.
 
-Beyond the raw `lockAcquire`/`semaphoreAcquire` calls, every client ships the
-two high-level shapes you usually want — modeled on the
-[live-mutex](https://github.com/oresoftware/live-mutex) client:
-
-- **`tryLock` (`wait:false`)** — returns immediately: you get the lock if it was
-  free *right now*, otherwise a "not acquired" result (no waiting).
-- **`lock` / `mustLock` (`wait:true`)** — **blocks** until the lock is acquired,
-  the wait budget elapses (a timeout error), or the server errors. Retries are
-  *client-side and fully tunable*: `ttl`, `maxWaitTime`, `retryInterval`,
-  `maxRetries`.
-
-The server never holds a request open: `wait:true` reserves a FIFO queue slot
-and returns at once, then the client polls until it's been promoted to holder.
-That's why retry cadence and budget live in the client, giving the caller full
-control. Each acquisition returns a handle carrying the **fencing token**; call
-`.unlock()` / `.release()` (or `release_lock`) to free it. Counting semaphores
-get the same pair: `trySemaphore` / `acquireSemaphore`.
-
-```ts
-import { FiduciaLockClient } from "./clients/ts/locking";
-const c = new FiduciaLockClient("https://api.fiducia.cloud");
-
-// fail fast if it's held right now
-const maybe = await c.tryLock("orders/checkout", { ttl: 30000 });
-if (maybe) { try { /* critical section */ } finally { await maybe.unlock(); } }
-
-// block (with retries) until acquired or the budget elapses
-const lock = await c.lock("orders/checkout", { ttl: 30000, maxWaitTime: 10000, retryInterval: 250 });
-try { /* critical section */ } finally { await lock.unlock(); }
-
-// or scoped: acquire → run → always release
-await c.withLock("orders/checkout", { ttl: 30000 }, async (lock) => { /* ... */ });
-```
-
-Method names per language (`tryLock` / `lock` / `mustLock`, plus the semaphore
-pair) follow each language's casing — e.g. Rust `try_lock`/`lock`, Go
-`TryLock`/`Lock`, Python `try_lock`/`lock`, Ruby `try_lock`/`lock`, Elixir
-`try_lock/3`/`lock/3`, shell `fiducia_try_lock`/`fiducia_lock`. For TS/Python/Go
-the helpers live in a `locking.*` companion alongside the generated client; for
-the other languages they're built into the client.
+For the hosted B2B flow, each service replica registers itself, campaigns for a
+named role, renews before its lease expires, and stops leader-only work if renew
+fails or returns `not_leader`. The winning replica gets a monotonic
+`fencing_token`; pass that token to downstream databases, queues, or external
+systems so stale leaders can be rejected after failover. Discovery metadata is
+an exact-match string map, so leader-aware clients can filter on fields such as
+`leader=true`, `region=us-east-1`, or `version=blue` while SSE watches track
+election and service changes.
 
 ## CLI
 
@@ -152,19 +172,21 @@ FIDUCIA_BASE_URL=https://api.fiducia.cloud \
   python3 clients/python/fiducia.py lock acquire orders/checkout --holder worker-a --ttl-ms 30000
 
 python3 clients/python/fiducia.py kv put flags/new-ui on --prev-revision 0
+python3 clients/python/fiducia.py idempotency claim stripe-webhook/event_123 --owner worker-a --ttl 24h
 python3 clients/python/fiducia.py rate-limit check tenant-a checkout --algorithm token_bucket --limit 100 --window-ms 60000
 python3 clients/python/fiducia.py cron upsert nightly --cron "0 0 * * *" --target-kind webhook --target-url https://example.com/hook
-python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15000
+python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15000 --metadata region=us-east-1 --metadata address=10.2.4.18:8080
 python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-ms 10000 --metadata az=a
 ```
 
 ## Status
 
-Clients track the live node endpoints (locks, semaphores, multi-key locks, rate
-limiting, cron/scheduling, KV, elections, discovery) and ship planned RW/watch
-shapes ahead of the server (marked *planned* in `PROTOCOL.md`). All twelve now
-include **blocking/try lock + semaphore acquisition with client-side retries**
-(see above). Auth helpers and watch/SSE streaming are still to come.
+Clients track the live node endpoints for locks, semaphores, idempotency keys,
+multi-key locks, rate limiting, cron/scheduling, KV, elections, and discovery.
+TypeScript and Python include SSE watch helpers for KV key/prefix changes,
+election leadership changes, and service discovery changes. Production-tier
+clients also expose request timeout and bounded retry controls around blocking
+acquisition calls.
 
 ## Related
 

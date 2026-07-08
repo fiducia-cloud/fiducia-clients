@@ -5,14 +5,8 @@
 // Double / Boolean / null. Every endpoint returns a Map<String,Object>:
 //
 //   Fiducia c = new Fiducia("https://api.fiducia.cloud");
-//   Map<String,Object> s = c.status();          // parsed JSON, not a raw string
-//   Map<String,Object> kv = c.kvGet("flags/x");
-//
-//   Fiducia.Lock lock = c.lock("orders/checkout");  // blocks until acquired
-//   lock.release();
-//   // non-blocking: Fiducia.Lock l = c.tryLock("orders/checkout"); if (l != null) l.release();
-//
-// Need the raw text instead? Use Fiducia.Json.stringify(map) / Fiducia.Json.parse(str).
+//   String lock = c.lockAcquire("orders/checkout", 30000L, true, 1);
+//   c.lockRelease("orders/checkout", "worker-a", 7L);
 
 package cloud.fiducia;
 
@@ -22,17 +16,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.time.Duration;
 
 public class Fiducia {
     private final String base;
     private final HttpClient http = HttpClient.newHttpClient();
+    public Duration requestTimeout = null;
+    public Duration lockRequestTimeout = null;
+    public int retryMax = 0;
+    public Duration retryDelay = Duration.ZERO;
 
     public Fiducia(String baseUrl) {
         this.base = baseUrl.replaceAll("/+$", "");
@@ -48,10 +40,37 @@ public class Fiducia {
         }
     }
 
-    /** Send a request (JSON body when non-null) and parse the JSON response. */
-    private Map<String, Object> request(String method, String path, Object body) {
+    public static class RequestOptions {
+        public Duration timeout = null;
+        public Duration requestTimeout = null;
+        public Duration lockRequestTimeout = null;
+        public int maxRetries = 0;
+        public int retryMax = 0;
+        public int retries = 0;
+        public Duration retryDelay = Duration.ZERO;
+    }
+
+    private String request(String method, String path, String jsonBody) {
+        return request(method, path, jsonBody, null, false);
+    }
+
+    private String request(String method, String path, String jsonBody, RequestOptions opts, boolean lockAcquire) {
+        int retries = resolveRetries(opts);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return requestOnce(method, path, jsonBody, opts, lockAcquire);
+            } catch (RuntimeException e) {
+                if (attempt >= retries || !retryable(e)) throw e;
+                sleep(resolveRetryDelay(opts));
+            }
+        }
+    }
+
+    private String requestOnce(String method, String path, String jsonBody, RequestOptions opts, boolean lockAcquire) {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path));
-        if (body != null) {
+        Duration timeout = resolveTimeout(opts, lockAcquire);
+        if (timeout != null) b.timeout(timeout);
+        if (jsonBody != null) {
             b.header("content-type", "application/json")
              .method(method, HttpRequest.BodyPublishers.ofString(Json.stringify(body)));
         } else {
@@ -62,6 +81,45 @@ public class Fiducia {
             if (r.statusCode() >= 300) throw new FiduciaException(r.statusCode(), r.body());
             return asMap(Json.parse(r.body()));
         } catch (java.io.IOException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Duration resolveTimeout(RequestOptions opts, boolean lockAcquire) {
+        if (opts != null && opts.lockRequestTimeout != null) return opts.lockRequestTimeout;
+        if (opts != null && opts.requestTimeout != null) return opts.requestTimeout;
+        if (opts != null && opts.timeout != null) return opts.timeout;
+        if (lockAcquire && lockRequestTimeout != null) return lockRequestTimeout;
+        return requestTimeout;
+    }
+
+    private int resolveRetries(RequestOptions opts) {
+        if (opts != null && opts.maxRetries > 0) return opts.maxRetries;
+        if (opts != null && opts.retryMax > 0) return opts.retryMax;
+        if (opts != null && opts.retries > 0) return opts.retries;
+        return Math.max(retryMax, 0);
+    }
+
+    private Duration resolveRetryDelay(RequestOptions opts) {
+        if (opts != null && opts.retryDelay != null && !opts.retryDelay.isZero()) return opts.retryDelay;
+        return retryDelay == null ? Duration.ZERO : retryDelay;
+    }
+
+    private static boolean retryable(RuntimeException e) {
+        if (e instanceof FiduciaException) {
+            int status = ((FiduciaException) e).status;
+            return status == 408 || status == 425 || status == 429 || status == 500 ||
+                   status == 502 || status == 503 || status == 504;
+        }
+        return true;
+    }
+
+    private static void sleep(Duration delay) {
+        if (delay == null || delay.isZero() || delay.isNegative()) return;
+        try {
+            Thread.sleep(delay.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
     }
@@ -81,105 +139,86 @@ public class Fiducia {
     public Map<String, Object> health() { return request("GET", "/healthz", null); }
     public Map<String, Object> status() { return request("GET", "/v1/status", null); }
 
-    // --- locks (current protocol: holder + fencing_token, keys in the body) ---
-    public Map<String, Object> lockGet(String key) { return request("GET", "/v1/locks?key=" + enc(key), null); }
-    public Map<String, Object> lockAcquire(List<String> keys, String holder, Long ttlMs, boolean wait) {
-        return request("POST", "/v1/locks/acquire", body("keys", keys, "holder", holder, "ttl_ms", ttlMs, "wait", wait));
+    // --- locks & semaphores ---
+    public String lockAcquire(String key, Long ttlMs, boolean wait, int max) {
+        return lockAcquire(key, ttlMs, wait, max, null);
     }
-    public Map<String, Object> lockRelease(String holder, long fencingToken) {
-        return request("POST", "/v1/locks/release", body("holder", holder, "fencing_token", fencingToken));
+    public String lockAcquire(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, wait, max, opts);
     }
-
-    // --- semaphores ---
-    public Map<String, Object> semaphoreGet(String key) { return request("GET", "/v1/semaphores?key=" + enc(key), null); }
-    public Map<String, Object> semaphoreAcquire(String key, int limit, String holder, Long ttlMs, boolean wait) {
-        return request("POST", "/v1/semaphores/acquire", body("key", key, "limit", limit, "holder", holder, "ttl_ms", ttlMs, "wait", wait));
+    public String tryLock(String key, Long ttlMs) {
+        return lockAcquireWithWait(key, ttlMs, false, 1, null);
     }
-    public Map<String, Object> semaphoreRelease(String key, String holder, long fencingToken) {
-        return request("POST", "/v1/semaphores/release", body("key", key, "holder", holder, "fencing_token", fencingToken));
+    public String tryLock(String key, Long ttlMs, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, false, 1, opts);
     }
-
-    // --- high-level blocking / try acquisition (live-mutex style) ---
-
-    /** tryLock: wait:false — returns a Lock if free now, else null. */
-    public Lock tryLock(String key) { return tryLock(key, 60_000L); }
-    public Lock tryLock(String key, long ttlMs) {
-        return acquireLock(Arrays.asList(key), false, ttlMs, null, 0, 0, -1);
+    public String tryLock(String key, Long ttlMs, int max) {
+        return lockAcquireWithWait(key, ttlMs, false, max, null);
     }
-
-    /** lock / mustLock: wait:true — block until acquired, the budget elapses
-     *  (LockTimeoutException), or the server errors. */
-    public Lock lock(String key) { return lock(key, 60_000L, 30_000, 250, -1); }
-    public Lock lock(String key, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
-        Lock l = acquireLock(Arrays.asList(key), true, ttlMs, null, maxWaitMs, retryIntervalMs, maxRetries);
-        if (l == null) throw new LockTimeoutException(Arrays.asList(key), maxWaitMs);
-        return l;
+    public String tryLock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, false, max, opts);
     }
-    public Lock mustLock(String key) { return lock(key); }
-    public Lock mustLock(String key, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
-        return lock(key, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
+    public String mustLock(String key, Long ttlMs) {
+        return lockAcquireWithWait(key, ttlMs, true, 1, null);
     }
-
-    /** trySemaphore / acquireSemaphore — the same pair for counting semaphores. */
-    public SemaphoreHandle trySemaphore(String key, int limit) { return trySemaphore(key, limit, 60_000L); }
-    public SemaphoreHandle trySemaphore(String key, int limit, long ttlMs) {
-        return acquireSemaphore(key, limit, false, ttlMs, 0, 0, -1);
+    public String mustLock(String key, Long ttlMs, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, true, 1, opts);
     }
-    public SemaphoreHandle acquireSemaphore(String key, int limit) {
-        return acquireSemaphore(key, limit, 60_000L, 30_000, 250, -1);
+    public String mustLock(String key, Long ttlMs, int max) {
+        return lockAcquireWithWait(key, ttlMs, true, max, null);
     }
-    public SemaphoreHandle acquireSemaphore(String key, int limit, long ttlMs, int maxWaitMs, int retryIntervalMs, int maxRetries) {
-        SemaphoreHandle h = acquireSemaphore(key, limit, true, ttlMs, maxWaitMs, retryIntervalMs, maxRetries);
-        if (h == null) throw new LockTimeoutException(Arrays.asList(key), maxWaitMs);
-        return h;
+    public String mustLock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return lockAcquireWithWait(key, ttlMs, true, max, opts);
     }
-
-    private Lock acquireLock(List<String> keys, boolean wait, long ttlMs, String holder,
-                             int maxWaitMs, int retryIntervalMs, int maxRetries) {
-        if (holder == null) holder = genHolder();
-        Map<String, Object> out = output(lockAcquire(keys, holder, ttlMs, wait));
-        if (asBool(out.get("acquired"))) {
-            return new Lock(this, keys, holder, asLong(out.get("fencing_token")), asLongOrNull(out.get("lease_expires_ms")));
-        }
-        if (!wait) return null; // tryLock: held now -> fail fast
-        long deadline = nowMs() + maxWaitMs;
-        for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++) {
-            long remaining = deadline - nowMs();
-            if (remaining <= 0) break;
-            sleep(Math.min(retryIntervalMs, remaining));
-            Map<String, Object> lock = asMap(lockGet(keys.get(0)).get("lock"));
-            if (holder.equals(asStr(lock.get("holder"))) && lock.get("fencing_token") != null) {
-                return new Lock(this, keys, holder, asLong(lock.get("fencing_token")), asLongOrNull(lock.get("lease_expires_ms")));
-            }
-        }
-        return null;
+    public String lock(String key, Long ttlMs) {
+        return mustLock(key, ttlMs);
     }
-
-    @SuppressWarnings("unchecked")
-    private SemaphoreHandle acquireSemaphore(String key, int limit, boolean wait, long ttlMs,
-                                             int maxWaitMs, int retryIntervalMs, int maxRetries) {
-        String holder = genHolder();
-        Map<String, Object> out = output(semaphoreAcquire(key, limit, holder, ttlMs, wait));
-        if (asBool(out.get("acquired"))) {
-            return new SemaphoreHandle(this, key, holder, asLong(out.get("fencing_token")), asLongOrNull(out.get("lease_expires_ms")));
-        }
-        if (!wait) return null;
-        long deadline = nowMs() + maxWaitMs;
-        for (int attempt = 0; maxRetries < 0 || attempt < maxRetries; attempt++) {
-            long remaining = deadline - nowMs();
-            if (remaining <= 0) break;
-            sleep(Math.min(retryIntervalMs, remaining));
-            Object holders = asMap(semaphoreGet(key).get("semaphore")).get("holders");
-            if (holders instanceof List) {
-                for (Object o : (List<Object>) holders) {
-                    Map<String, Object> slot = asMap(o);
-                    if (holder.equals(asStr(slot.get("holder"))) && slot.get("fencing_token") != null) {
-                        return new SemaphoreHandle(this, key, holder, asLong(slot.get("fencing_token")), asLongOrNull(slot.get("lease_expires_ms")));
-                    }
-                }
-            }
-        }
-        return null;
+    public String lock(String key, Long ttlMs, RequestOptions opts) {
+        return mustLock(key, ttlMs, 1, opts);
+    }
+    public String lock(String key, Long ttlMs, int max) {
+        return mustLock(key, ttlMs, max);
+    }
+    public String lock(String key, Long ttlMs, int max, RequestOptions opts) {
+        return mustLock(key, ttlMs, max, opts);
+    }
+    private String lockAcquireWithWait(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return request("POST", "/v1/locks/acquire",
+            obj("key", key, "ttl_ms", ttlMs, "wait", wait, "max", max), opts, true);
+    }
+    public String semaphoreAcquire(String key, Long ttlMs, boolean wait, int max) {
+        return semaphoreAcquire(key, ttlMs, wait, max, null);
+    }
+    public String semaphoreAcquire(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, wait, max, opts);
+    }
+    public String trySemaphore(String key, Long ttlMs, int max) {
+        return semaphoreAcquireWithWait(key, ttlMs, false, max, null);
+    }
+    public String trySemaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, false, max, opts);
+    }
+    public String mustSemaphore(String key, Long ttlMs, int max) {
+        return semaphoreAcquireWithWait(key, ttlMs, true, max, null);
+    }
+    public String mustSemaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return semaphoreAcquireWithWait(key, ttlMs, true, max, opts);
+    }
+    public String semaphore(String key, Long ttlMs, int max) {
+        return mustSemaphore(key, ttlMs, max);
+    }
+    public String semaphore(String key, Long ttlMs, int max, RequestOptions opts) {
+        return mustSemaphore(key, ttlMs, max, opts);
+    }
+    private String semaphoreAcquireWithWait(String key, Long ttlMs, boolean wait, int max, RequestOptions opts) {
+        return request("POST", "/v1/semaphores/acquire",
+            obj("key", key, "ttl_ms", ttlMs, "wait", wait, "limit", Math.max(max, 2)), opts, true);
+    }
+    public String lockRelease(String key, String holder, long fencingToken) {
+        return request("POST", "/v1/locks/release", obj("holder", holder, "fencing_token", fencingToken));
+    }
+    public String semaphoreRelease(String key, String holder, long fencingToken) {
+        return request("POST", "/v1/semaphores/release", obj("key", key, "holder", holder, "fencing_token", fencingToken));
     }
 
     // --- reader-writer locks ---
@@ -197,12 +236,12 @@ public class Fiducia {
     }
 
     // --- config KV ---
-    public Map<String, Object> kvGet(String key) { return request("GET", "/v1/kv/" + enc(key), null); }
-    public Map<String, Object> kvPut(String key, String value, Long ttlMs) {
-        return request("PUT", "/v1/kv/" + enc(key), body("value", value, "ttl_ms", ttlMs));
+    public String kvGet(String key) { return request("GET", "/v1/kv?key=" + enc(key), null); }
+    public String kvPut(String key, String value, Long ttlMs) {
+        return request("PUT", "/v1/kv?key=" + enc(key), obj("value", value, "ttl_ms", ttlMs));
     }
-    public Map<String, Object> kvDelete(String key) { return request("DELETE", "/v1/kv/" + enc(key), null); }
-    public Map<String, Object> kvList(String prefix) { return request("GET", "/v1/kv?prefix=" + enc(prefix), null); }
+    public String kvDelete(String key) { return request("DELETE", "/v1/kv?key=" + enc(key), null); }
+    public String kvList(String prefix) { return request("GET", "/v1/kv?prefix=" + enc(prefix), null); }
 
     // --- leader election ---
     public Map<String, Object> electionCampaign(String name, String candidate, long ttlMs) {

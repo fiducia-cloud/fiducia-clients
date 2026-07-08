@@ -11,13 +11,24 @@
 
 : "${FIDUCIA_URL:=http://localhost:8088}"
 
-_fiducia_req() { # method path [json-body]
-  local method="$1" path="$2" body="${3:-}"
-  if [ -n "$body" ]; then
-    curl -fsS -X "$method" "$FIDUCIA_URL$path" -H 'content-type: application/json' -d "$body"
-  else
-    curl -fsS -X "$method" "$FIDUCIA_URL$path"
-  fi
+_fiducia_req() { # method path [json-body] [max_retries] [timeout_seconds] [retry_delay_seconds]
+  local method="$1" path="$2" body="${3:-}" max_retries="${4:-${FIDUCIA_MAX_RETRIES:-0}}"
+  local timeout="${5:-${FIDUCIA_TIMEOUT:-}}" retry_delay="${6:-${FIDUCIA_RETRY_DELAY:-0}}" attempt=0
+  while true; do
+    local args=(-fsS -X "$method")
+    if [ -n "$timeout" ]; then args+=(--max-time "$timeout"); fi
+    if [ -n "$body" ]; then
+      args+=("$FIDUCIA_URL$path" -H 'content-type: application/json' -d "$body")
+    else
+      args+=("$FIDUCIA_URL$path")
+    fi
+    if curl "${args[@]}"; then return 0; fi
+    local curl_status=$?
+    if [ "$curl_status" -eq 22 ]; then return "$curl_status"; fi
+    if [ "$attempt" -ge "$max_retries" ]; then return "$curl_status"; fi
+    attempt=$((attempt + 1))
+    if [ "$retry_delay" != "0" ]; then sleep "$retry_delay"; fi
+  done
 }
 
 _fiducia_enc() { jq -rn --arg s "$1" '$s|@uri'; }
@@ -30,102 +41,30 @@ _fiducia_gen_holder() {
 fiducia_health() { _fiducia_req GET /healthz; }
 fiducia_status() { _fiducia_req GET /v1/status; }
 
-# --- locks (current protocol: holder + fencing_token, keys in the body) ---
-fiducia_lock_get() { _fiducia_req GET "/v1/locks?key=$(_fiducia_enc "$1")"; }
-fiducia_lock_acquire() { # key holder [ttl_ms] [wait]
-  local key="$1" holder="$2" ttl="${3:-null}" wait="${4:-false}"
+# --- locks & semaphores ---
+fiducia_lock_acquire() { # key [ttl_ms] [wait] [max] [max_retries] [timeout_seconds] [retry_delay_seconds]
+  local key="$1" ttl="${2:-null}" wait="${3:-true}" max="${4:-1}"
   _fiducia_req POST "/v1/locks/acquire" \
-    "$(jq -nc --arg k "$key" --arg h "$holder" --argjson t "$ttl" --argjson w "$wait" '{keys:[$k],holder:$h,ttl_ms:$t,wait:$w}')"
+    "$(jq -nc --arg k "$key" --argjson t "$ttl" --argjson w "$wait" --argjson m "$max" '{key:$k,ttl_ms:$t,wait:$w,max:$m}')" \
+    "${5:-${FIDUCIA_MAX_RETRIES:-0}}" "${6:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${7:-${FIDUCIA_RETRY_DELAY:-0}}"
 }
-fiducia_lock_release() { # holder fencing_token
-  _fiducia_req POST "/v1/locks/release" "$(jq -nc --arg h "$1" --argjson f "$2" '{holder:$h,fencing_token:$f}')"
+fiducia_try_lock() { fiducia_lock_acquire "$1" "${2:-null}" false "${3:-1}" "${4:-${FIDUCIA_MAX_RETRIES:-0}}" "${5:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${6:-${FIDUCIA_RETRY_DELAY:-0}}"; }
+fiducia_must_lock() { fiducia_lock_acquire "$1" "${2:-null}" true "${3:-1}" "${4:-${FIDUCIA_MAX_RETRIES:-0}}" "${5:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${6:-${FIDUCIA_RETRY_DELAY:-0}}"; }
+fiducia_lock() { fiducia_must_lock "$@"; }
+fiducia_lock_release() { # key holder fencing_token
+  _fiducia_req POST "/v1/locks/release" "$(jq -nc --arg h "$2" --argjson f "$3" '{holder:$h,fencing_token:$f}')"
 }
-
-# --- semaphores ---
-fiducia_semaphore_get() { _fiducia_req GET "/v1/semaphores?key=$(_fiducia_enc "$1")"; }
-fiducia_semaphore_acquire() { # key limit holder [ttl_ms] [wait]
-  local key="$1" limit="$2" holder="$3" ttl="${4:-null}" wait="${5:-false}"
+fiducia_semaphore_acquire() { # key [ttl_ms] [wait] [max] [max_retries] [timeout_seconds] [retry_delay_seconds]
+  local key="$1" ttl="${2:-null}" wait="${3:-true}" max="${4:-2}"
   _fiducia_req POST "/v1/semaphores/acquire" \
-    "$(jq -nc --arg k "$key" --argjson l "$limit" --arg h "$holder" --argjson t "$ttl" --argjson w "$wait" '{key:$k,limit:$l,holder:$h,ttl_ms:$t,wait:$w}')"
+    "$(jq -nc --arg k "$key" --argjson t "$ttl" --argjson w "$wait" --argjson m "$max" '{key:$k,ttl_ms:$t,wait:$w,limit:$m}')" \
+    "${5:-${FIDUCIA_MAX_RETRIES:-0}}" "${6:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${7:-${FIDUCIA_RETRY_DELAY:-0}}"
 }
+fiducia_try_semaphore() { fiducia_semaphore_acquire "$1" "${2:-null}" false "${3:-2}" "${4:-${FIDUCIA_MAX_RETRIES:-0}}" "${5:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${6:-${FIDUCIA_RETRY_DELAY:-0}}"; }
+fiducia_must_semaphore() { fiducia_semaphore_acquire "$1" "${2:-null}" true "${3:-2}" "${4:-${FIDUCIA_MAX_RETRIES:-0}}" "${5:-${FIDUCIA_LOCK_TIMEOUT:-${FIDUCIA_TIMEOUT:-}}}" "${6:-${FIDUCIA_RETRY_DELAY:-0}}"; }
+fiducia_semaphore() { fiducia_must_semaphore "$@"; }
 fiducia_semaphore_release() { # key holder fencing_token
   _fiducia_req POST "/v1/semaphores/release" "$(jq -nc --arg k "$1" --arg h "$2" --argjson f "$3" '{key:$k,holder:$h,fencing_token:$f}')"
-}
-
-# --- high-level blocking / try acquisition (live-mutex style) ---
-#
-# On success these print a handle JSON ({holder,fencing_token,key}) to stdout and
-# return 0; on "held / at capacity" (try) or timeout (blocking) they return 1.
-# Release with: handle=$(fiducia_lock key ...); fiducia_release "$handle"
-fiducia_try_lock() { # key [ttl_ms] [holder]
-  local key="$1" ttl="${2:-60000}" holder="${3:-$(_fiducia_gen_holder)}"
-  local out; out="$(fiducia_lock_acquire "$key" "$holder" "$ttl" false | jq -c '.result.output')" || return 2
-  if [ "$(printf '%s' "$out" | jq -r '.acquired')" = "true" ]; then
-    jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$out" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-    return 0
-  fi
-  return 1
-}
-
-fiducia_lock() { # key [ttl_ms] [max_wait_ms] [retry_ms] [holder]
-  local key="$1" ttl="${2:-60000}" maxwait="${3:-30000}" retry="${4:-250}" holder="${5:-$(_fiducia_gen_holder)}"
-  local out; out="$(fiducia_lock_acquire "$key" "$holder" "$ttl" true | jq -c '.result.output')" || return 2
-  if [ "$(printf '%s' "$out" | jq -r '.acquired')" = "true" ]; then
-    jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$out" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-    return 0
-  fi
-  local deadline; deadline=$(( $(_fiducia_now_ms) + maxwait ))
-  while [ "$(_fiducia_now_ms)" -lt "$deadline" ]; do
-    sleep "$(jq -n --argjson r "$retry" '$r/1000')"
-    local lk; lk="$(fiducia_lock_get "$key" | jq -c '.lock // empty')" || continue
-    if [ -n "$lk" ] && [ "$(printf '%s' "$lk" | jq -r '.holder // empty')" = "$holder" ] && [ "$(printf '%s' "$lk" | jq -r '.fencing_token // empty')" != "" ]; then
-      jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$lk" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-      return 0
-    fi
-  done
-  return 1
-}
-
-# mustLock is wait:true — same as fiducia_lock.
-fiducia_must_lock() { fiducia_lock "$@"; }
-
-fiducia_try_semaphore() { # key limit [ttl_ms] [holder]
-  local key="$1" limit="$2" ttl="${3:-60000}" holder="${4:-$(_fiducia_gen_holder)}"
-  local out; out="$(fiducia_semaphore_acquire "$key" "$limit" "$holder" "$ttl" false | jq -c '.result.output')" || return 2
-  if [ "$(printf '%s' "$out" | jq -r '.acquired')" = "true" ]; then
-    jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$out" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-    return 0
-  fi
-  return 1
-}
-
-fiducia_acquire_semaphore() { # key limit [ttl_ms] [max_wait_ms] [retry_ms] [holder]
-  local key="$1" limit="$2" ttl="${3:-60000}" maxwait="${4:-30000}" retry="${5:-250}" holder="${6:-$(_fiducia_gen_holder)}"
-  local out; out="$(fiducia_semaphore_acquire "$key" "$limit" "$holder" "$ttl" true | jq -c '.result.output')" || return 2
-  if [ "$(printf '%s' "$out" | jq -r '.acquired')" = "true" ]; then
-    jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$out" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-    return 0
-  fi
-  local deadline; deadline=$(( $(_fiducia_now_ms) + maxwait ))
-  while [ "$(_fiducia_now_ms)" -lt "$deadline" ]; do
-    sleep "$(jq -n --argjson r "$retry" '$r/1000')"
-    local slot; slot="$(fiducia_semaphore_get "$key" | jq -c --arg h "$holder" '.semaphore.holders[]? | select(.holder==$h)' | head -n1)" || continue
-    if [ -n "$slot" ] && [ "$(printf '%s' "$slot" | jq -r '.fencing_token // empty')" != "" ]; then
-      jq -nc --arg h "$holder" --argjson f "$(printf '%s' "$slot" | jq '.fencing_token')" --arg k "$key" '{holder:$h,fencing_token:$f,key:$k}'
-      return 0
-    fi
-  done
-  return 1
-}
-
-# Release a handle printed by the high-level lock/semaphore helpers.
-fiducia_release() { # handle-json
-  local h; h="$1"
-  fiducia_lock_release "$(printf '%s' "$h" | jq -r '.holder')" "$(printf '%s' "$h" | jq '.fencing_token')"
-}
-fiducia_release_semaphore() { # handle-json
-  local h; h="$1"
-  fiducia_semaphore_release "$(printf '%s' "$h" | jq -r '.key')" "$(printf '%s' "$h" | jq -r '.holder')" "$(printf '%s' "$h" | jq '.fencing_token')"
 }
 
 # --- reader-writer locks ---
@@ -135,9 +74,9 @@ fiducia_rw_acquire_write() { _fiducia_req POST "/v1/rw/$(_fiducia_enc "$1")/writ
 fiducia_rw_end_write()     { _fiducia_req POST "/v1/rw/$(_fiducia_enc "$1")/write/end" "$(jq -nc --arg l "$2" '{lock_id:$l}')"; }
 
 # --- config KV ---
-fiducia_kv_get()    { _fiducia_req GET    "/v1/kv/$(_fiducia_enc "$1")"; }
-fiducia_kv_put()    { _fiducia_req PUT    "/v1/kv/$(_fiducia_enc "$1")" "$(jq -nc --arg v "$2" --argjson t "${3:-null}" '{value:$v,ttl_ms:$t}')"; }
-fiducia_kv_delete() { _fiducia_req DELETE "/v1/kv/$(_fiducia_enc "$1")"; }
+fiducia_kv_get()    { _fiducia_req GET    "/v1/kv?key=$(_fiducia_enc "$1")"; }
+fiducia_kv_put()    { _fiducia_req PUT    "/v1/kv?key=$(_fiducia_enc "$1")" "$(jq -nc --arg v "$2" --argjson t "${3:-null}" '{value:$v,ttl_ms:$t}')"; }
+fiducia_kv_delete() { _fiducia_req DELETE "/v1/kv?key=$(_fiducia_enc "$1")"; }
 fiducia_kv_list()   { _fiducia_req GET    "/v1/kv?prefix=$(_fiducia_enc "$1")"; }
 
 # --- leader election ---

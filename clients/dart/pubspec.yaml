@@ -1,0 +1,7 @@
+name: fiducia_client
+version: 0.1.0
+description: Fiducia HTTP client for Dart.
+repository: https://github.com/fiducia-cloud/fiducia-clients
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"

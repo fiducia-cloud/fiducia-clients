@@ -88,7 +88,7 @@ def main():
     s, b = req(kv_url, "PUT", {"value": json.dumps(stored)})
     chk("seed key record into fiducia KV", s == 200 and json.loads(b).get("committed") is True, (s, b[:200]))
 
-    s, b = req(AUTH + "/v1/introspect", "POST", {"api_key": raw}, {"x-internal-secret": INTRO})
+    s, b = req(AUTH + "/v1/introspect", "POST", {"api_key": raw}, {"x-server-auth": INTRO})
     intro = json.loads(b) if s == 200 else {}
     chk("auth introspects the KV-backed key -> valid",
         s == 200 and intro.get("valid") is True and intro.get("org_id") == "org_e2e", (s, b[:200]))

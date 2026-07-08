@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>cloud.fiducia</groupId>
+  <artifactId>fiducia-client</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>fiducia-client</name>
+  <description>Fiducia HTTP client for JVM applications.</description>
+  <url>https://github.com/fiducia-cloud/fiducia-clients</url>
+
+  <licenses>
+    <license>
+      <name>UNLICENSED</name>
+      <url>https://github.com/fiducia-cloud/fiducia-clients/blob/main/clients/java/LICENSE.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <name>fiducia.cloud</name>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/fiducia-cloud/fiducia-clients.git</connection>
+    <developerConnection>scm:git:https://github.com/fiducia-cloud/fiducia-clients.git</developerConnection>
+    <url>https://github.com/fiducia-cloud/fiducia-clients/tree/main/clients/java</url>
+  </scm>
+
+  <properties>
+    <maven.compiler.release>11</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <sourceDirectory>${project.basedir}</sourceDirectory>
+    <resources>
+      <resource>
+        <directory>${project.basedir}</directory>
+        <includes>
+          <include>LICENSE.txt</include>
+        </includes>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <includes>
+            <include>cloud/fiducia/**</include>
+          </includes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.8.0</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>release</id>
+      <distributionManagement>
+        <repository>
+          <id>central</id>
+          <url>${central.repository.url}</url>
+        </repository>
+      </distributionManagement>
+      <properties>
+        <central.repository.url>https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/</central.repository.url>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>artifactory</id>
+      <distributionManagement>
+        <repository>
+          <id>fiducia-artifactory</id>
+          <url>${env.ARTIFACTORY_URL}</url>
+        </repository>
+      </distributionManagement>
+    </profile>
+  </profiles>
+</project>
