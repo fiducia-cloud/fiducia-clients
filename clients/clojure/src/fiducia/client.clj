@@ -11,7 +11,7 @@
   (:require [clojure.data.json :as json]
             [clojure.string :as str])
   (:import [java.net URI URLEncoder]
-           [java.net.http HttpClient HttpClient$Builder
+           [java.net.http HttpClient HttpClient$Builder HttpClient$Redirect
             HttpRequest HttpRequest$Builder HttpRequest$BodyPublishers
             HttpResponse HttpResponse$BodyHandlers]
            [java.time Duration]))
