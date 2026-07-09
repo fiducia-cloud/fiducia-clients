@@ -13,6 +13,7 @@ import java.net.URLEncoder
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.UUID
 import scala.language.implicitConversions
 import scala.util.control.NonFatal
 
