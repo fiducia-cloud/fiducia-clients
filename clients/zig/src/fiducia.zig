@@ -92,6 +92,12 @@ pub const ServiceHeartbeatOpts = struct { ttl_ms: ?i64 = null };
 /// Note: after `init`, do not bit-copy the `Client` value around — pass it by
 /// pointer. (The owned I/O backend is heap-pinned, so a stray copy will not
 /// dangle, but the connection pool is intended to have a single owner.)
+///
+/// Timeout: `std.http.Client.fetch` (Zig 0.16) exposes no per-request
+/// connect/read timeout, so requests inherit the OS socket defaults. The
+/// Fiducia contract has no long-poll endpoints (server-side `wait` blocks are
+/// bounded); if your deployment needs a hard deadline, wrap calls in your own
+/// timed task — a fake in-client watchdog is deliberately NOT added here.
 pub const Client = struct {
     allocator: Allocator,
     /// Base URL, trailing slash(es) trimmed. Owned.
