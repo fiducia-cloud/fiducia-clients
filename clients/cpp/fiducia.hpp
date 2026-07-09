@@ -52,6 +52,37 @@ inline void global_init() {
     (void)initialized;
 }
 
+// RAII holder for a libcurl easy handle: curl_easy_cleanup runs on every exit
+// path (normal return OR exception), so the handle never leaks even if a later
+// step throws (e.g. json::dump on invalid UTF-8) before the request completes.
+class EasyHandle {
+public:
+    EasyHandle() : h_(curl_easy_init()) {}
+    ~EasyHandle() { if (h_) curl_easy_cleanup(h_); }
+    EasyHandle(const EasyHandle&) = delete;
+    EasyHandle& operator=(const EasyHandle&) = delete;
+    CURL* get() const { return h_; }
+    explicit operator bool() const { return h_ != nullptr; }
+
+private:
+    CURL* h_;
+};
+
+// RAII holder for a libcurl header list; curl_slist_free_all runs on every exit
+// path. Kept in scope for the whole transfer, then freed automatically.
+class HeaderList {
+public:
+    HeaderList() = default;
+    ~HeaderList() { if (list_) curl_slist_free_all(list_); }
+    HeaderList(const HeaderList&) = delete;
+    HeaderList& operator=(const HeaderList&) = delete;
+    void append(const char* header) { list_ = curl_slist_append(list_, header); }
+    curl_slist* get() const { return list_; }
+
+private:
+    curl_slist* list_ = nullptr;
+};
+
 }  // namespace detail
 
 // A thin HTTP wrapper over the fiducia.cloud contract. Construct it with a base
