@@ -94,6 +94,50 @@
        data))))
 
 ;; ---------------------------------------------------------------------------
+;; blocking-acquire (poll) helpers
+;; ---------------------------------------------------------------------------
+;;
+;; The server does NOT hold the connection on wait=true: it reserves a FIFO slot
+;; and returns {acquired:false, queued:true} immediately. So the blocking helpers
+;; (`must-lock`/`lock`, `must-semaphore`/`semaphore`) must POLL the matching
+;; `*-get` until this holder actually holds the resource, or a wait budget runs
+;; out. Mirrors the Ruby/Elixir reference clients.
+
+(def ^:private default-acquire-ttl-ms    60000) ; lease TTL for a held grant
+(def ^:private default-max-wait-ms        30000) ; total time to wait to acquire
+(def ^:private default-retry-interval-ms    250) ; poll interval
+
+(defn- gen-holder
+  "Stable, unique holder id used to reserve and then recognise our own slot."
+  []
+  (str "fdc-" (java.util.UUID/randomUUID)))
+
+(defn- now-ms
+  "Monotonic clock in ms (immune to wall-clock adjustments)."
+  []
+  (quot (System/nanoTime) 1000000))
+
+(defn- acquire-output
+  "The map at result.output of an acquire response (or nil)."
+  [resp]
+  (get-in resp [:result :output]))
+
+(defn- grant
+  "A held-grant map the caller releases with its :holder + :fencing_token.
+   `m` is either an acquire `output` or a `*-get` holder entry."
+  [key holder m]
+  {:key key :holder holder
+   :fencing_token    (:fencing_token m)
+   :lease_expires_ms (:lease_expires_ms m)})
+
+(defn- acquire-timeout!
+  [kind key holder max-wait-ms attempts]
+  (throw (ex-info (str "fiducia: timed out acquiring " kind " " (pr-str key)
+                       " after " max-wait-ms "ms (" attempts " polls)")
+                  {:timeout true :kind kind :key key :holder holder
+                   :max_wait_ms max-wait-ms :attempts attempts})))
+
+;; ---------------------------------------------------------------------------
 ;; misc
 ;; ---------------------------------------------------------------------------
 
