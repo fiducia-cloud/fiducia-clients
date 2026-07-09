@@ -69,6 +69,7 @@ jobs:
   # sibling-repo path deps), so it is a HARD gate — not continue-on-error.
   rust-wasm:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -80,8 +81,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      # compile gate + full wasm-bindgen (emits pkg/ with .wasm + .d.ts)
-      - run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
-      - run: wasm-pack build clients/rust-wasm --target web
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust-wasm
+      # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      # compile gate
+      - name: Compile to wasm32
+        run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
+      # full wasm-bindgen (emits pkg/ with .wasm + .d.ts); --dev skips wasm-opt
+      - name: wasm-bindgen package
+        run: wasm-pack build clients/rust-wasm --target web --dev
+      # Regression guard: no `bigint` (i64 leak) may reach the generated .d.ts.
+      - name: Assert generated .d.ts is clean
+        run: |
+          dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
+          echo "checking $dts"
+          if grep -nE ':[[:space:]]*(bigint|Map<)|:[[:space:]]*Value([;[]|$)' "$dts"; then
+            echo "::error::generated .d.ts has a bigint / Value / Map<> — type-mapping regression"
+            exit 1
+          fi
+          echo "clean"
