@@ -123,9 +123,42 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 
 ## Notes
 
-- **Thin by design.** The `try_*` / `must_*` / `lock` / `semaphore` helpers only
-  flip the `wait` flag on the corresponding acquire call — there is no
-  client-side wait/poll loop.
+### Blocking helpers
+
+`try_lock`/`try_semaphore` set `wait = false` and return the raw acquire response
+in one shot (a grant if free right now, otherwise the queued/not-acquired response) —
+no polling.
+
+`must_lock`/`lock` and `must_semaphore`/`semaphore` **block until held**. The server
+does not hold the connection on `wait = true`; it reserves a FIFO slot and returns
+immediately, so these helpers poll:
+
+1. acquire with `wait = true` (using a caller-supplied `holder` or a generated
+   `fdc-…` id, and `ttl_ms` defaulting to `60000`);
+2. if the acquire already reports `acquired`, return the grant;
+3. otherwise poll `lock_get` / `semaphore_get` every `retry_interval_ms` (default
+   `250`) until our `holder` appears **with a `fencing_token`**, or `max_wait_ms`
+   (default `30000`, or an optional `max_retries`) elapses.
+
+On success they return a grant table `{ key, holder, fencing_token,
+lease_expires_ms, release() }` — call `grant.release()` (or pass the fields to
+`c:lock_release` / `c:semaphore_release`) when done. On timeout they **raise** (so
+wrap blocking calls in `pcall`) a timeout table
+`{ status = 0, timeout = true, keys, waited_ms, body }`:
+
+```lua
+local ok, res = pcall(function()
+  return c:must_lock("orders/checkout", { max_wait_ms = 5000, retry_interval_ms = 200 })
+end)
+if ok then
+  -- res is the held grant
+  res.release()
+elseif res.timeout then
+  print("gave up after " .. res.waited_ms .. "ms")
+else
+  print("error: HTTP " .. tostring(res.status), res.body)
+end
+```
 - **TLS (fail-closed).** For `https://` URLs the client verifies the server
   certificate by default (`verify = "peer"`) — luasec's insecure `verify = "none"`
   default is **not** used. A CA bundle is auto-detected at request time from, in
