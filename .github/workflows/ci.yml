@@ -75,6 +75,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       # generator self-tests + drift check (committed lib.rs vs operations.json)
       - run: python3 -m unittest generate_test
       - run: python3 generate.py --check rust-wasm
@@ -91,9 +94,10 @@ jobs:
       # compile gate
       - name: Compile to wasm32
         run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
-      # full wasm-bindgen (emits pkg/ with .wasm + .d.ts); --dev skips wasm-opt
+      # full wasm-bindgen for the nodejs target (emits pkg/ with .wasm + .d.ts);
+      # the .d.ts is target-agnostic, and the nodejs pkg drives the smoke test.
       - name: wasm-bindgen package
-        run: wasm-pack build clients/rust-wasm --target web --dev
+        run: wasm-pack build clients/rust-wasm --target nodejs --dev
       # Regression guard: no `bigint` (i64 leak) may reach the generated .d.ts.
       - name: Assert generated .d.ts is clean
         run: |
@@ -104,3 +108,7 @@ jobs:
             exit 1
           fi
           echo "clean"
+      # Runtime behavior: drive the compiled wasm against a stubbed fetch
+      # (wire format, integer bodies, timeout, error shape).
+      - name: Runtime smoke test
+        run: node --test clients/rust-wasm/smoke.test.mjs
