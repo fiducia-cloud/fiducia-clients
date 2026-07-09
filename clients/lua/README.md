@@ -24,15 +24,17 @@ This pulls in `luasocket`, `luasec`, and `dkjson`. Requires Lua >= 5.1.
 local Fiducia = require("fiducia")
 local c = Fiducia.new("https://api.fiducia.cloud")
 
--- Acquire, use, release a lock.
-local grant = c:lock_acquire("orders/checkout", { holder = "worker-a", ttl_ms = 30000 })
-local token = grant.result.output.fencing_token
--- ... do work guarded by the fencing token ...
-c:lock_release("orders/checkout", "worker-a", token)
+-- Block until the lock is held, use it, release it.
+local grant = c:must_lock("orders/checkout", { holder = "worker-a", ttl_ms = 30000 })
+-- ... do work guarded by grant.fencing_token ...
+grant.release()   -- or: c:lock_release(grant.key, grant.holder, grant.fencing_token)
 ```
 
-Each operation returns the decoded JSON response as a Lua table (or `nil` for an
-empty body). Methods are called with `:` so they receive the client as `self`.
+`must_lock`/`lock` and `must_semaphore`/`semaphore` **block**: they poll until the
+lock/permit is held or the wait budget elapses (see [Blocking helpers](#blocking-helpers)).
+They return a **grant** table `{ key, holder, fencing_token, lease_expires_ms, release() }`.
+Every other operation returns the decoded JSON response as a Lua table (or `nil`
+for an empty body). Methods are called with `:` so they receive the client as `self`.
 
 Optional named parameters are passed as a trailing `opts` table; only the fields
 you set are sent (nil fields are omitted from the request body, which matters for
