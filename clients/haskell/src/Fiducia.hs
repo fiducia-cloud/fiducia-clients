@@ -255,9 +255,25 @@ semaphoreAcquire c key limit holder ttlMs wait =
 trySemaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
 trySemaphore c key limit holder ttlMs = semaphoreAcquire c key limit holder ttlMs False
 
--- | Blocking permit acquire ('semaphoreAcquire' with @wait = True@).
+-- | Blocking permit acquire: acquire with @wait = True@, then POLL 'semaphoreGet'
+-- until this holder appears among the permit holders with a fencing token. Uses
+-- 'defaultPollOpts' and throws 'LockTimeout' on exhaustion; the holder\/ttl and
+-- return-shape contract is the same as 'mustLock'.
 mustSemaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
-mustSemaphore c key limit holder ttlMs = semaphoreAcquire c key limit holder ttlMs True
+mustSemaphore c = mustSemaphoreWith c defaultPollOpts
+
+-- | 'mustSemaphore' with an explicit poll budget.
+mustSemaphoreWith :: Client -> PollOpts -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
+mustSemaphoreWith c opts key limit mHolder ttlMs = do
+  holder <- maybe genHolder pure mHolder
+  resp <- semaphoreAcquire c key limit (Just holder) (Just (fromMaybe defaultLeaseMs ttlMs)) True
+  let out = output resp
+  if field "acquired" out == Just (Bool True)
+    then pure (grantFromOutput holder out)
+    else pollUntilHeld opts key holder $ do
+      sem <- semaphoreGet c key
+      let holders = asArray (fromMaybe Null (field "semaphore" sem >>= field "holders"))
+      pure (listToMaybe (mapMaybe (heldGrant holder) holders))
 
 -- | Alias for 'mustSemaphore'.
 semaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
