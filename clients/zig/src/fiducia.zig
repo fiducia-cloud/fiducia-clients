@@ -753,3 +753,64 @@ test "parseBody: non-JSON body -> raw string, not a transport error" {
     try std.testing.expect(parsed.value == .string);
     try std.testing.expectEqualStrings("502 Bad Gateway", parsed.value.string);
 }
+
+// --- redirect-behavior integration test (loopback mock server) -------------
+
+/// Mock-server thread: accept exactly one connection and reply `302 Found`
+/// with an absolute `Location` at a dead port. If the client wrongly *followed*
+/// the redirect it would hit the closed port and fail fast, so a regression
+/// surfaces as a test error rather than a hang.
+fn serveOne302(io: std.Io, server: *std.Io.net.Server) void {
+    const stream = server.accept(io) catch return;
+    defer stream.close(io);
+    var recv_buf: [4096]u8 = undefined;
+    var send_buf: [1024]u8 = undefined;
+    var sr = stream.reader(io, &recv_buf);
+    var sw = stream.writer(io, &send_buf);
+    var http_server = std.http.Server.init(&sr.interface, &sw.interface);
+    var req = http_server.receiveHead() catch return;
+    req.respond("moved", .{
+        .status = .found, // 302
+        .keep_alive = false,
+        .extra_headers = &.{.{ .name = "location", .value = "http://127.0.0.1:1/moved" }},
+    }) catch return;
+}
+
+test "3xx is surfaced as status, never auto-followed" {
+    const testing = std.testing;
+
+    // Heap-pinned blocking I/O backend for the mock server (mirrors Client).
+    const backend = try testing.allocator.create(std.Io.Threaded);
+    backend.* = std.Io.Threaded.init(testing.allocator, .{});
+    defer {
+        backend.deinit();
+        testing.allocator.destroy(backend);
+    }
+    const io = backend.io();
+
+    // std 0.16 exposes no public getsockname, so bind the first free port in a
+    // small range and hand the client that exact port.
+    var port: u16 = 39117;
+    var server = while (port < 39217) : (port += 1) {
+        const addr = std.Io.net.IpAddress.parse("127.0.0.1", port) catch unreachable;
+        break addr.listen(io, .{ .reuse_address = true }) catch continue;
+    } else return error.NoFreeLoopbackPort;
+    defer server.deinit(io);
+
+    const t = try std.Thread.spawn(.{}, serveOne302, .{ io, &server });
+    defer t.join();
+
+    const url = try std.fmt.allocPrint(testing.allocator, "http://127.0.0.1:{d}", .{port});
+    defer testing.allocator.free(url);
+
+    var c = try Client.init(testing.allocator, url);
+    defer c.deinit();
+
+    const resp = try c.status(); // GET /v1/status -> mock server replies 302
+    defer resp.deinit();
+
+    // The 302 must return verbatim (>= 300 -> the client's error), NOT be
+    // followed to Location; the non-JSON body lands as a `.string`.
+    try testing.expectEqual(@as(u16, 302), resp.status);
+    try testing.expect(!resp.ok());
+}
