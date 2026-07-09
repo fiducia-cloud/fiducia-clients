@@ -360,6 +360,9 @@ def _rw_enc_expr(x):
     # Path/query params encoded to a String before URL-encoding.
     if x["type"] == "string":
         return "enc(&%s)" % x["name"]
+    if x["type"] == "object":
+        # An object in the query string is sent as its JSON text.
+        return "enc(&js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default())" % x["name"]
     return "enc(&%s.to_string())" % x["name"]
 
 
