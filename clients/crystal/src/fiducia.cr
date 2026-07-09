@@ -240,6 +240,7 @@ module Fiducia
       if timeout = @request_timeout
         client.connect_timeout = timeout
         client.read_timeout = timeout
+        client.write_timeout = timeout
       end
 
       response = begin
