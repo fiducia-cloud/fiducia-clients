@@ -1,0 +1,25 @@
+opam-version: "2.0"
+version: "0.1.0"
+synopsis: "HTTP client for fiducia.cloud"
+description: """
+Thin, synchronous HTTP client for the fiducia.cloud coordination API: locks,
+semaphores, idempotency, reader-writer locks, config KV, rate limiting, cron
+scheduling, leader election, and service discovery. Implements PROTOCOL.md.
+"""
+maintainer: "fiducia.cloud"
+authors: "fiducia.cloud"
+license: "LicenseRef-proprietary"
+homepage: "https://github.com/fiducia-cloud/fiducia-clients"
+dev-repo: "git+https://github.com/fiducia-cloud/fiducia-clients.git"
+bug-reports: "https://github.com/fiducia-cloud/fiducia-clients/issues"
+depends: [
+  "ocaml" {>= "4.14"}
+  "dune" {>= "3.0"}
+  "ezcurl"
+  "curl"
+  "yojson"
+  "uri"
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]
