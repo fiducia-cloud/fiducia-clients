@@ -17,6 +17,10 @@ module Fiducia
   , newClient
     -- * Errors
   , FiduciaError(..)
+  , LockTimeout(..)
+    -- * blocking-acquire poll options
+  , PollOpts(..)
+  , defaultPollOpts
     -- * misc
   , health
   , status
@@ -26,6 +30,7 @@ module Fiducia
   , lockAcquireMany
   , tryLock
   , mustLock
+  , mustLockWith
   , lock
   , lockRelease
     -- * semaphores
@@ -33,6 +38,7 @@ module Fiducia
   , semaphoreAcquire
   , trySemaphore
   , mustSemaphore
+  , mustSemaphoreWith
   , semaphore
   , semaphoreRelease
     -- * idempotency
