@@ -18,15 +18,43 @@ import gleam/httpc
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import gleam/uri
 
-/// A failed call: either a non-2xx HTTP response (`Http`, carrying the numeric
-/// status and the parsed JSON body as a `Dynamic`) or a transport/network
-/// failure (`Transport`).
+/// A failed call: a non-2xx HTTP response (`Http`, carrying the numeric status
+/// and the parsed JSON body as a `Dynamic`), a transport/network failure
+/// (`Transport`), or a blocking acquire that never became held within its wait
+/// budget (`Timeout`, carrying the elapsed budget in milliseconds).
 pub type FiduciaError {
   Http(status: Int, body: Dynamic)
   Transport(message: String)
+  Timeout(waited_ms: Int)
+}
+
+/// A held lock or semaphore grant returned by the blocking `must_*` / `lock` /
+/// `semaphore` helpers. It proves you hold `key` as `holder`; pass `holder` and
+/// `fencing_token` to the matching `*_release` to give it back.
+pub type Grant {
+  Grant(
+    key: String,
+    holder: String,
+    fencing_token: Int,
+    lease_expires_ms: Option(Int),
+  )
+}
+
+/// Retry budget for the blocking `must_*` / `lock` / `semaphore` helpers:
+/// `max_wait_ms` is the total time to keep polling, `retry_interval_ms` the gap
+/// between polls, and `max_retries` an optional hard cap on poll attempts.
+pub type Retry {
+  Retry(max_wait_ms: Int, retry_interval_ms: Int, max_retries: Option(Int))
+}
+
+/// Default retry budget, matching the reference clients: wait up to 30s, poll
+/// every 250ms, with no fixed attempt cap.
+pub fn default_retry() -> Retry {
+  Retry(max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: None)
 }
 
 /// An opaque handle to a Fiducia endpoint. Build it with `new`.
