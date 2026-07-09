@@ -12,7 +12,8 @@ import FoundationNetworking
 #endif
 
 /// A non-2xx response. Carries the numeric HTTP status and the parsed JSON body
-/// (the natural `Any` produced by `JSONSerialization`, or `nil` for an empty body).
+/// (the natural `Any` produced by `JSONSerialization`, the raw text `String` when
+/// the body is not JSON, or `nil` for an empty body).
 public struct FiduciaError: Error, CustomStringConvertible {
     public let status: Int
     public let body: Any?
@@ -285,9 +286,16 @@ public final class FiduciaClient {
 
         let (data, response) = try await perform(req)
         let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let parsed: Any? = data.isEmpty
-            ? nil
-            : try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        let parsed: Any?
+        if data.isEmpty {
+            parsed = nil
+        } else if let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            parsed = json
+        } else {
+            // Non-JSON body (e.g. a proxy's HTML/text error page): keep the raw
+            // text rather than dropping it, so error diagnostics are not lost.
+            parsed = String(data: data, encoding: .utf8)
+        }
 
         if httpStatus >= 300 {
             throw FiduciaError(status: httpStatus, body: parsed)

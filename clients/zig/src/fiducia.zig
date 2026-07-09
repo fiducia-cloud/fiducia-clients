@@ -41,7 +41,9 @@ pub const Response = struct {
         self.json.deinit();
     }
 
-    /// Parsed JSON body. A `.null` value means the response body was empty.
+    /// Parsed JSON body. A `.null` value means the response body was empty;
+    /// a body that was not valid JSON is surfaced as a `.string` of the raw
+    /// bytes (so a non-JSON error page never fails the request).
     pub fn value(self: Response) Value {
         return self.json.value;
     }
@@ -531,8 +533,9 @@ pub const Client = struct {
     // ============================ internals ============================
 
     /// Build `<base><path>`, issue the request, capture the whole body, and
-    /// parse it as JSON (empty body -> a `.null` value). Never throws on a
-    /// non-2xx status; that is reported on `Response.status`.
+    /// parse it as JSON (empty body -> a `.null` value; a non-JSON body ->
+    /// a `.string` of the raw bytes). Never throws on a non-2xx status; that
+    /// is reported on `Response.status`.
     fn request(self: *Client, method: std.http.Method, path: []const u8, body: ?[]const u8) Error!Response {
         const url = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base, path });
         defer self.allocator.free(url);
@@ -554,14 +557,7 @@ pub const Client = struct {
             .headers = headers,
         }) catch return error.Transport;
 
-        const bytes = sink.written();
-        const parsed = std.json.parseFromSlice(
-            Value,
-            self.allocator,
-            if (bytes.len == 0) "null" else bytes,
-            .{},
-        ) catch return error.Transport;
-
+        const parsed = try parseBody(self.allocator, sink.written());
         return .{ .status = @intFromEnum(result.status), .json = parsed };
     }
 
@@ -587,6 +583,37 @@ pub const Client = struct {
         return w.toOwnedSlice();
     }
 };
+
+// --- response body -> caller-owned Parsed(Value) --------------------------
+
+/// Package a raw HTTP response body as a `Parsed(Value)` the caller owns:
+///   * empty body       -> `.null`
+///   * well-formed JSON  -> the parsed value
+///   * anything else (HTML / plaintext error page, truncated JSON) -> a JSON
+///     `.string` holding the raw bytes, so a non-JSON body never turns a real
+///     HTTP status into `error.Transport`.
+/// Only genuine allocation failure is propagated. The result owns its arena
+/// (dynamic `Value` parsing copies every string via `.alloc_always`), so it
+/// never aliases `bytes` and stays valid after the caller frees the body.
+fn parseBody(allocator: Allocator, bytes: []const u8) Allocator.Error!std.json.Parsed(Value) {
+    if (bytes.len != 0) {
+        if (std.json.parseFromSlice(Value, allocator, bytes, .{})) |parsed| {
+            return parsed;
+        } else |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            // Non-JSON body: fall through and wrap the raw text below.
+        }
+    }
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    errdefer allocator.destroy(arena);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const val: Value = if (bytes.len == 0)
+        .null
+    else
+        .{ .string = try arena.allocator().dupe(u8, bytes) };
+    return .{ .arena = arena, .value = val };
+}
 
 // --- percent-encoding (RFC 3986 unreserved set kept; everything else %XX) ---
 
@@ -686,4 +713,36 @@ test "response check maps >=300 to error.Http" {
     defer r.deinit();
     try std.testing.expect(!r.ok());
     try std.testing.expectError(error.Http, r.check());
+}
+
+test "kv put keeps prev_revision:0 (CAS create-only), never dropped" {
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    var js = Stringify{ .writer = &sink.writer };
+    try js.beginObject();
+    try fJson(&js, "value", Value{ .string = "v" });
+    try fIntOpt(&js, "ttl_ms", null);
+    try fIntOpt(&js, "prev_revision", 0);
+    try js.endObject();
+    try std.testing.expectEqualStrings("{\"value\":\"v\",\"prev_revision\":0}", sink.written());
+}
+
+test "parseBody: empty body -> null" {
+    const parsed = try parseBody(std.testing.allocator, "");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .null);
+}
+
+test "parseBody: valid JSON parses normally" {
+    const parsed = try parseBody(std.testing.allocator, "{\"a\":1}");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .object);
+    try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("a").?.integer);
+}
+
+test "parseBody: non-JSON body -> raw string, not a transport error" {
+    const parsed = try parseBody(std.testing.allocator, "502 Bad Gateway");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .string);
+    try std.testing.expectEqualStrings("502 Bad Gateway", parsed.value.string);
 }

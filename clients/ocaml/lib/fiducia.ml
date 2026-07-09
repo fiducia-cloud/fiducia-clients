@@ -12,6 +12,12 @@
    payload (or `Null for an empty body). *)
 exception Fiducia_error of { status : int; body : Yojson.Safe.t }
 
+(* A client owns a single libcurl easy handle (via ezcurl) that is reused across
+   requests for connection pooling. Like every libcurl easy handle it is NOT safe
+   for concurrent use: do not drive requests on one [client] from multiple threads
+   or domains at the same time — use one client per thread, or serialize access.
+   The handle is freed automatically when the [client] is garbage-collected
+   (ezcurl registers a finaliser); call [close] for deterministic cleanup. *)
 type client = {
   base : string;
   ez : Ezcurl.t;
@@ -38,6 +44,10 @@ let create ?timeout base_url =
     | _ -> ()
   in
   { base; ez = Ezcurl.make ~set_opts () }
+
+(* Free the underlying libcurl handle now rather than at GC time. The client must
+   not be used after this. *)
+let close c = Ezcurl.delete c.ez
 
 (* percent-encode a string for a path segment or query value. `Generic escapes
    everything except RFC 3986 unreserved chars, so '/', spaces, '&', '=' … are

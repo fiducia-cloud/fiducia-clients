@@ -64,6 +64,19 @@ function _body(pairs::Pair...)
     return body
 end
 
+# Parse a response body. An empty body becomes `nothing`. A body that is not
+# valid JSON (e.g. a proxy / load-balancer error page) falls back to the raw
+# text, so a non-JSON error body surfaces as a `FiduciaError` carrying that text
+# rather than crashing the client with a parse exception.
+function _parse_body(text::AbstractString)
+    isempty(strip(text)) && return nothing
+    try
+        return JSON.parse(text)
+    catch
+        return text
+    end
+end
+
 function _request(c::Client, method::AbstractString, path::AbstractString, body = nothing)
     headers = Pair{String,String}[]
     payload = ""
@@ -73,7 +86,7 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
     end
     resp = HTTP.request(method, c.base_url * path, headers, payload; status_exception = false)
     text = String(resp.body)
-    data = isempty(strip(text)) ? nothing : JSON.parse(text)
+    data = _parse_body(text)
     resp.status >= 300 && throw(FiduciaError(resp.status, data))
     return data
 end

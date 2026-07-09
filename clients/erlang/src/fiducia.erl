@@ -391,7 +391,7 @@ request(#{base := Base}, Method, Path, Body) ->
             undefined -> {Url, []};
             _ -> {Url, [], "application/json", iolist_to_binary(json:encode(Body))}
         end,
-    case httpc:request(Method, Request, [], [{body_format, binary}]) of
+    case httpc:request(Method, Request, http_opts(Base), [{body_format, binary}]) of
         {ok, {{_Version, Status, _Reason}, _Headers, RespBody}} ->
             Data = decode_body(RespBody),
             case Status >= 300 of
@@ -402,5 +402,21 @@ request(#{base := Base}, Method, Path, Body) ->
             {error, Reason}
     end.
 
+%% Verify the server certificate on HTTPS. httpc only enables verification by
+%% default from OTP 28 on; set it explicitly so the client is also safe on the
+%% OTP 27 it supports. Plain HTTP needs no TLS options.
+http_opts(<<"https:", _/binary>>) ->
+    [{ssl, [{verify, verify_peer},
+            {cacerts, public_key:cacerts_get()},
+            {customize_hostname_check,
+             [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}]}];
+http_opts(_) ->
+    [].
+
 decode_body(<<>>) -> null;
-decode_body(Body) when is_binary(Body) -> json:decode(Body).
+decode_body(Body) when is_binary(Body) ->
+    %% Fall back to the raw bytes when the body is not valid JSON (e.g. a proxy
+    %% error page or plain-text error) so a non-JSON response never crashes.
+    try json:decode(Body)
+    catch _:_ -> Body
+    end.

@@ -52,6 +52,37 @@ inline void global_init() {
     (void)initialized;
 }
 
+// RAII holder for a libcurl easy handle: curl_easy_cleanup runs on every exit
+// path (normal return OR exception), so the handle never leaks even if a later
+// step throws (e.g. json::dump on invalid UTF-8) before the request completes.
+class EasyHandle {
+public:
+    EasyHandle() : h_(curl_easy_init()) {}
+    ~EasyHandle() { if (h_) curl_easy_cleanup(h_); }
+    EasyHandle(const EasyHandle&) = delete;
+    EasyHandle& operator=(const EasyHandle&) = delete;
+    CURL* get() const { return h_; }
+    explicit operator bool() const { return h_ != nullptr; }
+
+private:
+    CURL* h_;
+};
+
+// RAII holder for a libcurl header list; curl_slist_free_all runs on every exit
+// path. Kept in scope for the whole transfer, then freed automatically.
+class HeaderList {
+public:
+    HeaderList() = default;
+    ~HeaderList() { if (list_) curl_slist_free_all(list_); }
+    HeaderList(const HeaderList&) = delete;
+    HeaderList& operator=(const HeaderList&) = delete;
+    void append(const char* header) { list_ = curl_slist_append(list_, header); }
+    curl_slist* get() const { return list_; }
+
+private:
+    curl_slist* list_ = nullptr;
+};
+
 }  // namespace detail
 
 // A thin HTTP wrapper over the fiducia.cloud contract. Construct it with a base
@@ -363,31 +394,41 @@ private:
 
     static std::size_t write_cb(char* ptr, std::size_t size, std::size_t nmemb,
                                 void* userdata) {
+        std::size_t n = size * nmemb;
         auto* out = static_cast<std::string*>(userdata);
-        out->append(ptr, size * nmemb);
-        return size * nmemb;
+        // Never let a C++ exception unwind through libcurl's C stack (UB). On
+        // allocation failure, signal a short write so curl aborts the transfer.
+        try {
+            out->append(ptr, n);
+        } catch (...) {
+            return 0;
+        }
+        return n;
     }
 
     // URL-encode one path/query segment (RFC 3986) via libcurl.
     static std::string enc(const std::string& s) {
         detail::global_init();
-        CURL* curl = curl_easy_init();
-        char* escaped = curl_easy_escape(curl, s.c_str(), static_cast<int>(s.size()));
+        detail::EasyHandle easy;  // freed on every return path (incl. throws)
+        char* escaped =
+            curl_easy_escape(easy.get(), s.c_str(), static_cast<int>(s.size()));
         std::string out = escaped ? std::string(escaped) : std::string();
         if (escaped) curl_free(escaped);
-        if (curl) curl_easy_cleanup(curl);
         return out;
     }
 
     json request(const std::string& method, const std::string& path,
                  std::optional<json> body = std::nullopt) {
-        CURL* curl = curl_easy_init();
-        if (!curl) throw std::runtime_error("fiducia: curl_easy_init failed");
+        // Both handles are RAII-managed: they are released on every exit path,
+        // including if body->dump() throws below or an error is thrown later.
+        detail::EasyHandle easy;
+        if (!easy) throw std::runtime_error("fiducia: curl_easy_init failed");
+        CURL* curl = easy.get();
 
         std::string url = base_ + path;
         std::string response;
         std::string payload;
-        struct curl_slist* headers = nullptr;
+        detail::HeaderList headers;
 
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
@@ -399,18 +440,16 @@ private:
 
         if (body) {
             payload = body->dump();
-            headers = curl_slist_append(headers, "Content-Type: application/json");
+            headers.append("Content-Type: application/json");
             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
             curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
                              static_cast<long>(payload.size()));
         }
-        if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (headers.get()) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
         CURLcode rc = curl_easy_perform(curl);
         long status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-        if (headers) curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
 
         if (rc != CURLE_OK)
             throw std::runtime_error(std::string("fiducia: request failed: ") +

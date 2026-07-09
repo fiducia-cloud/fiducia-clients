@@ -15,6 +15,10 @@
 --
 -- Deps (LuaRocks): luasocket, luasec, dkjson. Optional fields are omitted from
 -- request bodies when nil (CAS-friendly); booleans such as wait are always sent.
+--
+-- TLS: luasec's ssl.https convenience module does NOT verify the server
+-- certificate by default. Pass Fiducia.new(url, { tls = { verify = "peer",
+-- cafile = "/path/ca.pem" } }) to enable certificate verification.
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")
@@ -44,18 +48,27 @@ local function transport_for(url)
   local scheme = (url:match("^(%a[%w+.-]*)://") or ""):lower()
   if scheme == "https" then
     if not https then https = require("ssl.https") end
-    return https
+    return https, true
   end
-  return http
+  return http, false
 end
 
 local Fiducia = {}
 Fiducia.__index = Fiducia
 Fiducia._VERSION = "0.1.0"
 
--- new(base_url) -> client. The trailing slash of base_url is trimmed.
-function Fiducia.new(base_url)
-  return setmetatable({ base = (tostring(base_url):gsub("/+$", "")) }, Fiducia)
+-- new(base_url [, opts]) -> client. The trailing slash of base_url is trimmed.
+-- opts.tls (optional): a table of luasec TLS parameters (verify, cafile, capath,
+-- protocol, options, ...) merged into every https request. luasec's ssl.https
+-- convenience module defaults to verify = "none" (it does NOT authenticate the
+-- server); pass e.g. opts.tls = { verify = "peer", cafile = "/path/ca.pem" } to
+-- turn certificate verification ON. Ignored for http:// URLs.
+function Fiducia.new(base_url, opts)
+  opts = opts or {}
+  return setmetatable({
+    base = (tostring(base_url):gsub("/+$", "")),
+    tls = opts.tls,
+  }, Fiducia)
 end
 
 function Fiducia:_request(method, path, body)
@@ -73,13 +86,19 @@ function Fiducia:_request(method, path, body)
   end
 
   local chunks = {}
-  local ok, code = transport_for(url).request({
-    url = url,
-    method = method,
-    headers = headers,
-    source = source,
-    sink = ltn12.sink.table(chunks),
-  })
+  local transport, is_https = transport_for(url)
+  -- Seed the request table with caller-supplied TLS params (https only), then set
+  -- the core fields last so url/method/headers/source/sink can never be clobbered.
+  local reqt = {}
+  if is_https and self.tls then
+    for k, v in pairs(self.tls) do reqt[k] = v end
+  end
+  reqt.url = url
+  reqt.method = method
+  reqt.headers = headers
+  reqt.source = source
+  reqt.sink = ltn12.sink.table(chunks)
+  local ok, code = transport.request(reqt)
 
   if not ok then
     -- Connection / TLS / DNS failure: `code` holds the error message.

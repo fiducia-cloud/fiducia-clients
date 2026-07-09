@@ -124,8 +124,19 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 - **Thin by design.** The `try_*` / `must_*` / `lock` / `semaphore` helpers only
   flip the `wait` flag on the corresponding acquire call — there is no
   client-side wait/poll loop.
-- **TLS** uses luasec's default parameters for the `https` convenience module;
-  certificate verification depends on your luasec build and system CA store.
+- **TLS.** luasec's `ssl.https` convenience module does **not** verify the server
+  certificate by default (`verify = "none"`). To turn certificate verification on,
+  pass TLS parameters to the constructor — they are merged into every `https://`
+  request:
+
+  ```lua
+  local c = Fiducia.new("https://api.fiducia.cloud", {
+    tls = { verify = "peer", protocol = "any", cafile = "/etc/ssl/cert.pem" },
+  })
+  ```
+
+  `tls` accepts any luasec parameter (`verify`, `cafile`, `capath`, `protocol`,
+  `options`, …). It is ignored for `http://` URLs.
 
 ## License
 

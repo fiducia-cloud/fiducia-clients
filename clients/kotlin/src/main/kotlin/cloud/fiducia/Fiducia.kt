@@ -16,6 +16,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -315,10 +316,21 @@ class FiduciaClient(baseUrl: String) {
             Thread.currentThread().interrupt()
             throw RuntimeException(e)
         }
-        val text = res.body()
-        val parsed: JsonElement? = if (text.isNullOrEmpty()) null else Json.parseToJsonElement(text)
+        val parsed: JsonElement? = parseBody(res.body())
         if (res.statusCode() >= 300) throw FiduciaException(res.statusCode(), parsed)
         return parsed ?: JsonNull
+    }
+
+    // Parse the response body as JSON. An empty/absent body (e.g. 204 No Content)
+    // is null. A non-JSON body (proxy HTML, a plain-text error, etc.) must NOT crash
+    // the client: fall back to the raw text so a FiduciaException can still carry it.
+    private fun parseBody(text: String?): JsonElement? {
+        if (text.isNullOrEmpty()) return null
+        return try {
+            Json.parseToJsonElement(text)
+        } catch (e: SerializationException) {
+            JsonPrimitive(text)
+        }
     }
 
     private fun resolveTimeout(lockAcquire: Boolean): Duration? =

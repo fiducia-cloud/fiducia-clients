@@ -34,7 +34,10 @@ proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
 
 proc enc(s: string): string =
   ## Percent-encode a string for use in a path segment or query value.
-  encodeUrl(s)
+  ## `usePlus = false` so a space is emitted as `%20` (a literal `+` would be
+  ## wrong inside a path segment) rather than `+`; `/` becomes `%2F` so a key
+  ## or name never leaks an extra path segment.
+  encodeUrl(s, usePlus = false)
 
 proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): JsonNode =
   let client = newHttpClient(timeout = c.timeout)
@@ -56,7 +59,13 @@ proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): J
         status = 0
     var data: JsonNode = nil
     if raw.len > 0:
-      data = parseJson(raw)
+      try:
+        data = parseJson(raw)
+      except JsonParsingError:
+        # A non-JSON body (e.g. an HTML 502 from a proxy, or a plain-text
+        # error) must not crash the client: carry it as a raw JSON string so
+        # error handlers can still inspect `FiduciaError.body`.
+        data = newJString(raw)
     if status >= 300:
       raise newFiduciaError(status, data)
     result = data

@@ -74,8 +74,11 @@
                                      (HttpResponse$BodyHandlers/ofString))
            status (.statusCode resp)
            ^String raw (.body resp)
-           data (when (and raw (not (.isEmpty raw)))
-                  (json/read-str raw :key-fn keyword))]
+           data (when-not (str/blank? raw)
+                  ;; A non-JSON body (e.g. a proxy's plain-text 5xx) must not
+                  ;; crash the client: fall back to the raw text.
+                  (try (json/read-str raw :key-fn keyword)
+                       (catch Exception _ raw)))]
        (when (>= status 300)
          (throw (ex-info (str "fiducia: HTTP " status)
                          {:status status :body data})))
