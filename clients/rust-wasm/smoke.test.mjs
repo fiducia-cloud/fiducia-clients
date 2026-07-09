@@ -117,6 +117,27 @@ test("non-JSON error body surfaces as raw text", async () => {
   );
 });
 
+test("default headers (auth, idempotency-key) are attached; replace/remove work", async () => {
+  let seen;
+  globalThis.fetch = async (req) => {
+    seen = {
+      auth: req.headers.get("authorization"),
+      idem: req.headers.get("idempotency-key"),
+    };
+    return json({});
+  };
+  const c = new wasm.FiduciaClient("https://x");
+  c.setHeader("Authorization", "Bearer tok-123");
+  c.setHeader("Idempotency-Key", "req-1");
+  await c.health();
+  assert.deepEqual(seen, { auth: "Bearer tok-123", idem: "req-1" });
+
+  c.setHeader("authorization", "Bearer tok-2"); // case-insensitive replace
+  c.removeHeader("idempotency-key");
+  await c.health();
+  assert.deepEqual(seen, { auth: "Bearer tok-2", idem: null });
+});
+
 test("timeout aborts a slow request; a fast one under the timeout resolves", async () => {
   globalThis.fetch = (req) =>
     new Promise((resolve, reject) => {
