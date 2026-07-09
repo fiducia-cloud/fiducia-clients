@@ -230,15 +230,27 @@ pub fn try_semaphore(
   semaphore_acquire(client, key, limit, holder, ttl_ms, False)
 }
 
-/// `semaphore_acquire` with `wait=true`.
+/// Blocking acquire: take a permit now, or POLL `semaphore_get` until we hold
+/// one or the `retry` budget elapses. Returns a held `Grant` or
+/// `Error(Timeout(..))` (contrast the raw `semaphore_acquire(wait=true)`, which
+/// returns a queued ticket immediately). `holder` defaults to a generated id and
+/// `ttl_ms` to 60s when `None`.
 pub fn must_semaphore(
   client: Client,
   key: String,
   limit: Int,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  semaphore_acquire(client, key, limit, holder, ttl_ms, True)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  let hold = resolve_holder(holder)
+  let ttl = Some(option.unwrap(ttl_ms, 60_000))
+  use resp <- result.try(semaphore_acquire(client, key, limit, Some(hold), ttl, True))
+  case output_grant(resp, key, hold) {
+    Some(grant) -> Ok(grant)
+    None ->
+      poll_semaphore(client, key, hold, now_ms() + retry.max_wait_ms, retry, 0)
+  }
 }
 
 /// Alias of `must_semaphore`.
@@ -248,8 +260,9 @@ pub fn semaphore(
   limit: Int,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  must_semaphore(client, key, limit, holder, ttl_ms)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  must_semaphore(client, key, limit, holder, ttl_ms, retry)
 }
 
 /// `POST /v1/semaphores/release` — return one permit.
