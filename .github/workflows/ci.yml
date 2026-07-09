@@ -108,6 +108,11 @@ jobs:
             exit 1
           fi
           echo "clean"
+      # Stronger guard: the generated .d.ts must be valid TypeScript.
+      - name: Type-check generated .d.ts (tsc)
+        run: |
+          dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
+          npx -y -p typescript@5 tsc --noEmit --lib esnext,dom "$dts"
       # Runtime behavior: drive the compiled wasm against a stubbed fetch
       # (wire format, integer bodies, timeout, error shape).
       - name: Runtime smoke test
