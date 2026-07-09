@@ -16,9 +16,12 @@
 -- Deps (LuaRocks): luasocket, luasec, dkjson. Optional fields are omitted from
 -- request bodies when nil (CAS-friendly); booleans such as wait are always sent.
 --
--- TLS: luasec's ssl.https convenience module does NOT verify the server
--- certificate by default. Pass Fiducia.new(url, { tls = { verify = "peer",
--- cafile = "/path/ca.pem" } }) to enable certificate verification.
+-- TLS (fail-closed): for https:// the client verifies the server certificate by
+-- default (verify = "peer"). A CA bundle is auto-detected at request time from
+-- $SSL_CERT_FILE, $SSL_CERT_DIR, then the common OS locations. If verification is
+-- on but no CA source is found the request FAILS with a clear error rather than
+-- silently connecting insecurely. Override via Fiducia.new(url, { tls = ... }):
+-- pass your own cafile/capath, or verify = "none" to opt out (insecure).
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")
