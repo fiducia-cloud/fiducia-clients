@@ -48,6 +48,15 @@ module internal Internal =
         | Some x -> o.[k] <- toNode (box x)
         | None -> ()
 
+    // Parse a response body into a JsonNode. Empty/whitespace -> null. A body that
+    // is not valid JSON (e.g. an HTML/plain-text error page) must not crash the
+    // parser: fall back to a JSON string node carrying the raw text.
+    let parseBody (text: string) : JsonNode =
+        if String.IsNullOrWhiteSpace text then null
+        else
+            try JsonNode.Parse(text)
+            with :? JsonException -> JsonValue.Create(text) :> JsonNode
+
 /// Thin HTTP wrapper over the Fiducia contract. Every method issues one request
 /// and returns the parsed JSON response as a JsonNode (null for an empty body).
 type FiduciaClient(baseUrl: string) =
