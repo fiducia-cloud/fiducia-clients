@@ -159,12 +159,50 @@ type FiduciaClient(baseUrl: string) =
     member this.TryLock(key: string, ?holder: string, ?ttlMs: int64) =
         this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = false)
 
-    member this.MustLock(key: string, ?holder: string, ?ttlMs: int64) =
-        this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    /// Blocking acquire poll loop shared by MustLock/Lock. Sends wait=true; the
+    /// server does NOT hold the connection — it returns a queued FIFO ticket
+    /// immediately — so if we are not acquired we poll lock_get(key) at a fixed
+    /// interval until we hold it (our holder + a fencing_token) or the budget runs
+    /// out. Returns a normalized held-grant node {holder, fencing_token,
+    /// lease_expires_ms}; raises LockTimeout on deadline / max_retries.
+    member private this.AcquireLockBlocking(key: string, holderOpt: string option, ttlMsOpt: int64 option,
+                                            maxWaitMs: int64, retryIntervalMs: int64, maxRetriesOpt: int option) : JsonNode =
+        let holder = match holderOpt with Some h -> h | None -> genHolder ()
+        let ttlMs = defaultArg ttlMsOpt 60000L
+        let out = dig (this.LockAcquire(key, holder = holder, ttlMs = ttlMs, wait = true)) [ "result"; "output" ]
+        if nodeIsTrue (field out "acquired") then
+            heldGrant holder (field out "fencing_token") (field out "lease_expires_ms")
+        else
+            let deadline = Environment.TickCount64 + maxWaitMs
+            let mutable attempt = 0
+            let mutable grant : JsonNode = null
+            let mutable timedOut = false
+            while isNull grant && not timedOut do
+                let capped = match maxRetriesOpt with Some m -> attempt >= m | None -> false
+                let remaining = deadline - Environment.TickCount64
+                if capped || remaining <= 0L then timedOut <- true
+                else
+                    System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(float (min retryIntervalMs remaining)))
+                    let lk = field (this.LockGet(key)) "lock"
+                    if nodeEqualsString (field lk "holder") holder && not (isNull (field lk "fencing_token")) then
+                        grant <- heldGrant holder (field lk "fencing_token") (field lk "lease_expires_ms")
+                    attempt <- attempt + 1
+            if isNull grant then raise (LockTimeout([| key |], maxWaitMs))
+            grant
+
+    /// Blocking acquire: blocks until the lock is HELD and returns a grant
+    /// {holder, fencing_token, lease_expires_ms} (release via LockRelease), or
+    /// raises LockTimeout. Polls lock_get every retryIntervalMs (default 250) until
+    /// held or maxWaitMs (default 30000); optional maxRetries caps the poll count.
+    member this.MustLock(key: string, ?holder: string, ?ttlMs: int64,
+                         ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.AcquireLockBlocking(key, holder, ttlMs, defaultArg maxWaitMs 30000L, defaultArg retryIntervalMs 250L, maxRetries)
 
     /// Alias for MustLock (blocking acquire).
-    member this.Lock(key: string, ?holder: string, ?ttlMs: int64) =
-        this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    member this.Lock(key: string, ?holder: string, ?ttlMs: int64,
+                     ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.MustLock(key, ?holder = holder, ?ttlMs = ttlMs, ?maxWaitMs = maxWaitMs,
+                      ?retryIntervalMs = retryIntervalMs, ?maxRetries = maxRetries)
 
     /// `key` is accepted for symmetry but is intentionally not sent in the body.
     member this.LockRelease(key: string, holder: string, fencingToken: int64) =
