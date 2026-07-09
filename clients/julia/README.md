@@ -27,10 +27,13 @@ using Fiducia
 
 c = Client("https://api.fiducia.cloud")
 
-# Acquire a lock, then release it with the fencing token.
+# Block until the lock is actually HELD (polls; generates a holder), then release.
+held = must_lock(c, "orders/checkout"; ttl_ms = 30000, max_wait_ms = 5000)
+lock_release(c, "orders/checkout", held["holder"], held["fencing_token"])
+
+# Low-level, single request: returns the raw response (may be a queued ticket).
 grant = lock_acquire(c, "orders/checkout"; ttl_ms = 30000)
 out = grant["result"]["output"]
-lock_release(c, "orders/checkout", "worker-a", out["fencing_token"])
 
 # Config KV with a compare-and-swap guard.
 kv_put(c, "flags/rollout", "on"; ttl_ms = 60000, prev_revision = 0)
