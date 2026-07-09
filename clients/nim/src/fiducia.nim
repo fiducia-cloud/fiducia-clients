@@ -29,6 +29,12 @@ type
     status*: int      ## numeric HTTP status code
     body*: JsonNode   ## parsed JSON error body (nil when the body was empty)
 
+  LockTimeout* = ref object of CatchableError
+    ## Raised by the blocking helpers (`mustLock`/`lock`, `mustSemaphore`/
+    ## `semaphore`) when the wait budget elapses before the grant is held.
+    keys*: seq[string]  ## the key(s) that were waited on
+    waitedMs*: int      ## the wait budget (ms) that elapsed
+
   Client* = ref object
     ## A thin Fiducia HTTP client. Build one with `newClient`.
     baseUrl*: string
@@ -40,6 +46,13 @@ proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
   result.status = status
   result.body = body
   result.msg = "fiducia: HTTP " & $status
+
+proc newLockTimeout(keys: seq[string], waitedMs: int): LockTimeout =
+  new(result)
+  result.keys = keys
+  result.waitedMs = waitedMs
+  result.msg = "fiducia: timed out after " & $waitedMs & "ms waiting for " &
+    keys.join(", ")
 
 proc enc(s: string): string =
   ## Percent-encode a string for use in a path segment or query value.
