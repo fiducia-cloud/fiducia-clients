@@ -53,9 +53,18 @@ local Fiducia = {}
 Fiducia.__index = Fiducia
 Fiducia._VERSION = "0.1.0"
 
--- new(base_url) -> client. The trailing slash of base_url is trimmed.
-function Fiducia.new(base_url)
-  return setmetatable({ base = (tostring(base_url):gsub("/+$", "")) }, Fiducia)
+-- new(base_url [, opts]) -> client. The trailing slash of base_url is trimmed.
+-- opts.tls (optional): a table of luasec TLS parameters (verify, cafile, capath,
+-- protocol, options, ...) merged into every https request. luasec's ssl.https
+-- convenience module defaults to verify = "none" (it does NOT authenticate the
+-- server); pass e.g. opts.tls = { verify = "peer", cafile = "/path/ca.pem" } to
+-- turn certificate verification ON. Ignored for http:// URLs.
+function Fiducia.new(base_url, opts)
+  opts = opts or {}
+  return setmetatable({
+    base = (tostring(base_url):gsub("/+$", "")),
+    tls = opts.tls,
+  }, Fiducia)
 end
 
 function Fiducia:_request(method, path, body)
