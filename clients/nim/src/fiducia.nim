@@ -40,7 +40,12 @@ proc enc(s: string): string =
   encodeUrl(s, usePlus = false)
 
 proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): JsonNode =
-  let client = newHttpClient(timeout = c.timeout)
+  # maxRedirects = 0: never auto-follow a 3xx. The fixed load balancer routes to
+  # the owning shard leader internally, so a redirect is not expected; following
+  # one would re-issue a mutating POST/PUT/DELETE and could duplicate a lock
+  # grant or FIFO queue slot. A 3xx instead surfaces through the normal path
+  # (status >= 300 -> FiduciaError), which is the safe behavior.
+  let client = newHttpClient(maxRedirects = 0, timeout = c.timeout)
   try:
     let headers = newHttpHeaders()
     var payload = ""

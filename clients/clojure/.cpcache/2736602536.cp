@@ -1,1 +1,0 @@
-src:/Users/maca5/.m2/repository/org/clojure/clojure/1.11.1/clojure-1.11.1.jar:/Users/maca5/.m2/repository/org/clojure/data.json/2.5.0/data.json-2.5.0.jar:/Users/maca5/.m2/repository/org/clojure/core.specs.alpha/0.2.62/core.specs.alpha-0.2.62.jar:/Users/maca5/.m2/repository/org/clojure/spec.alpha/0.3.218/spec.alpha-0.3.218.jar
