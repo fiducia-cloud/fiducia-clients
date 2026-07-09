@@ -205,9 +205,28 @@ lockAcquireMany c keys holder ttlMs wait =
 tryLock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
 tryLock c key holder ttlMs = lockAcquire c key holder ttlMs False
 
--- | Blocking acquire ('lockAcquire' with @wait = True@).
+-- | Blocking acquire: acquire with @wait = True@, then POLL 'lockGet' until the
+-- lock is actually held. The server does not hold the connection on @wait@ — it
+-- reserves a FIFO slot and returns immediately — so a client-side poll is what
+-- makes this block. Uses 'defaultPollOpts'; throws 'LockTimeout' if the grant is
+-- not obtained within the budget. When @holder@ is 'Nothing' a stable id is
+-- generated (and @ttl_ms@ defaults to 60000). Returns a held-grant object
+-- carrying @holder@, @fencing_token@ (+ @lease_expires_ms@) so the caller can
+-- 'lockRelease' it — note the @holder@ may have been generated for you.
 mustLock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
-mustLock c key holder ttlMs = lockAcquire c key holder ttlMs True
+mustLock c = mustLockWith c defaultPollOpts
+
+-- | 'mustLock' with an explicit poll budget.
+mustLockWith :: Client -> PollOpts -> Text -> Maybe Text -> Maybe Int -> IO Value
+mustLockWith c opts key mHolder ttlMs = do
+  holder <- maybe genHolder pure mHolder
+  resp <- lockAcquire c key (Just holder) (Just (fromMaybe defaultLeaseMs ttlMs)) True
+  let out = output resp
+  if field "acquired" out == Just (Bool True)
+    then pure (grantFromOutput holder out)
+    else pollUntilHeld opts key holder $ do
+      lk <- lockGet c key
+      pure (heldGrant holder (fromMaybe Null (field "lock" lk)))
 
 -- | Alias for 'mustLock'.
 lock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
