@@ -37,6 +37,20 @@ end
 Base.showerror(io::IO, e::FiduciaError) = print(io, "FiduciaError: HTTP ", e.status)
 
 """
+    LockTimeout(keys, waited_ms)
+
+Thrown by the blocking `must_lock`/`lock`/`must_semaphore`/`semaphore` helpers when
+the acquire is still queued after the `max_wait_ms` budget elapses.
+"""
+struct LockTimeout <: Exception
+    keys
+    waited_ms
+end
+
+Base.showerror(io::IO, e::LockTimeout) =
+    print(io, "LockTimeout: waited ", e.waited_ms, "ms for ", join(e.keys, ", "))
+
+"""
     Client(base_url; connect_timeout = 30, read_timeout = 30)
 
 A thin HTTP client for a fiducia endpoint. The trailing slash of `base_url` is
