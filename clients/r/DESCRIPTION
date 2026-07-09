@@ -1,0 +1,18 @@
+Package: fiducia.client
+Type: Package
+Title: Fiducia HTTP Client for fiducia.cloud
+Version: 0.1.0
+Authors@R:
+    person("fiducia.cloud", role = c("aut", "cre"),
+           email = "clients@fiducia.cloud")
+Maintainer: fiducia.cloud <clients@fiducia.cloud>
+Description: A dependency-light client for the fiducia.cloud HTTP API,
+    covering distributed locks, semaphores, reader-writer locks, idempotency
+    keys, a configuration key-value store, rate limiting, cron scheduling,
+    leader election and service discovery over one shared HTTP contract.
+License: file LICENSE
+Encoding: UTF-8
+Imports: httr, jsonlite, utils
+URL: https://github.com/fiducia-cloud/fiducia-clients
+BugReports: https://github.com/fiducia-cloud/fiducia-clients/issues
+RoxygenNote: 7.3.2
