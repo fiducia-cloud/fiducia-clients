@@ -259,7 +259,7 @@ fiducia_client *fiducia_client_new(const char *base_url) {
     }
     memcpy(c->base, base_url, n);
     c->base[n] = '\0';
-    c->timeout_ms = 0;
+    c->timeout_ms = FIDUCIA_DEFAULT_TIMEOUT_MS;
     return c;
 }
 
