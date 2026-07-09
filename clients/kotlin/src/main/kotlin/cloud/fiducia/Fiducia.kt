@@ -38,10 +38,15 @@ class FiduciaException(val status: Int, val body: JsonElement?) :
  */
 class FiduciaClient(baseUrl: String) {
     private val base: String = baseUrl.trimEnd('/')
-    private val http: HttpClient = HttpClient.newHttpClient()
+    // Do NOT auto-follow redirects: a 3xx on a mutating POST/PUT/DELETE must not be
+    // silently re-submitted (it could duplicate a lock grant / queue slot). NEVER is
+    // java.net.http's default; pin it explicitly so the safety is not config-dependent.
+    private val http: HttpClient = HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NEVER)
+        .build()
 
-    /** Per-request timeout applied to every call. */
-    var requestTimeout: Duration? = null
+    /** Per-request timeout (connect + response) applied to every call; set to null to disable. */
+    var requestTimeout: Duration? = Duration.ofSeconds(30)
 
     /** Overrides [requestTimeout] for the blocking acquire calls (locks/semaphores). */
     var lockRequestTimeout: Duration? = null
