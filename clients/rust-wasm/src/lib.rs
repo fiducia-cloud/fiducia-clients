@@ -64,24 +64,28 @@ impl FiduciaClient {
     }
 
     /// Liveness probe.
+    #[wasm_bindgen(js_name = health)]
     pub async fn health(&self) -> Result<JsValue, JsValue> {
         let path = String::from("/healthz");
         self.request("GET", path, None).await
     }
 
     /// Per-shard consensus status.
+    #[wasm_bindgen(js_name = status)]
     pub async fn status(&self) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/status");
         self.request("GET", path, None).await
     }
 
     /// Inspect a lock member key: holder, the held union, and the FIFO wait queue.
+    #[wasm_bindgen(js_name = lockGet)]
     pub async fn lock_get(&self, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/locks?key={}", enc(&key));
         self.request("GET", path, None).await
     }
 
     /// Acquire a single-key lock (try-lock unless wait).
+    #[wasm_bindgen(js_name = lockAcquire)]
     pub async fn lock_acquire(&self, key: String, holder: Option<String>, ttl_ms: Option<i64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/locks/acquire");
         let mut _body = serde_json::Map::new();
@@ -100,6 +104,7 @@ impl FiduciaClient {
     }
 
     /// Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key.
+    #[wasm_bindgen(js_name = lockAcquireMany)]
     pub async fn lock_acquire_many(&self, keys: Vec<String>, holder: Option<String>, ttl_ms: Option<i64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/locks/acquire");
         let mut _body = serde_json::Map::new();
@@ -118,6 +123,7 @@ impl FiduciaClient {
     }
 
     /// Release the whole grant (every member key) by its fencing token.
+    #[wasm_bindgen(js_name = lockRelease)]
     pub async fn lock_release(&self, holder: String, fencing_token: i64) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/locks/release");
         let mut _body = serde_json::Map::new();
@@ -128,12 +134,14 @@ impl FiduciaClient {
     }
 
     /// Inspect a semaphore: limit, holders, free permits, queue.
+    #[wasm_bindgen(js_name = semaphoreGet)]
     pub async fn semaphore_get(&self, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/semaphores?key={}", enc(&key));
         self.request("GET", path, None).await
     }
 
     /// Take a permit of a counting semaphore (up to limit holders).
+    #[wasm_bindgen(js_name = semaphoreAcquire)]
     pub async fn semaphore_acquire(&self, key: String, limit: i64, holder: Option<String>, ttl_ms: Option<i64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/semaphores/acquire");
         let mut _body = serde_json::Map::new();
@@ -153,6 +161,7 @@ impl FiduciaClient {
     }
 
     /// Return one permit (admits the next FIFO waiter).
+    #[wasm_bindgen(js_name = semaphoreRelease)]
     pub async fn semaphore_release(&self, key: String, holder: String, fencing_token: i64) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/semaphores/release");
         let mut _body = serde_json::Map::new();
@@ -164,12 +173,14 @@ impl FiduciaClient {
     }
 
     /// Inspect an active idempotency record.
+    #[wasm_bindgen(js_name = idempotencyGet)]
     pub async fn idempotency_get(&self, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/idempotency?key={}", enc(&key));
         self.request("GET", path, None).await
     }
 
     /// Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record.
+    #[wasm_bindgen(js_name = idempotencyClaim)]
     pub async fn idempotency_claim(&self, key: String, owner: Option<String>, ttl_ms: Option<i64>, ttl: Option<String>, metadata: JsValue) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/idempotency/claim");
         let mut _body = serde_json::Map::new();
@@ -191,6 +202,7 @@ impl FiduciaClient {
     }
 
     /// Mark a claimed idempotency key complete and optionally store a replayable result.
+    #[wasm_bindgen(js_name = idempotencyComplete)]
     pub async fn idempotency_complete(&self, key: String, owner: String, fencing_token: i64, result: JsValue) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/idempotency/complete");
         let mut _body = serde_json::Map::new();
@@ -205,12 +217,14 @@ impl FiduciaClient {
     }
 
     /// Read a config key.
+    #[wasm_bindgen(js_name = kvGet)]
     pub async fn kv_get(&self, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/kv?key={}", enc(&key));
         self.request("GET", path, None).await
     }
 
     /// Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist).
+    #[wasm_bindgen(js_name = kvPut)]
     pub async fn kv_put(&self, key: String, value: String, ttl_ms: Option<i64>, prev_revision: Option<i64>) -> Result<JsValue, JsValue> {
         let path = format!("/v1/kv?key={}", enc(&key));
         let mut _body = serde_json::Map::new();
@@ -226,18 +240,21 @@ impl FiduciaClient {
     }
 
     /// Delete a config key.
+    #[wasm_bindgen(js_name = kvDelete)]
     pub async fn kv_delete(&self, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/kv?key={}", enc(&key));
         self.request("DELETE", path, None).await
     }
 
     /// Observe the current holder of a named election.
+    #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/elections/{}", enc(&name));
         self.request("GET", path, None).await
     }
 
     /// Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win.
+    #[wasm_bindgen(js_name = electionCampaign)]
     pub async fn election_campaign(&self, name: String, candidate: String, ttl_ms: i64, metadata: JsValue) -> Result<JsValue, JsValue> {
         let path = format!("/v1/elections/{}/campaign", enc(&name));
         let mut _body = serde_json::Map::new();
@@ -251,6 +268,7 @@ impl FiduciaClient {
     }
 
     /// Extend the lease; requires the held fencing token.
+    #[wasm_bindgen(js_name = electionRenew)]
     pub async fn election_renew(&self, name: String, candidate: String, fencing_token: i64) -> Result<JsValue, JsValue> {
         let path = format!("/v1/elections/{}/renew", enc(&name));
         let mut _body = serde_json::Map::new();
@@ -261,6 +279,7 @@ impl FiduciaClient {
     }
 
     /// Step down; requires the held fencing token.
+    #[wasm_bindgen(js_name = electionResign)]
     pub async fn election_resign(&self, name: String, candidate: String, fencing_token: i64) -> Result<JsValue, JsValue> {
         let path = format!("/v1/elections/{}/resign", enc(&name));
         let mut _body = serde_json::Map::new();
@@ -271,12 +290,14 @@ impl FiduciaClient {
     }
 
     /// List live instances of a service, optionally filtered by exact metadata matches.
+    #[wasm_bindgen(js_name = serviceInstances)]
     pub async fn service_instances(&self, service: String, metadata: JsValue) -> Result<JsValue, JsValue> {
         let path = format!("/v1/services/{}?metadata={}", enc(&service), enc(&js_sys::JSON::stringify(&metadata).ok().and_then(|s| s.as_string()).unwrap_or_default()));
         self.request("GET", path, None).await
     }
 
     /// Register/refresh an instance with a TTL lease and optional metadata.
+    #[wasm_bindgen(js_name = serviceRegister)]
     pub async fn service_register(&self, service: String, instance_id: String, address: String, ttl_ms: i64, metadata: JsValue) -> Result<JsValue, JsValue> {
         let path = format!("/v1/services/{}/instances/{}", enc(&service), enc(&instance_id));
         let mut _body = serde_json::Map::new();
@@ -290,6 +311,7 @@ impl FiduciaClient {
     }
 
     /// Renew an instance lease before it expires.
+    #[wasm_bindgen(js_name = serviceHeartbeat)]
     pub async fn service_heartbeat(&self, service: String, instance_id: String, ttl_ms: Option<i64>) -> Result<JsValue, JsValue> {
         let path = format!("/v1/services/{}/instances/{}/heartbeat", enc(&service), enc(&instance_id));
         let mut _body = serde_json::Map::new();
@@ -301,18 +323,21 @@ impl FiduciaClient {
     }
 
     /// Remove an instance from the registry.
+    #[wasm_bindgen(js_name = serviceDeregister)]
     pub async fn service_deregister(&self, service: String, instance_id: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/services/{}/instances/{}", enc(&service), enc(&instance_id));
         self.request("DELETE", path, None).await
     }
 
     /// Current limiter state for a tenant/key.
+    #[wasm_bindgen(js_name = rateLimitGet)]
     pub async fn rate_limit_get(&self, tenant: String, key: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/rate-limit/{}/{}", enc(&tenant), enc(&key));
         self.request("GET", path, None).await
     }
 
     /// Atomic check-and-decrement (token_bucket | sliding_window). Returns {allowed, remaining}.
+    #[wasm_bindgen(js_name = rateLimitCheck)]
     pub async fn rate_limit_check(&self, tenant: String, key: String, algorithm: String, limit: i64, window_ms: i64, refill_per_second: Option<f64>, cost: Option<i64>) -> Result<JsValue, JsValue> {
         let path = format!("/v1/rate-limit/{}/{}/check", enc(&tenant), enc(&key));
         let mut _body = serde_json::Map::new();
@@ -330,12 +355,14 @@ impl FiduciaClient {
     }
 
     /// Read a schedule definition.
+    #[wasm_bindgen(js_name = scheduleGet)]
     pub async fn schedule_get(&self, name: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/cron/schedules/{}", enc(&name));
         self.request("GET", path, None).await
     }
 
     /// Create/update a schedule. target = {kind: webhook|queue|grpc, ...}. Exactly one of cron / one_shot_at_ms.
+    #[wasm_bindgen(js_name = scheduleUpsert)]
     pub async fn schedule_upsert(&self, name: String, target: JsValue, cron: Option<String>, one_shot_at_ms: Option<i64>, delivery: Option<String>, max_retries: Option<i64>) -> Result<JsValue, JsValue> {
         let path = format!("/v1/cron/schedules/{}", enc(&name));
         let mut _body = serde_json::Map::new();
@@ -357,6 +384,7 @@ impl FiduciaClient {
     }
 
     /// Record a fire; duplicate fire_id is deduped (exactly-once).
+    #[wasm_bindgen(js_name = scheduleRecordRun)]
     pub async fn schedule_record_run(&self, name: String, fire_id: String, fired_at_ms: Option<i64>) -> Result<JsValue, JsValue> {
         let path = format!("/v1/cron/schedules/{}/runs", enc(&name));
         let mut _body = serde_json::Map::new();
@@ -369,6 +397,7 @@ impl FiduciaClient {
     }
 
     /// Recent run history.
+    #[wasm_bindgen(js_name = scheduleHistory)]
     pub async fn schedule_history(&self, name: String) -> Result<JsValue, JsValue> {
         let path = format!("/v1/cron/schedules/{}/history", enc(&name));
         self.request("GET", path, None).await
