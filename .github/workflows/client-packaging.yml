@@ -1,0 +1,503 @@
+# client-packaging — verify each client's PUBLISHABLE ARTIFACT, not repo-relative source.
+#
+# Two-tier design (reviewer "Codex"):
+#   TIER A  "publishable-package smoke": pack -> install/resolve FROM THE ARTIFACT in a
+#           clean temp consumer OUTSIDE the repo -> import it. Fails if the import only
+#           works from the repo root.
+#   TIER A-compile: cheap external-consumer compile against the shipped header/module.
+#   TIER B  "artifact integrity": produce the release artifact -> assert it CONTAINS the
+#           expected source/module files (must_contain); some also compile.
+#
+# MATLAB is intentionally EXCLUDED (no CI runner / proprietary). This file is separate
+# from ci.yml and does not modify it.
+#
+# Every job is continue-on-error: several clients carry local path-deps on a sibling
+# fiducia-interfaces repo absent in single-repo CI, so one client must not gate the rest.
+# Network is allowed (not hermetic); timeouts are short.
+
+name: client-packaging
+
+on:
+  push:
+    paths:
+      - "clients/**"
+      - ".github/workflows/client-packaging.yml"
+  pull_request:
+    paths:
+      - "clients/**"
+      - ".github/workflows/client-packaging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ────────────────────────── TIER A: pack + install/resolve + import ──────────────────────────
+
+  fsharp:
+    name: "A · fsharp (nupkg → consumer)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Pack (publishable .nupkg)
+        working-directory: clients/fsharp
+        run: dotnet pack -c Release -o "$RUNNER_TEMP/nupkgs"
+      - name: Assert artifact contents (must_contain)
+        run: |
+          pkg=$(ls "$RUNNER_TEMP"/nupkgs/*.nupkg | head -1)
+          echo "artifact: $pkg"
+          unzip -l "$pkg" | grep -q 'lib/net6.0/Fiducia.FSharp.Client.dll'
+      - name: Smoke — resolve + import FROM the artifact (not repo source)
+        run: |
+          cons="$RUNNER_TEMP/consumer"; mkdir -p "$cons"; cd "$cons"
+          dotnet new console -lang "F#"
+          cat > nuget.config <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="local" value="RUNNER_TEMP_NUPKGS" />
+              <add key="nuget" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          XML
+          sed -i "s#RUNNER_TEMP_NUPKGS#$RUNNER_TEMP/nupkgs#" nuget.config
+          dotnet add package Fiducia.FSharp.Client --version 0.1.0
+          cat > Program.fs <<'FS'
+          open Fiducia
+          [<EntryPoint>]
+          let main _ =
+              let c = FiduciaClient("https://api.fiducia.cloud")
+              ignore c
+              printfn "fsharp artifact import OK"
+              0
+          FS
+          dotnet build -c Release
+
+  haskell:
+    name: "A · haskell (cabal sdist → build)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.10.3"
+          cabal-version: "latest"
+      - name: sdist (publishable tarball)
+        working-directory: clients/haskell
+        run: |
+          cabal check || true   # `cabal check` only emits PVP version-bound warnings here
+          cabal sdist -o "$RUNNER_TEMP/dist"
+      - name: Assert artifact contents (must_contain)
+        run: |
+          tarball=$(ls "$RUNNER_TEMP"/dist/*.tar.gz | head -1)
+          echo "artifact: $tarball"
+          tar tzf "$tarball" | grep -qx 'fiducia-client-0.1.0/src/Fiducia.hs'
+          tar tzf "$tarball" | grep -qx 'fiducia-client-0.1.0/fiducia-client.cabal'
+      - name: Smoke — build FROM the sdist tarball (not repo source)
+        run: |
+          cd "$RUNNER_TEMP" && mkdir -p build && tar xzf dist/*.tar.gz -C build
+          cd build/fiducia-client-0.1.0
+          cabal update
+          cabal build all
+
+  erlang:
+    name: "A · erlang (rebar3 hex build → compile)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"          # OTP 27+ required (stdlib json module)
+          rebar3-version: "3"
+      - name: hex build (publishable Hex tarball)
+        working-directory: clients/erlang
+        run: rebar3 hex build
+      - name: Assert artifact contents (nested Hex tarball → must_contain)
+        working-directory: clients/erlang
+        run: |
+          outer=$(find _build -name 'fiducia_client-*.tar' | head -1)
+          echo "artifact: $outer"
+          tar tf "$outer" | grep -qx 'contents.tar.gz'
+          tar tf "$outer" | grep -qx 'metadata.config'
+          mkdir -p "$RUNNER_TEMP/hx" && tar xf "$outer" -C "$RUNNER_TEMP/hx"
+          tar tzf "$RUNNER_TEMP/hx/contents.tar.gz" | grep -qx 'src/fiducia.erl'
+      - name: Smoke — compile the UNPACKED artifact source
+        run: |
+          cd "$RUNNER_TEMP/hx" && mkdir -p src2 && tar xzf contents.tar.gz -C src2
+          cd src2 && erlc -o . src/fiducia.erl && test -f fiducia.beam
+
+  lua:
+    name: "A · lua (luarocks make → require)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: System deps for luasec
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.4"
+      - uses: leafo/gh-actions-luarocks@v4
+      - name: luarocks make into a temp tree (publishable artifact) + runtime deps
+        working-directory: clients/lua
+        run: |
+          tree="$RUNNER_TEMP/luatree"
+          luarocks --tree "$tree" install luasocket
+          luarocks --tree "$tree" install luasec
+          luarocks --tree "$tree" install dkjson
+          luarocks --tree "$tree" make fiducia-client-0.1.0-1.rockspec
+      - name: Assert artifact installed (must_contain)
+        run: find "$RUNNER_TEMP/luatree" -path '*/share/lua/*/fiducia.lua' | grep -q .
+      - name: Smoke — require FROM the installed tree only (cwd outside repo)
+        run: |
+          tree="$RUNNER_TEMP/luatree"
+          eval "$(luarocks --tree "$tree" path)"
+          cd "$RUNNER_TEMP"
+          lua -e 'local F = require("fiducia"); assert(type(F.new) == "function"); print("lua require OK")'
+
+  nim:
+    name: "A · nim (nimble install → import)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+      - name: nimble install into a temp (publishable artifact)
+        working-directory: clients/nim
+        run: nimble install -y --nimbleDir:"$RUNNER_TEMP/nimble"
+      - name: Assert installed (must_contain)
+        run: find "$RUNNER_TEMP/nimble/pkgs2" -name fiducia.nim | grep -q .
+      - name: Smoke — import FROM the installed artifact only (cwd outside repo)
+        run: |
+          pkg=$(dirname "$(find "$RUNNER_TEMP/nimble/pkgs2" -name fiducia.nim | head -1)")
+          cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer
+          cat > smoke.nim <<'NIM'
+          import fiducia
+          proc use() = discard newClient("https://api.fiducia.cloud")
+          when isMainModule:
+            if false: use()
+            echo "nim import OK"
+          NIM
+          nim check --path:"$pkg" --hints:off smoke.nim
+
+  scala:
+    name: "A · scala (sbt publishLocal → consumer)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: publishLocal (publishable artifact → ~/.ivy2/local)
+        working-directory: clients/scala
+        run: sbt publishLocal
+      - name: Assert artifact contents (must_contain)
+        run: |
+          jar=$(find "$HOME/.ivy2/local/cloud.fiducia" -name 'fiducia-client_2.13.jar' | head -1)
+          echo "artifact: $jar"; test -n "$jar"
+          unzip -l "$jar" | grep -q 'cloud/fiducia/FiduciaClient.class'
+      - uses: VirtusLab/scala-cli-setup@v1
+      - name: Smoke — resolve + compile a consumer against the published artifact
+        run: |
+          cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer
+          cat > consumer.sc <<'SCALA'
+          //> using dep cloud.fiducia::fiducia-client:0.1.0
+          import cloud.fiducia.FiduciaClient
+          @main def run(): Unit =
+            val _ = new FiduciaClient("https://api.fiducia.cloud")
+            println("scala consumer OK")
+          SCALA
+          scala-cli compile . --scala 2.13.14
+
+  kotlin:
+    name: "A · kotlin (gradle publishToMavenLocal → consumer)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"          # build.gradle.kts declares kotlin { jvmToolchain(11) }
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"    # no wrapper is committed; provide gradle on PATH
+      - name: publishToMavenLocal (publishable artifact → ~/.m2)
+        working-directory: clients/kotlin
+        run: gradle publishToMavenLocal --no-daemon
+      - name: Assert artifact contents (must_contain)
+        run: |
+          jar=$(find "$HOME/.m2/repository/cloud/fiducia" -name 'fiducia-client-0.1.0.jar' ! -name '*sources*' ! -name '*javadoc*' | head -1)
+          echo "artifact: $jar"; test -n "$jar"
+          unzip -l "$jar" | grep -q 'cloud/fiducia/FiduciaClient.class'
+      - name: Smoke — resolve + compile a consumer against mavenLocal
+        run: |
+          cd "$RUNNER_TEMP" && mkdir -p consumer/src/main/kotlin && cd consumer
+          cat > settings.gradle.kts <<'KTS'
+          rootProject.name = "consumer"
+          KTS
+          cat > build.gradle.kts <<'KTS'
+          plugins { kotlin("jvm") version "1.9.24" }
+          repositories { mavenLocal(); mavenCentral() }
+          dependencies { implementation("cloud.fiducia:fiducia-client:0.1.0") }
+          kotlin { jvmToolchain(11) }
+          KTS
+          cat > src/main/kotlin/Main.kt <<'KT'
+          import cloud.fiducia.FiduciaClient
+          fun main() { val c = FiduciaClient("https://api.fiducia.cloud"); println(c) }
+          KT
+          gradle compileKotlin --no-daemon
+
+  # ────────────────────────── TIER A-compile: external consumer compile ──────────────────────────
+
+  c:
+    name: "A-compile · c (#include fiducia.h, link fiducia.c)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Stage shipped artifact + assert must_contain
+        run: |
+          mkdir -p "$RUNNER_TEMP/art"
+          cp clients/c/fiducia.h clients/c/fiducia.c "$RUNNER_TEMP/art/"
+          test -f "$RUNNER_TEMP/art/fiducia.h"
+          test -f "$RUNNER_TEMP/art/fiducia.c"
+      - name: Smoke — external TU includes the shipped header, links the shipped source
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > consumer.c <<'C'
+          #include "fiducia.h"
+          int main(void) {
+              fiducia_client *c = fiducia_client_new("https://api.fiducia.cloud");
+              if (!c) return 1;
+              fiducia_client_free(c);
+              return 0;
+          }
+          C
+          cc -std=c11 -I art consumer.c art/fiducia.c -lcurl -o consumer
+          ./consumer
+
+  cpp:
+    name: "A-compile · cpp (#include fiducia.hpp)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev
+      - name: Stage shipped artifact + assert must_contain
+        run: |
+          mkdir -p "$RUNNER_TEMP/art"
+          cp clients/cpp/fiducia.hpp "$RUNNER_TEMP/art/"
+          test -f "$RUNNER_TEMP/art/fiducia.hpp"
+      - name: Smoke — external TU includes the shipped header
+        run: |
+          cd "$RUNNER_TEMP"
+          cat > consumer.cpp <<'CPP'
+          #include "fiducia.hpp"
+          int main() {
+              fiducia::Client c("https://api.fiducia.cloud");
+              (void)c;
+              return 0;
+          }
+          CPP
+          c++ -std=c++17 -I art consumer.cpp -lcurl -o consumer
+          ./consumer
+
+  zig:
+    name: "A-compile · zig (tarball module → @import)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+      - name: Build the module tarball (publishable artifact) + assert must_contain
+        working-directory: clients/zig
+        run: |
+          for f in build.zig build.zig.zon src/fiducia.zig README.md LICENSE.txt; do test -e "$f"; done
+          tar czf "$RUNNER_TEMP/fiducia-zig.tar.gz" build.zig build.zig.zon src README.md LICENSE.txt
+      - name: Smoke — consume the tarball as a module and @import it
+        run: |
+          cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer && zig init
+          cat > src/main.zig <<'ZIG'
+          const std = @import("std");
+          const fiducia = @import("fiducia");
+          pub fn main() !void {
+              std.debug.print("{s}\n", .{@typeName(fiducia.Client)});
+          }
+          ZIG
+          cat > build.zig <<'ZIG'
+          const std = @import("std");
+          pub fn build(b: *std.Build) void {
+              const target = b.standardTargetOptions(.{});
+              const optimize = b.standardOptimizeOption(.{});
+              const dep = b.dependency("fiducia_client", .{ .target = target, .optimize = optimize });
+              const exe = b.addExecutable(.{ .name = "consumer", .root_module = b.createModule(.{
+                  .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize }) });
+              exe.root_module.addImport("fiducia", dep.module("fiducia"));
+              b.installArtifact(exe);
+              const run = b.addRunArtifact(exe);
+              b.step("run", "run").dependOn(&run.step);
+          }
+          ZIG
+          zig fetch --save=fiducia_client "$RUNNER_TEMP/fiducia-zig.tar.gz"
+          zig build run
+
+  # ────────────────────────── TIER B: release-artifact integrity ──────────────────────────
+
+  gleam:
+    name: "B · gleam (archive integrity + gleam build)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          gleam-version: "1.16.0"
+      - name: Assert archive integrity (must_contain)
+        run: |
+          git archive --format=tar HEAD:clients/gleam -o "$RUNNER_TEMP/gleam.tar"
+          tar tf "$RUNNER_TEMP/gleam.tar" | grep -qx 'gleam.toml'
+          tar tf "$RUNNER_TEMP/gleam.tar" | grep -qx 'src/fiducia.gleam'
+          tar tf "$RUNNER_TEMP/gleam.tar" | grep -qx 'manifest.toml'
+      - name: Compile (gleam build)
+        working-directory: clients/gleam
+        run: gleam build
+
+  swift:
+    name: "B · swift (archive integrity + swift build)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.10"
+      - name: Assert archive integrity (must_contain)
+        run: |
+          git archive --format=tar HEAD:clients/swift -o "$RUNNER_TEMP/swift.tar"
+          tar tf "$RUNNER_TEMP/swift.tar" | grep -qx 'Package.swift'
+          tar tf "$RUNNER_TEMP/swift.tar" | grep -qx 'Sources/Fiducia/Fiducia.swift'
+      - name: Compile (swift build)
+        working-directory: clients/swift
+        run: swift build
+
+  crystal:
+    name: "B · crystal (archive integrity + compile)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.20.3"
+      - name: Assert archive integrity (must_contain)
+        run: |
+          git archive --format=tar HEAD:clients/crystal -o "$RUNNER_TEMP/crystal.tar"
+          tar tf "$RUNNER_TEMP/crystal.tar" | grep -qx 'shard.yml'
+          tar tf "$RUNNER_TEMP/crystal.tar" | grep -qx 'src/fiducia.cr'
+      - name: Compile check (zero-dep stdlib) from the archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/ex" && tar xf "$RUNNER_TEMP/crystal.tar" -C "$RUNNER_TEMP/ex"
+          cd "$RUNNER_TEMP/ex"
+          printf 'require "./src/fiducia"\nputs Fiducia::VERSION\n' > smoke.cr
+          crystal build --no-codegen smoke.cr
+
+  julia:
+    name: "B · julia (archive integrity)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+      - name: Assert archive integrity (must_contain)
+        run: |
+          git archive --format=tar HEAD:clients/julia -o "$RUNNER_TEMP/julia.tar"
+          tar tf "$RUNNER_TEMP/julia.tar" | grep -qx 'Project.toml'
+          tar tf "$RUNNER_TEMP/julia.tar" | grep -qx 'src/Fiducia.jl'
+      - name: Manifest sanity (name + uuid resolve)
+        working-directory: clients/julia
+        run: julia --startup-file=no -e 'using TOML; p = TOML.parsefile("Project.toml"); @assert p["name"] == "Fiducia"; @assert haskey(p, "uuid"); println("julia manifest OK")'
+
+  ocaml:
+    name: "B · ocaml (opam lint + dune build + archive)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+      - name: Assert archive integrity (must_contain)
+        run: |
+          git archive --format=tar HEAD:clients/ocaml -o "$RUNNER_TEMP/ocaml.tar"
+          tar tf "$RUNNER_TEMP/ocaml.tar" | grep -qx 'lib/fiducia.ml'
+          tar tf "$RUNNER_TEMP/ocaml.tar" | grep -qx 'fiducia-client.opam'
+      - name: Lint opam metadata + build against real deps
+        working-directory: clients/ocaml
+        run: |
+          opam lint ./fiducia-client.opam
+          opam install . --deps-only --yes
+          opam exec -- dune build
+
+  r:
+    name: "B · r (R CMD build → tarball must contain R/fiducia.R)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "release"
+      - name: R CMD build (publishable tarball)
+        working-directory: clients/r
+        run: R CMD build .
+      - name: Assert tarball contents (must_contain)
+        run: |
+          tarball=$(ls clients/r/fiducia.client_*.tar.gz | head -1)
+          echo "artifact: $tarball"
+          tar tzf "$tarball" | grep -qx 'fiducia.client/R/fiducia.R'
+          tar tzf "$tarball" | grep -qx 'fiducia.client/DESCRIPTION'
+
+  # matlab: EXCLUDED — no CI runner / proprietary toolbox (MATLAB File Exchange, git-tag release).
