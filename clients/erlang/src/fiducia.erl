@@ -78,8 +78,14 @@ Uses only the standard library: `httpc` (inets) for transport and `json`
 
 -export_type([client/0, result/0]).
 
--type client() :: #{base := binary()}.
+%% The client is a plain map: `base` is required; `timeout` (milliseconds,
+%% applied to both connect and read) is optional and defaults to 30s. Override
+%% per client with, e.g., (fiducia:new(Url))#{timeout => 60000}.
+-type client() :: #{base := binary(), timeout => non_neg_integer()}.
 -type result() :: {ok, term()} | {error, {non_neg_integer(), term()} | term()}.
+
+%% Default connect+read timeout (ms); httpc otherwise defaults to infinity.
+-define(DEFAULT_TIMEOUT_MS, 30000).
 
 %% @doc Build a client from a base URL. Trailing slashes are trimmed.
 -spec new(binary() | string()) -> client().
