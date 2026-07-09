@@ -421,8 +421,9 @@ def emit_rust_wasm(op):
         bodyarg = "None"
     lines.append('        self.request("%s", path, %s).await' % (op["method"], bodyarg))
     doc = op.get("doc", "")
-    return ("    /// %s\n    pub async fn %s(%s) -> Result<JsValue, JsValue> {\n%s\n    }\n"
-            % (doc, op["name"], ", ".join(sig), "\n".join(lines)))
+    # Export camelCase JS names to match the TypeScript client's surface.
+    return ('    /// %s\n    #[wasm_bindgen(js_name = %s)]\n    pub async fn %s(%s) -> Result<JsValue, JsValue> {\n%s\n    }\n'
+            % (doc, camel(op["name"]), op["name"], ", ".join(sig), "\n".join(lines)))
 
 
 def gen_rust_wasm():
