@@ -26,6 +26,23 @@ public struct FiduciaError: Error, CustomStringConvertible {
     public var description: String { "fiducia: HTTP \(status)" }
 }
 
+/// Thrown by the blocking `mustLock`/`lock`/`mustSemaphore`/`semaphore` helpers
+/// when the lock or permit is not held within the wait budget. Carries the key(s)
+/// waited on and the elapsed budget in milliseconds.
+public struct FiduciaTimeout: Error, CustomStringConvertible {
+    public let keys: [String]
+    public let waitedMs: Int
+
+    public init(keys: [String], waitedMs: Int) {
+        self.keys = keys
+        self.waitedMs = waitedMs
+    }
+
+    public var description: String {
+        "fiducia: timed out after \(waitedMs)ms waiting for \(keys.joined(separator: ", "))"
+    }
+}
+
 /// Thin async HTTP wrapper over the fiducia.cloud contract.
 ///
 /// Every method returns the parsed JSON response as `Any` (a `[String: Any]`,
