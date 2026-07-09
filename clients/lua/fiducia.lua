@@ -348,10 +348,35 @@ function Fiducia:try_semaphore(key, limit, opts)
   return self:semaphore_acquire(key, limit, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = false })
 end
 
--- opts: { holder, ttl_ms }
+-- A held semaphore permit. grant.release() releases it.
+function Fiducia:_semaphore_grant(key, holder, fencing_token, lease_expires_ms)
+  local client = self
+  return {
+    key = key, holder = holder,
+    fencing_token = fencing_token, lease_expires_ms = lease_expires_ms,
+    release = function() return client:semaphore_release(key, holder, fencing_token) end,
+  }
+end
+
+-- must_semaphore(key, limit, opts) / semaphore(...): BLOCK until a permit is held,
+-- polling semaphore_get for our holder (with a fencing_token) until held or the wait
+-- budget elapses -- on which it raises a timeout table (callers pcall). try_semaphore
+-- is single-shot and unaffected.
+-- opts: { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries }.
 function Fiducia:must_semaphore(key, limit, opts)
   opts = opts or {}
-  return self:semaphore_acquire(key, limit, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = true })
+  local holder = opts.holder or gen_holder()
+  local out = output_of(self:semaphore_acquire(key, limit,
+    { holder = holder, ttl_ms = opts.ttl_ms or MUST_TTL_MS, wait = true }))
+  if out.acquired then
+    return self:_semaphore_grant(key, holder, out.fencing_token, out.lease_expires_ms)
+  end
+  return self:_poll_until({ key }, opts, function()
+    local slot = find_holder(self:semaphore_get(key), holder)
+    if slot and slot.fencing_token ~= nil then
+      return self:_semaphore_grant(key, holder, slot.fencing_token, slot.lease_expires_ms)
+    end
+  end)
 end
 Fiducia.semaphore = Fiducia.must_semaphore
 
