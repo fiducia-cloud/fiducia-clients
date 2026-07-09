@@ -72,7 +72,7 @@ type FiduciaClient(baseUrl: string) =
         use reader = new StreamReader(stream)
         let text = reader.ReadToEnd()
         let status = int res.StatusCode
-        let node = if String.IsNullOrEmpty text then null else JsonNode.Parse(text)
+        let node = parseBody text
         if status >= 300 then raise (FiduciaError(status, node))
         node
 
