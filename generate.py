@@ -287,7 +287,8 @@ def gen_go():
 # snake_case names to JS as camelCase. Kept separate from clients/rust so that
 # native client stays a plain blocking crate.
 RUST_WASM_PRE = BANNER_C + '''
-//! Fiducia client (Rust -> WebAssembly) — generated. Browser transport via `fetch`.
+//! Fiducia client (Rust -> WebAssembly) — generated. Transport is the global
+//! `fetch` (browser main thread, Web Workers, and Node 18+/Deno).
 //!
 //! Build:  wasm-pack build clients/rust-wasm --target web
 //!
@@ -335,8 +336,20 @@ impl FiduciaClient {
         if body.is_some() {
             request.headers().set("content-type", "application/json").map_err(|e| err(0, e))?;
         }
-        let window = web_sys::window().ok_or_else(|| err(0, JsValue::from_str("no global `window`")))?;
-        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await.map_err(|e| err(0, e))?;
+        // Resolve `fetch` from the global scope so the client works on the
+        // browser main thread, in Web Workers, and in Node 18+/Deno (global
+        // fetch) — not just `window`.
+        let global = js_sys::global();
+        let fetch = js_sys::Reflect::get(&global, &JsValue::from_str("fetch"))
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .ok_or_else(|| err(0, JsValue::from_str("no global fetch available")))?;
+        let promise: js_sys::Promise = fetch
+            .call1(&global, &request)
+            .map_err(|e| err(0, e))?
+            .dyn_into()
+            .map_err(|e| err(0, e))?;
+        let resp_value = JsFuture::from(promise).await.map_err(|e| err(0, e))?;
         let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
         let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
         let text = text_value.as_string().unwrap_or_default();
@@ -379,22 +392,33 @@ def _rw_json_scalar(typ, var):
     return "serde_json::json!(%s)" % var
 
 
+def _rw_object_query_lines(name):
+    # An object query param expands to `name.KEY=VALUE` pairs, ANDed by the
+    # server (PROTOCOL.md: e.g. metadata.region=us-east). Not a JSON blob.
+    # dyn_ref returns None for null/undefined/non-objects, so the loop is skipped.
+    return [
+        "        if let Some(_obj) = %s.dyn_ref::<js_sys::Object>() {" % name,
+        "            for _entry in js_sys::Object::entries(_obj).iter() {",
+        "                let _pair = js_sys::Array::from(&_entry);",
+        "                let _k = _pair.get(0).as_string().unwrap_or_default();",
+        "                if _k.is_empty() { continue; }",
+        "                let _v = _pair.get(1);",
+        "                let _vs = _v.as_string().unwrap_or_else(|| %s);" % (_RW_OBJ_TO_STR % "_v"),
+        '                _q.push(format!("%s.{}={}", enc(&_k), enc(&_vs)));' % name,
+        "            }",
+        "        }",
+    ]
+
+
 def _rw_query_lines(x):
     # Code that appends one query param to `_q` (optional ones only when present).
     name = x["name"]
     if x["type"] == "object":
-        val = "enc(&%s)" % (_RW_OBJ_TO_STR % name)
-    else:
-        val = _rw_scalar_enc(x["type"], name)
-    push = '        _q.push(format!("%s={}", %s));' % (name, val)
+        return _rw_object_query_lines(name)
     if not x.get("optional"):
-        return [push]
-    if x["type"] == "object":
-        return ["        if !%s.is_null() && !%s.is_undefined() {" % (name, name),
-                "    " + push, "        }"]
-    val = _rw_scalar_enc(x["type"], "v")
+        return ['        _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], name))]
     return ["        if let Some(v) = %s {" % name,
-            '            _q.push(format!("%s={}", %s));' % (name, val),
+            '            _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], "v")),
             "        }"]
 
 

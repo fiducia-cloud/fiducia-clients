@@ -48,15 +48,22 @@ class RustWasmEmitter(unittest.TestCase):
         # wire form is an integer (30000, never 30000.0). lock_acquire has ttl_ms.
         self.assertIn("as i64)", self.src)
 
-    def test_optional_object_query_is_conditional(self):
-        # service_instances' optional `metadata` object query param must only be
-        # appended when provided, not emitted as a bare `?metadata=`.
-        self.assertIn("if !metadata.is_null() && !metadata.is_undefined()", self.src)
-        self.assertIn("_q.join(\"&\")", self.src)
+    def test_object_query_expands_to_dotted_pairs(self):
+        # service_instances' `metadata` object query must expand to
+        # metadata.KEY=VALUE pairs (PROTOCOL.md), not a JSON blob under `metadata`.
+        fn = _method_body(self.src, "service_instances")
+        self.assertIn("metadata.dyn_ref::<js_sys::Object>()", fn)
+        self.assertIn('_q.push(format!("metadata.{}={}"', fn)
+        self.assertNotIn('format!("metadata={}"', fn)  # no JSON-blob form
+        self.assertIn('_q.join("&")', fn)
 
-    def test_transport_helper_and_error_shape_present(self):
+    def test_transport_uses_global_fetch_not_window(self):
+        # `fetch` is resolved from the global scope so the client works on the
+        # main thread, in Web Workers, and in Node/Deno — never bound to `window`.
         self.assertIn("async fn request(&self", self.src)
-        self.assertIn("web_sys::window()", self.src)
+        self.assertIn("js_sys::global()", self.src)
+        self.assertIn('js_sys::Reflect::get(&global, &JsValue::from_str("fetch")', self.src)
+        self.assertNotIn("web_sys::window()", self.src)
         self.assertIn('js_sys::Reflect::set(&o, &JsValue::from_str("status")', self.src)
 
     def test_no_op_leaks_a_body_for_get(self):
@@ -74,11 +81,12 @@ class QueryAndPathEncoding(unittest.TestCase):
         line = g._rw_scalar_enc("int", "limit")
         self.assertEqual(line, "enc(&(limit as i64).to_string())")
 
-    def test_object_query_is_json_stringified(self):
+    def test_object_query_expands_dotted(self):
         lines = g._rw_query_lines({"name": "metadata", "type": "object", "optional": True})
         joined = "\n".join(lines)
-        self.assertIn("JSON::stringify", joined)
-        self.assertTrue(joined.strip().startswith("if !metadata.is_null()"))
+        self.assertIn("dyn_ref::<js_sys::Object>()", joined)
+        self.assertIn('format!("metadata.{}={}"', joined)
+        self.assertNotIn('format!("metadata={}"', joined)
 
     def test_required_scalar_query_is_unconditional(self):
         lines = g._rw_query_lines({"name": "key", "type": "string"})
