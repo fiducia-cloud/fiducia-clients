@@ -100,8 +100,25 @@ service discovery service_instances · service_register · service_heartbeat ·
                   service_deregister · service_list
 ```
 
-`try_*` / `must_*` / `lock` / `semaphore` are thin helpers that flip the `wait`
-flag on the matching `*_acquire` call; they do no client-side polling.
+## Blocking acquire
+
+`try_lock` / `try_semaphore` are single-shot: they call the matching `*_acquire`
+with `wait=false` and return the raw `Result(Dynamic, …)` immediately.
+
+`must_lock` / `lock` / `must_semaphore` / `semaphore` **block**: they acquire (or
+reserve a FIFO slot) and then poll `lock_get` / `semaphore_get` until the lock is
+held or the retry budget elapses, returning a held `Grant` (`key`, `holder`,
+`fencing_token`, `lease_expires_ms`) or `Error(Timeout(waited_ms))`. `holder`
+defaults to a generated `fdc-…` id and `ttl_ms` to 60s when `None`; pass
+`default_retry()` (30s wait, 250ms poll, no attempt cap) or a custom
+`Retry(max_wait_ms:, retry_interval_ms:, max_retries:)` to tune the wait.
+
+```gleam
+// Block until held (or Timeout); `grant` proves you hold the lock.
+let assert Ok(grant) =
+  fiducia.must_lock(client, "orders/checkout", None, None, fiducia.default_retry())
+fiducia.lock_release(client, grant.key, grant.holder, grant.fencing_token)
+```
 
 ## Publishing
 
