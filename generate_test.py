@@ -84,7 +84,10 @@ class RustWasmEmitter(unittest.TestCase):
         # NaN/Infinity/fractional/unsafe), not a silent `as i64` cast.
         self.assertIn("fn checked_int(v: f64, field: &str) -> Result<i64, JsValue>", self.src)
         self.assertIn('checked_int(v, "ttl_ms")?', self.src)
-        self.assertNotIn(" as i64)", self.src)  # no raw casts left in bodies
+        # The old silent `json!(<x> as i64)` body cast must be gone (the only
+        # remaining `as i64` is inside checked_int's own `Ok(v as i64)`).
+        self.assertNotIn("json!(v as i64)", self.src)
+        self.assertNotIn('json!(ttl_ms as i64)', self.src)
 
     def test_metadata_values_must_be_strings(self):
         # Record<string,string> contract: non-string metadata values are rejected.
