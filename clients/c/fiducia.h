@@ -63,13 +63,19 @@ typedef struct fiducia_client fiducia_client;
  * allocation failure or if `base_url` is NULL. The first call also performs a
  * one-time curl_global_init(CURL_GLOBAL_DEFAULT); in a multi-threaded program
  * call curl_global_init() yourself before spawning threads (a libcurl rule).
+ * The client starts with a default 30s request timeout (see below) and never
+ * auto-follows HTTP redirects (a 3xx surfaces as the result).
  */
 fiducia_client *fiducia_client_new(const char *base_url);
 
 /* Destroy a client. Safe on NULL. */
 void fiducia_client_free(fiducia_client *c);
 
-/* Optional per-request timeout in milliseconds (<= 0 disables; the default). */
+/*
+ * Override the per-request timeout in milliseconds (covers connect + transfer).
+ * The client defaults to 30000 (30s); pass <= 0 to disable the timeout. These
+ * clients never long-poll (waiting is client-driven), so the default is safe.
+ */
 void fiducia_client_set_timeout_ms(fiducia_client *c, long timeout_ms);
 
 /* Library version string, e.g. "0.1.0". */
