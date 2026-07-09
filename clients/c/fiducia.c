@@ -349,6 +349,12 @@ done:
 static int send_req(fiducia_client *c, const char *method, struct sbuf *path,
                     char *body, int body_expected, fiducia_response *out) {
     int rc;
+    if (out) {
+        /* Honor the negative-return contract on the OOM paths below, where we
+         * never reach fiducia_request (which does its own reset). */
+        out->status = 0;
+        out->body = NULL;
+    }
     if (!out) {
         rc = FIDUCIA_ERR_ARG;
     } else if (path->err || (body_expected && body == NULL)) {
