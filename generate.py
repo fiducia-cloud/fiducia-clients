@@ -456,6 +456,7 @@ def main():
     for lang in want:
         rel, gen = TARGETS[lang]
         path = os.path.join(ROOT, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         open(path, "w").write(gen())
         print("generated %-8s -> %s (%d ops)" % (lang, rel, len(OPS)))
 
