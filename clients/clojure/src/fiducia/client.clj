@@ -173,9 +173,46 @@
   ([c key opts] (lock-acquire c key (assoc opts :wait false))))
 
 (defn must-lock
-  "Blocking acquire (wait=true)."
+  "Blocking acquire: reserve a FIFO slot (wait=true) then POLL `lock-get` until
+   this holder actually holds `key`, or the wait budget is exhausted. (A single
+   wait=true acquire only queues a ticket; it does not hold the lock.)
+
+   Returns a held-grant map — {:key :holder :fencing_token :lease_expires_ms} —
+   which you release with:
+     (lock-release c (:key g) (:holder g) (:fencing_token g))
+
+   opts:
+     :holder            stable holder id      (default: generated \"fdc-<uuid>\")
+     :ttl_ms            lease TTL of the grant (default 60000)
+     :max_wait_ms       total time to wait to acquire (default 30000)
+     :retry_interval_ms poll interval          (default 250)
+     :max_retries       optional cap on poll attempts (default: unlimited)
+
+   Throws `ex-info` with ex-data {:timeout true :key ... :holder ...} if the lock
+   is not acquired within :max_wait_ms (or :max_retries polls)."
   ([c key] (must-lock c key nil))
-  ([c key opts] (lock-acquire c key (assoc opts :wait true))))
+  ([c key opts]
+   (let [holder      (or (:holder opts) (gen-holder))
+         ttl-ms      (get opts :ttl_ms default-acquire-ttl-ms)
+         max-wait-ms (get opts :max_wait_ms default-max-wait-ms)
+         interval    (get opts :retry_interval_ms default-retry-interval-ms)
+         max-retries (:max_retries opts)
+         out         (acquire-output
+                      (lock-acquire c key {:holder holder :ttl_ms ttl-ms :wait true}))]
+     (if (:acquired out)
+       (grant key holder out)
+       (let [deadline (+ (now-ms) (long max-wait-ms))]
+         (loop [attempts 0]
+           (when (and max-retries (>= attempts max-retries))
+             (acquire-timeout! "lock" key holder max-wait-ms attempts))
+           (let [remaining (- deadline (now-ms))]
+             (when (<= remaining 0)
+               (acquire-timeout! "lock" key holder max-wait-ms attempts))
+             (Thread/sleep (long (min (long interval) remaining)))
+             (let [lk (:lock (lock-get c key))]
+               (if (and lk (= (:holder lk) holder) (some? (:fencing_token lk)))
+                 (grant key holder lk)
+                 (recur (inc attempts)))))))))))
 
 (def ^{:doc "Alias for `must-lock` (blocking acquire)."} lock must-lock)
 
