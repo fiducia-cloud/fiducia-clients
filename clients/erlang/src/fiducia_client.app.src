@@ -1,0 +1,12 @@
+{application, fiducia_client,
+ [{description, "Fiducia HTTP client for Erlang. Stdlib only: httpc (inets) + json (OTP 27+)."},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications, [kernel, stdlib, inets, ssl]},
+  {env, []},
+  {modules, []},
+  %% Hex package metadata (read by rebar3_hex at publish time).
+  {licenses, ["UNLICENSED"]},
+  {links, [{"GitHub", "https://github.com/fiducia-cloud/fiducia-clients"},
+           {"Source", "https://github.com/fiducia-cloud/fiducia-clients/tree/main/clients/erlang"}]}
+ ]}.

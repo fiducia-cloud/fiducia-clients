@@ -280,6 +280,195 @@ def gen_go():
     return GO_PRE + "\n" + "\n".join(emit_go(op) for op in OPS)
 
 
+# ------------------------------------------------------------------- rust-wasm
+# A Rust client compiled to WebAssembly. Unlike clients/rust (blocking `ureq`),
+# the wasm build cannot open sockets, so its transport is the browser `fetch`
+# API via wasm-bindgen. Every op is an async method; wasm-bindgen exports the
+# snake_case names to JS as camelCase. Kept separate from clients/rust so that
+# native client stays a plain blocking crate.
+RUST_WASM_PRE = BANNER_C + '''
+//! Fiducia client (Rust -> WebAssembly) — generated. Browser transport via `fetch`.
+//!
+//! Build:  wasm-pack build clients/rust-wasm --target web
+//!
+//! Every operation is an `async` method (exported to JS as camelCase) that
+//! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
+//! non-2xx response or transport failure.
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{Request, RequestInit, Response};
+
+/// URL-encode a path/query segment via the JS `encodeURIComponent`.
+fn enc(s: &str) -> String {
+    String::from(js_sys::encode_uri_component(s))
+}
+
+/// Build the `{ status, body }` rejection value used for every failure.
+fn err(status: u16, body: JsValue) -> JsValue {
+    let o = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("status"), &JsValue::from(status));
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("body"), &body);
+    o.into()
+}
+
+#[wasm_bindgen]
+pub struct FiduciaClient {
+    base: String,
+}
+
+#[wasm_bindgen]
+impl FiduciaClient {
+    #[wasm_bindgen(constructor)]
+    pub fn new(base_url: &str) -> FiduciaClient {
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string() }
+    }
+
+    async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
+        let opts = RequestInit::new();
+        opts.set_method(method);
+        if let Some(ref b) = body {
+            opts.set_body(&JsValue::from_str(b));
+        }
+        let url = format!("{}{}", self.base, path);
+        let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
+        if body.is_some() {
+            request.headers().set("content-type", "application/json").map_err(|e| err(0, e))?;
+        }
+        let window = web_sys::window().ok_or_else(|| err(0, JsValue::from_str("no global `window`")))?;
+        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await.map_err(|e| err(0, e))?;
+        let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
+        let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
+        let text = text_value.as_string().unwrap_or_default();
+        let parsed = if text.is_empty() {
+            JsValue::NULL
+        } else {
+            js_sys::JSON::parse(&text).unwrap_or(JsValue::NULL)
+        };
+        if !resp.ok() {
+            return Err(err(resp.status(), parsed));
+        }
+        Ok(parsed)
+    }
+'''
+
+# `int` maps to f64 (JS `number`), not i64: wasm-bindgen would expose i64 as a JS
+# `bigint`, which mismatches the response JSON (numbers) and the sibling TS
+# client. Integer-valued params are re-cast to i64 when building the JSON body so
+# the wire form stays a clean integer (e.g. 30000, never 30000.0).
+RUST_WASM_TYPE = {"string": "String", "int": "f64", "number": "f64", "bool": "bool",
+                  "string[]": "Vec<String>", "object": "JsValue"}
+
+_RW_OBJ_TO_STR = "js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default()"
+
+
+def _rw_scalar_enc(typ, var):
+    # A scalar path/query value, encoded for a URL.
+    if typ == "string":
+        return "enc(&%s)" % var
+    if typ == "int":
+        return "enc(&(%s as i64).to_string())" % var
+    return "enc(&%s.to_string())" % var
+
+
+def _rw_json_scalar(typ, var):
+    # A scalar body value as a serde_json::Value. Integers cast back to i64 so the
+    # JSON is an integer rather than a float.
+    if typ == "int":
+        return "serde_json::json!(%s as i64)" % var
+    return "serde_json::json!(%s)" % var
+
+
+def _rw_query_lines(x):
+    # Code that appends one query param to `_q` (optional ones only when present).
+    name = x["name"]
+    if x["type"] == "object":
+        val = "enc(&%s)" % (_RW_OBJ_TO_STR % name)
+    else:
+        val = _rw_scalar_enc(x["type"], name)
+    push = '        _q.push(format!("%s={}", %s));' % (name, val)
+    if not x.get("optional"):
+        return [push]
+    if x["type"] == "object":
+        return ["        if !%s.is_null() && !%s.is_undefined() {" % (name, name),
+                "    " + push, "        }"]
+    val = _rw_scalar_enc(x["type"], "v")
+    return ["        if let Some(v) = %s {" % name,
+            '            _q.push(format!("%s={}", %s));' % (name, val),
+            "        }"]
+
+
+def _rw_body_value(x):
+    # A required body param -> serde_json::Value expression.
+    if x["type"] == "object":
+        return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
+    if x["type"] == "string":
+        return "serde_json::Value::String(%s)" % x["name"]
+    return _rw_json_scalar(x["type"], x["name"])
+
+
+def emit_rust_wasm(op):
+    pp, qp, bp, req, opt = parts(op)
+    sig = ["&self"]
+    for x in req:
+        sig.append("%s: %s" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    for x in opt:
+        # Optional objects stay a nullable JsValue; other optionals are Option<T>.
+        if x["type"] == "object":
+            sig.append("%s: JsValue" % x["name"])
+        else:
+            sig.append("%s: Option<%s>" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    lines = []
+    # path (path params only; query is appended below so optionals can be omitted)
+    fmt = op["path"]
+    penc = []
+    for x in pp:
+        fmt = fmt.replace("{%s}" % x["name"], "{}")
+        penc.append(_rw_scalar_enc(x["type"], x["name"]))
+    decl = "let mut path" if qp else "let path"
+    if penc:
+        lines.append('        %s = format!("%s", %s);' % (decl, fmt, ", ".join(penc)))
+    else:
+        lines.append('        %s = String::from("%s");' % (decl, fmt))
+    # query string (required always, optional only when provided)
+    if qp:
+        lines.append("        let mut _q: Vec<String> = Vec::new();")
+        for x in qp:
+            lines.extend(_rw_query_lines(x))
+        lines.append("        if !_q.is_empty() {")
+        lines.append("            path.push('?');")
+        lines.append('            path.push_str(&_q.join("&"));')
+        lines.append("        }")
+    # body map
+    if bp:
+        lines.append("        let mut _body = serde_json::Map::new();")
+        for x in bp:
+            if not x.get("optional"):
+                lines.append('        _body.insert("%s".to_string(), %s);' % (x["name"], _rw_body_value(x)))
+            elif x["type"] == "object":
+                lines.append("        if !%s.is_null() && !%s.is_undefined() {" % (x["name"], x["name"]))
+                lines.append('            _body.insert("%s".to_string(), serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?);'
+                             % (x["name"], x["name"]))
+                lines.append("        }")
+            else:
+                lines.append("        if let Some(v) = %s {" % x["name"])
+                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v")))
+                lines.append("        }")
+        lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
+        bodyarg = "Some(_payload)"
+    else:
+        bodyarg = "None"
+    lines.append('        self.request("%s", path, %s).await' % (op["method"], bodyarg))
+    doc = op.get("doc", "")
+    # Export camelCase JS names to match the TypeScript client's surface.
+    return ('    /// %s\n    #[wasm_bindgen(js_name = %s)]\n    pub async fn %s(%s) -> Result<JsValue, JsValue> {\n%s\n    }\n'
+            % (doc, camel(op["name"]), op["name"], ", ".join(sig), "\n".join(lines)))
+
+
+def gen_rust_wasm():
+    return RUST_WASM_PRE + "\n" + "\n".join(emit_rust_wasm(op) for op in OPS) + "}\n"
+
+
 # ------------------------------------------------------------------------- docs
 def gen_markdown():
     rows = ["<!-- GENERATED by generate.py from operations.json — DO NOT EDIT BY HAND. -->",
@@ -300,17 +489,37 @@ TARGETS = {
     "python": ("clients/python/fiducia.py", gen_python),
     "ts": ("clients/ts/fiducia.ts", gen_ts),
     "go": ("clients/go/fiducia.go", gen_go),
+    "rust-wasm": ("clients/rust-wasm/src/lib.rs", gen_rust_wasm),
     "docs": ("ENDPOINTS.md", gen_markdown),
 }
 
 
 def main():
-    want = sys.argv[1:] or list(TARGETS)
+    args = sys.argv[1:]
+    # --check <targets...>  verifies the named targets are up to date without
+    # writing (exit 1 on drift). Scope it to specific targets — e.g.
+    # `--check rust-wasm` — since some clients are hand-enhanced beyond the
+    # generator baseline and would otherwise report expected drift.
+    check = "--check" in args
+    want = [a for a in args if not a.startswith("--")] or list(TARGETS)
+    drift = 0
     for lang in want:
         rel, gen = TARGETS[lang]
         path = os.path.join(ROOT, rel)
-        open(path, "w").write(gen())
+        content = gen()
+        if check:
+            current = open(path).read() if os.path.exists(path) else None
+            if current != content:
+                print("drift: %s (run: python3 generate.py %s)" % (rel, lang))
+                drift += 1
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(content)
         print("generated %-8s -> %s (%d ops)" % (lang, rel, len(OPS)))
+    if check:
+        if drift:
+            sys.exit(1)
+        print("up to date (%d target(s))." % len(want))
 
 
 if __name__ == "__main__":

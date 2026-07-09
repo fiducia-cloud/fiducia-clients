@@ -1,0 +1,15 @@
+.{
+    .name = .fiducia_client,
+    .version = "0.1.0",
+    // Globally-unique package id. Low 32 bits are CRC32("fiducia_client");
+    // high 32 bits are a fixed random id. Generated once; never changes.
+    .fingerprint = 0xfda9d0296a1e0b3d,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE.txt",
+    },
+}

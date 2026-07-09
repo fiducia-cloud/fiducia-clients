@@ -1,0 +1,15 @@
+name: fiducia-client
+version: 0.1.0
+description: |
+  Fiducia HTTP client for Crystal — distributed locks, semaphores, idempotency,
+  config KV, rate limiting, cron, leader election, and service discovery over one
+  zero-dependency HTTP contract.
+
+authors:
+  - fiducia.cloud
+
+license: Proprietary
+crystal: ">= 1.0.0"
+
+repository: https://github.com/fiducia-cloud/fiducia-clients
+documentation: https://github.com/fiducia-cloud/fiducia-clients/tree/main/clients/crystal

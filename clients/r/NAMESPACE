@@ -1,0 +1,69 @@
+# Hand-maintained namespace for the fiducia.client package.
+
+importFrom(httr, GET, POST, PUT, DELETE, content, content_type_json, status_code, timeout)
+importFrom(jsonlite, fromJSON, toJSON)
+importFrom(utils, URLencode)
+
+# constructor
+export(fiducia_client)
+
+# misc
+export(health)
+export(status)
+
+# locks
+export(lock_get)
+export(lock_acquire)
+export(lock_acquire_many)
+export(try_lock)
+export(must_lock)
+export(lock)
+export(lock_release)
+
+# semaphores
+export(semaphore_get)
+export(semaphore_acquire)
+export(try_semaphore)
+export(must_semaphore)
+export(semaphore)
+export(semaphore_release)
+
+# idempotency
+export(idempotency_get)
+export(idempotency_claim)
+export(idempotency_complete)
+
+# reader-writer locks
+export(rw_acquire_read)
+export(rw_end_read)
+export(rw_acquire_write)
+export(rw_end_write)
+
+# config KV
+export(kv_get)
+export(kv_put)
+export(kv_delete)
+export(kv_list)
+
+# rate limiting
+export(rate_limit_get)
+export(rate_limit_check)
+
+# cron / scheduling
+export(schedule_get)
+export(schedule_upsert)
+export(schedule_record_run)
+export(schedule_history)
+
+# leader election
+export(election_get)
+export(election_campaign)
+export(election_renew)
+export(election_resign)
+
+# service discovery
+export(service_instances)
+export(service_register)
+export(service_heartbeat)
+export(service_deregister)
+export(service_list)

@@ -27,7 +27,8 @@ Each lives under [`clients/`](clients/):
 | TypeScript | [`clients/ts`](clients/ts) | `fetch` (stdlib) |
 | Python | [`clients/python`](clients/python) | `urllib` (stdlib) |
 | Go | [`clients/go`](clients/go) | `net/http` (stdlib) |
-| Rust | [`clients/rust`](clients/rust) | `ureq` |
+| Rust | [`clients/rust`](clients/rust) | `ureq` (blocking) |
+| Rust → WebAssembly | [`clients/rust-wasm`](clients/rust-wasm) | browser `fetch` (`wasm-bindgen` + `web-sys`) |
 | Java | [`clients/java`](clients/java) | `java.net.http` (JDK 11+) |
 | C# | [`clients/csharp`](clients/csharp) | `HttpClient` (.NET) |
 | Ruby | [`clients/ruby`](clients/ruby) | `net/http` (stdlib) |
@@ -36,6 +37,24 @@ Each lives under [`clients/`](clients/):
 | PowerShell | [`clients/powershell`](clients/powershell) | `Invoke-RestMethod` |
 | Dart | [`clients/dart`](clients/dart) | `dart:io` (stdlib) |
 | Elixir | [`clients/elixir`](clients/elixir) | `:httpc` + `:json` (OTP 27+) |
+| Gleam | [`clients/gleam`](clients/gleam) | `gleam_httpc` + `gleam_json` |
+| F# | [`clients/fsharp`](clients/fsharp) | `HttpClient` + `System.Text.Json` (.NET) |
+| OCaml | [`clients/ocaml`](clients/ocaml) | `ezcurl` + `yojson` |
+| Clojure | [`clients/clojure`](clients/clojure) | `java.net.http` + `data.json` |
+| Scala | [`clients/scala`](clients/scala) | `java.net.http` + `ujson` |
+| Kotlin | [`clients/kotlin`](clients/kotlin) | `java.net.http` + `kotlinx.serialization` |
+| Erlang | [`clients/erlang`](clients/erlang) | `httpc` + `json` (OTP 27+) |
+| Swift | [`clients/swift`](clients/swift) | `URLSession` (Foundation) |
+| C++ | [`clients/cpp`](clients/cpp) | `libcurl` + `nlohmann/json` |
+| C | [`clients/c`](clients/c) | `libcurl` (bring your own JSON) |
+| Zig | [`clients/zig`](clients/zig) | `std.http` + `std.json` (stdlib) |
+| Haskell | [`clients/haskell`](clients/haskell) | `http-client` + `aeson` |
+| Julia | [`clients/julia`](clients/julia) | `HTTP.jl` + `JSON.jl` |
+| R | [`clients/r`](clients/r) | `httr` + `jsonlite` |
+| MATLAB | [`clients/matlab`](clients/matlab) | `webread`/`webwrite` + `jsondecode` |
+| Nim | [`clients/nim`](clients/nim) | `std/httpclient` + `std/json` (stdlib) |
+| Crystal | [`clients/crystal`](clients/crystal) | `HTTP::Client` + `JSON` (stdlib) |
+| Lua | [`clients/lua`](clients/lua) | `luasocket`/`luasec` + `dkjson` |
 
 ## Shape (same everywhere)
 
@@ -161,6 +180,28 @@ systems so stale leaders can be rejected after failover. Discovery metadata is
 an exact-match string map, so leader-aware clients can filter on fields such as
 `leader=true`, `region=us-east-1`, or `version=blue` while SSE watches track
 election and service changes.
+
+## WebAssembly (browser)
+
+[`clients/rust-wasm`](clients/rust-wasm) is the Rust client compiled to
+WebAssembly. It cannot open sockets like the blocking `clients/rust` build, so
+its transport is the browser `fetch` API via `wasm-bindgen` + `web-sys`. Its
+`src/lib.rs` is generated from `operations.json` — every operation is an `async`
+method, exported to JS as camelCase, that resolves to the parsed JSON response
+(or rejects with `{ status, body }`):
+
+```sh
+python3 generate.py rust-wasm                 # (re)generate clients/rust-wasm/src/lib.rs
+wasm-pack build clients/rust-wasm --target web # -> pkg/ with .wasm + .d.ts
+```
+
+```js
+import init, { FiduciaClient } from "./pkg/fiducia_client_wasm.js";
+await init();
+const c = new FiduciaClient("https://api.fiducia.cloud");
+const lock = await c.lockAcquire("orders/checkout", "worker-a", 30000, false);
+await c.lockRelease("worker-a", lock.result.output.fencing_token);
+```
 
 ## CLI
 
