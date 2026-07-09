@@ -1,3 +1,0 @@
-(executable
- (name smoke)
- (libraries fiducia unix))

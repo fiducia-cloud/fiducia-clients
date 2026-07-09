@@ -35,8 +35,9 @@ public final class FiduciaClient {
     private let baseURL: String
     private let session: URLSession
     private let ownsSession: Bool
-    // Refuses to follow 3xx redirects; retained for the client's lifetime because
-    // a delegate-backed URLSession keeps only a weak-until-running ref to it.
+    // Refuses to follow 3xx redirects. Held for the client's lifetime so it
+    // outlives individual tasks when passed as the per-task delegate on the async
+    // path (where URLSession does not retain it for us).
     private let redirectBlocker: RedirectBlocker
 
     /// Optional per-request timeout (seconds) applied to every request.
