@@ -1,0 +1,38 @@
+# Single fiducia-node for client-conformance testing.
+#
+# Boots ONE node that self-elects leader of all shards (Raft quorum of 1) and
+# serves the /v1 coordination API on host port ${FIDUCIA_NODE_PORT:-8090}.
+#
+#   docker compose up -d --build      # build image from the node repo + run
+#   curl http://localhost:8090/readyz # readiness (poll from the HOST — see note)
+#   docker compose down
+#
+# NOTE: this path needs a reachable Docker daemon and network access to GitHub
+# (the node Dockerfile clones the sibling fiducia-routing / fiducia-interfaces
+# crates during the build). If Docker is unavailable, use ./run-node.sh (MODE=cargo).
+services:
+  fiducia-node:
+    image: fiducia-node:conformance
+    container_name: fiducia-node-conformance
+    build:
+      # Build context = the fiducia-node.rs checkout (sibling of fiducia-clients).
+      # Override with FIDUCIA_NODE_REPO if it lives elsewhere.
+      context: ${FIDUCIA_NODE_REPO:-../../fiducia-node.rs}
+      dockerfile: Dockerfile
+    ports:
+      # client/data plane: /healthz, /readyz, /v1/*
+      - "${FIDUCIA_NODE_PORT:-8090}:8090"
+    environment:
+      # SINGLE-NODE: FIDUCIA_PEERS is unset => empty peer set => this node leads
+      # every shard from t=0. node_id is cosmetic for a solo node.
+      FIDUCIA_NODE_ID: node-a
+      # CRITICAL: the default data dir (/var/lib/fiducia) is NOT writable by the
+      # distroless nonroot user (uid 65532); the node PANICS on boot if it cannot
+      # create it. Point it at the writable tmpfs mounted below.
+      FIDUCIA_DATA_DIR: /data
+      RUST_LOG: info
+    tmpfs:
+      # Ephemeral Raft WAL/state — conformance runs need no persistence.
+      - /data
+    # No in-container healthcheck: the distroless image ships no shell or curl.
+    # Probe readiness from the host: curl http://localhost:${FIDUCIA_NODE_PORT:-8090}/readyz
