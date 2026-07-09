@@ -174,6 +174,8 @@ let semaphore_release c ~key ~holder ~fencing_token =
 (* --- idempotency --- *)
 let idempotency_get c ~key = request c `GET ("/v1/idempotency?key=" ^ enc key) None
 
+(* [ttl_ms] is the numeric millisecond TTL; [ttl] is the distinct friendly-string
+   form (e.g. "24h") — do not conflate them. *)
 let idempotency_claim c ~key ?owner ?ttl_ms ?ttl ?metadata () =
   request c `POST "/v1/idempotency/claim"
     (Some
@@ -181,7 +183,7 @@ let idempotency_claim c ~key ?owner ?ttl_ms ?ttl ?metadata () =
           [ ("key", req_s key);
             ("owner", opt_s owner);
             ("ttl_ms", opt_i ttl_ms);
-            ("ttl", opt_i ttl);
+            ("ttl", opt_s ttl);
             ("metadata", (metadata : Yojson.Safe.t option))
           ]))
 
