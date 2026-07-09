@@ -287,7 +287,8 @@ def gen_go():
 # snake_case names to JS as camelCase. Kept separate from clients/rust so that
 # native client stays a plain blocking crate.
 RUST_WASM_PRE = BANNER_C + '''
-//! Fiducia client (Rust -> WebAssembly) — generated. Browser transport via `fetch`.
+//! Fiducia client (Rust -> WebAssembly) — generated. Transport is the global
+//! `fetch` (browser main thread, Web Workers, and Node 18+/Deno).
 //!
 //! Build:  wasm-pack build clients/rust-wasm --target web
 //!
