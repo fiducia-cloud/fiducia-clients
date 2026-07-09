@@ -464,7 +464,12 @@ def _rw_object_query_lines(name):
         "                let _k = _pair.get(0).as_string().unwrap_or_default();",
         "                if _k.is_empty() { continue; }",
         "                let _v = _pair.get(1);",
-        "                let _vs = _v.as_string().unwrap_or_else(|| %s);" % (_RW_OBJ_TO_STR % "_v"),
+        # Contract is Record<string,string>; reject non-string values loudly
+        # instead of silently JSON-stringifying them (cross-client surprises).
+        "                let _vs = match _v.as_string() {",
+        "                    Some(_s) => _s,",
+        '                    None => return Err(err(0, JsValue::from_str(&format!("%s.{_k} must be a string")))),' % name,
+        "                };",
         '                _q.push(format!("%s.{}={}", enc(&_k), enc(&_vs)));' % name,
         "            }",
         "        }",
