@@ -1,0 +1,1 @@
+-record(http, {status :: integer(), body :: gleam@dynamic:dynamic_()}).
