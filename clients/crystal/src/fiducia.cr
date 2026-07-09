@@ -24,6 +24,18 @@ module Fiducia
     end
   end
 
+  # Raised by the blocking helpers (+must_lock+/+lock+, +must_semaphore+/
+  # +semaphore+) when the wait budget elapses before the grant is held. Distinct
+  # from Fiducia::Error (which is an HTTP status) — a timeout carries no status.
+  class Timeout < Exception
+    getter keys : Array(String)
+    getter waited_ms : Int64
+
+    def initialize(@keys : Array(String), @waited_ms : Int64)
+      super("fiducia: timed out after #{@waited_ms}ms waiting for #{@keys.join(", ")}")
+    end
+  end
+
   # Thin HTTP wrapper over the fiducia contract. Every method returns the parsed
   # JSON response as a JSON::Any (an empty body decodes to a null JSON::Any), and
   # raises Fiducia::Error on any status >= 300. Optional params are omitted from
