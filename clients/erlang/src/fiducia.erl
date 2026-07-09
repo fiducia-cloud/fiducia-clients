@@ -193,8 +193,25 @@ try_semaphore(C, Key, Limit, Opts) -> semaphore_acquire(C, Key, Limit, Opts#{wai
 -spec must_semaphore(client(), binary() | string(), integer()) -> result().
 must_semaphore(C, Key, Limit) -> must_semaphore(C, Key, Limit, #{}).
 
+%% @doc Blocking acquire for a semaphore permit; see must_lock/3 for the poll
+%% behaviour, knobs, and return shape. Polls semaphore_get and returns the held
+%% permit (this holder's entry with a non-null fencing token), or {error, timeout}.
 -spec must_semaphore(client(), binary() | string(), integer(), map()) -> result().
-must_semaphore(C, Key, Limit, Opts) -> semaphore_acquire(C, Key, Limit, Opts#{wait => true}).
+must_semaphore(C, Key, Limit, Opts) ->
+    Holder = resolve_holder(Opts),
+    Acq = semaphore_acquire(C, Key, Limit, Opts#{holder => Holder,
+                                                 ttl_ms => maps:get(ttl_ms, Opts, 60000),
+                                                 wait => true}),
+    case Acq of
+        {ok, Resp} ->
+            Out = output(Resp),
+            case maps:get(<<"acquired">>, Out, false) of
+                true -> {ok, held_grant(Holder, Out)};
+                _ -> poll_semaphore(C, Key, Holder, deadline(Opts), interval(Opts),
+                                    maps:get(max_retries, Opts, undefined), 0)
+            end;
+        Err -> Err
+    end.
 
 %% @doc Alias for must_semaphore/3.
 -spec semaphore(client(), binary() | string(), integer()) -> result().
