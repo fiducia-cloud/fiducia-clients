@@ -45,6 +45,10 @@ let create ?timeout base_url =
   in
   { base; ez = Ezcurl.make ~set_opts () }
 
+(* Free the underlying libcurl handle now rather than at GC time. The client must
+   not be used after this. *)
+let close c = Ezcurl.delete c.ez
+
 (* percent-encode a string for a path segment or query value. `Generic escapes
    everything except RFC 3986 unreserved chars, so '/', spaces, '&', '=' … are
    all encoded, which is what we want in both positions. *)
