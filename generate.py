@@ -366,10 +366,12 @@ impl FiduciaClient {
         let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
         let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
         let text = text_value.as_string().unwrap_or_default();
+        // Parse JSON; if the body isn't JSON, surface the raw text (not null) so
+        // non-JSON error pages (proxies, 502s) remain diagnosable.
         let parsed = if text.is_empty() {
             JsValue::NULL
         } else {
-            js_sys::JSON::parse(&text).unwrap_or(JsValue::NULL)
+            js_sys::JSON::parse(&text).unwrap_or_else(|_| JsValue::from_str(&text))
         };
         if !resp.ok() {
             return Err(err(resp.status(), parsed));
