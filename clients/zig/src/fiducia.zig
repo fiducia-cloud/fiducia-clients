@@ -584,6 +584,37 @@ pub const Client = struct {
     }
 };
 
+// --- response body -> caller-owned Parsed(Value) --------------------------
+
+/// Package a raw HTTP response body as a `Parsed(Value)` the caller owns:
+///   * empty body       -> `.null`
+///   * well-formed JSON  -> the parsed value
+///   * anything else (HTML / plaintext error page, truncated JSON) -> a JSON
+///     `.string` holding the raw bytes, so a non-JSON body never turns a real
+///     HTTP status into `error.Transport`.
+/// Only genuine allocation failure is propagated. The result owns its arena
+/// (dynamic `Value` parsing copies every string via `.alloc_always`), so it
+/// never aliases `bytes` and stays valid after the caller frees the body.
+fn parseBody(allocator: Allocator, bytes: []const u8) Allocator.Error!std.json.Parsed(Value) {
+    if (bytes.len != 0) {
+        if (std.json.parseFromSlice(Value, allocator, bytes, .{})) |parsed| {
+            return parsed;
+        } else |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            // Non-JSON body: fall through and wrap the raw text below.
+        }
+    }
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    errdefer allocator.destroy(arena);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const val: Value = if (bytes.len == 0)
+        .null
+    else
+        .{ .string = try arena.allocator().dupe(u8, bytes) };
+    return .{ .arena = arena, .value = val };
+}
+
 // --- percent-encoding (RFC 3986 unreserved set kept; everything else %XX) ---
 
 fn isUnreserved(c: u8) bool {
