@@ -158,27 +158,40 @@ classdef Fiducia < handle
             out = obj.semaphoreAcquire(key, limit, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, 'wait', false);
         end
 
-        function out = mustSemaphore(obj, key, limit, opts)
+        function grant = mustSemaphore(obj, key, limit, opts)
+            % mustSemaphore  Blocking acquire. Acquires (wait=true) then POLLS
+            % semaphoreGet until this holder holds a permit, or raises
+            % 'fiducia:semaphoreTimeout' after max_wait_ms. Returns a held grant
+            % struct (key, holder, fencing_token, lease_expires_ms).
             arguments
                 obj
                 key
                 limit
                 opts.holder = []
                 opts.ttl_ms = []
+                opts.max_wait_ms (1,1) double = 30000
+                opts.retry_interval_ms (1,1) double = 250
+                opts.max_retries = []
             end
-            out = obj.semaphoreAcquire(key, limit, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, 'wait', true);
+            grant = obj.acquireSemaphoreBlocking(key, limit, opts.holder, opts.ttl_ms, ...
+                opts.max_wait_ms, opts.retry_interval_ms, opts.max_retries);
         end
 
-        function out = semaphore(obj, key, limit, opts)
-            % semaphore  Alias for mustSemaphore (blocking acquire, wait=true).
+        function grant = semaphore(obj, key, limit, opts)
+            % semaphore  Alias for mustSemaphore (blocking acquire that polls).
             arguments
                 obj
                 key
                 limit
                 opts.holder = []
                 opts.ttl_ms = []
+                opts.max_wait_ms (1,1) double = 30000
+                opts.retry_interval_ms (1,1) double = 250
+                opts.max_retries = []
             end
-            out = obj.mustSemaphore(key, limit, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms);
+            grant = obj.mustSemaphore(key, limit, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, ...
+                'max_wait_ms', opts.max_wait_ms, 'retry_interval_ms', opts.retry_interval_ms, ...
+                'max_retries', opts.max_retries);
         end
 
         function out = semaphoreRelease(obj, key, holder, fencing_token)
