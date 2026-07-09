@@ -114,6 +114,11 @@ catch err
 end
 ```
 
+The blocking helpers `mustLock` / `lock` / `mustSemaphore` / `semaphore` raise
+`fiducia:lockTimeout` / `fiducia:semaphoreTimeout` if the lock/permit is not held
+within `max_wait_ms` (default 30000; polled every `retry_interval_ms`, default
+250, with an optional `max_retries` cap).
+
 ## Method surface
 
 Method names use MATLAB's camelCase convention; the canonical concept names are
