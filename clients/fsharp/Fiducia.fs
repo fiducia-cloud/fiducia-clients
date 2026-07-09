@@ -70,6 +70,45 @@ module internal Internal =
             try JsonNode.Parse(text)
             with :? JsonException -> JsonValue.Create(text) :> JsonNode
 
+    // --- helpers for the blocking (must_*) poll loop ---
+
+    // A stable per-request holder id when the caller did not supply one.
+    let genHolder () = "fdc-" + Guid.NewGuid().ToString("N")
+
+    // Null-safe object field access (returns null for a missing key or a non-object).
+    let field (n: JsonNode) (k: string) : JsonNode =
+        match n with
+        | :? JsonObject as o -> (match o.TryGetPropertyValue(k) with | true, v -> v | _ -> null)
+        | _ -> null
+
+    // Walk a path of object keys, returning null if any hop is missing.
+    let rec dig (n: JsonNode) (path: string list) : JsonNode =
+        match path with
+        | [] -> n
+        | k :: rest -> dig (field n k) rest
+
+    // True only when the node is a JSON boolean true.
+    let nodeIsTrue (n: JsonNode) =
+        match n with
+        | :? JsonValue as v -> (match v.TryGetValue<bool>() with | true, b -> b | _ -> false)
+        | _ -> false
+
+    // True only when the node is a JSON string equal to s.
+    let nodeEqualsString (n: JsonNode) (s: string) =
+        match n with
+        | :? JsonValue as v -> (match v.TryGetValue<string>() with | true, x -> x = s | _ -> false)
+        | _ -> false
+
+    // Build a normalized held-grant node the caller can release with: our holder
+    // plus the proof's fencing_token (+ lease_expires_ms). Nodes are cloned via
+    // toNode so they never carry a foreign parent and int64 precision is preserved.
+    let heldGrant (holder: string) (fencingToken: JsonNode) (leaseExpiresMs: JsonNode) : JsonNode =
+        let g = JsonObject()
+        g.["holder"] <- toNode (box holder)
+        g.["fencing_token"] <- toNode (box fencingToken)
+        if not (isNull leaseExpiresMs) then g.["lease_expires_ms"] <- toNode (box leaseExpiresMs)
+        g :> JsonNode
+
 /// Thin HTTP wrapper over the Fiducia contract. Every method issues one request
 /// and returns the parsed JSON response as a JsonNode (null for an empty body).
 type FiduciaClient(baseUrl: string) =
