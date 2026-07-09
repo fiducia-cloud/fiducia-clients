@@ -351,7 +351,7 @@ impl FiduciaClient {
         }
         // Bound the request with AbortSignal.timeout (browser/worker/Node18+/Deno).
         if let Some(ms) = self.timeout_ms {
-            opts.set_signal(Some(&AbortSignal::timeout(ms)));
+            opts.set_signal(Some(&abort_signal_timeout(ms)));
         }
         let url = format!("{}{}", self.base, path);
         let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
