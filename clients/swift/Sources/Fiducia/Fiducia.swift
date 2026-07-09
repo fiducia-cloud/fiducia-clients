@@ -360,3 +360,18 @@ public final class FiduciaClient {
         value.addingPercentEncoding(withAllowedCharacters: encAllowed) ?? value
     }
 }
+
+/// Blocks automatic HTTP redirect following. Returning `nil` from the redirect
+/// handler tells `URLSession` to deliver the 3xx response as-is rather than
+/// transparently re-issuing the (possibly mutating) request against `Location`.
+/// Because the status is >= 300 it becomes a `FiduciaError`, matching the "do not
+/// retry / follow — the edge already handles leader redirects" contract.
+private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
