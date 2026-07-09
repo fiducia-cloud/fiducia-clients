@@ -146,6 +146,33 @@ data FiduciaError = FiduciaError
 
 instance Exception FiduciaError
 
+-- | Thrown by the blocking helpers ('mustLock', 'lock', 'mustSemaphore',
+-- 'semaphore') when the grant is not held before the poll budget ('maxWaitMs'
+-- or 'maxRetries') is exhausted. Carries the key and the holder id that was
+-- waited on (the holder is generated when the caller passes 'Nothing').
+data LockTimeout = LockTimeout
+  { timeoutKey :: Text
+  , timeoutHolder :: Text
+  , timeoutWaitedMs :: Int
+  }
+  deriving (Show)
+
+instance Exception LockTimeout
+
+-- | Poll budget for the blocking acquire helpers. Build from 'defaultPollOpts'
+-- and override fields as needed, e.g. @defaultPollOpts {maxWaitMs = 5000}@.
+data PollOpts = PollOpts
+  { maxWaitMs :: Int -- ^ total wall-clock budget to keep polling, in ms
+  , retryIntervalMs :: Int -- ^ delay between polls, in ms
+  , maxRetries :: Maybe Int -- ^ optional cap on the number of polls
+  }
+  deriving (Show)
+
+-- | Reference defaults: @maxWaitMs = 30000@, @retryIntervalMs = 250@,
+-- @maxRetries = Nothing@ (matches the other Fiducia clients).
+defaultPollOpts :: PollOpts
+defaultPollOpts = PollOpts {maxWaitMs = 30000, retryIntervalMs = 250, maxRetries = Nothing}
+
 -- --- misc ---
 
 -- | Liveness probe: @GET \/healthz@.
