@@ -84,7 +84,10 @@ lk = c.lockAcquire('orders/checkout', ttl_ms=30000, wait=true);
 Every method returns the decoded JSON response: a `struct` for a JSON object, a
 cell/array for a JSON array, and `[]` for an empty body (`jsondecode`
 conventions). Reach into nested fields directly, e.g.
-`lk.result.output.fencing_token`.
+`lk.result.output.fencing_token`. The blocking helpers
+`mustLock`/`lock`/`mustSemaphore`/`semaphore` instead return a held-grant
+`struct` with fields `key`, `holder`, `fencing_token`, `lease_expires_ms` — pass
+those straight to `lockRelease`/`semaphoreRelease`.
 
 ### Optional parameters
 
