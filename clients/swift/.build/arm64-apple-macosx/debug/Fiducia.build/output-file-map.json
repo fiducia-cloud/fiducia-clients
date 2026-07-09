@@ -1,0 +1,11 @@
+{
+  "": {
+    "swift-dependencies": "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/master.swiftdeps"
+  },
+  "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/Sources/Fiducia/Fiducia.swift": {
+    "dependencies": "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/Fiducia.d",
+    "object": "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/Fiducia.swift.o",
+    "swiftmodule": "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/Fiducia~partial.swiftmodule",
+    "swift-dependencies": "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/Fiducia.swiftdeps"
+  }
+}
