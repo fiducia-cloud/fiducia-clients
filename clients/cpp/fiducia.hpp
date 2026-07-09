@@ -419,13 +419,16 @@ private:
 
     json request(const std::string& method, const std::string& path,
                  std::optional<json> body = std::nullopt) {
-        CURL* curl = curl_easy_init();
-        if (!curl) throw std::runtime_error("fiducia: curl_easy_init failed");
+        // Both handles are RAII-managed: they are released on every exit path,
+        // including if body->dump() throws below or an error is thrown later.
+        detail::EasyHandle easy;
+        if (!easy) throw std::runtime_error("fiducia: curl_easy_init failed");
+        CURL* curl = easy.get();
 
         std::string url = base_ + path;
         std::string response;
         std::string payload;
-        struct curl_slist* headers = nullptr;
+        detail::HeaderList headers;
 
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
@@ -437,18 +440,16 @@ private:
 
         if (body) {
             payload = body->dump();
-            headers = curl_slist_append(headers, "Content-Type: application/json");
+            headers.append("Content-Type: application/json");
             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
             curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
                              static_cast<long>(payload.size()));
         }
-        if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (headers.get()) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
         CURLcode rc = curl_easy_perform(curl);
         long status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-        if (headers) curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
 
         if (rc != CURLE_OK)
             throw std::runtime_error(std::string("fiducia: request failed: ") +
