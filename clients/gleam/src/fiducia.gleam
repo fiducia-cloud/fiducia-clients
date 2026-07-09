@@ -666,6 +666,188 @@ pub fn service_list(client: Client) -> Result(Dynamic, FiduciaError) {
 
 // --- internals ---
 
+// -- blocking acquire: poll loops behind must_lock / must_semaphore --
+
+/// Resolve the holder id: caller-supplied, else a generated stable id.
+fn resolve_holder(holder: Option(String)) -> String {
+  case holder {
+    Some(h) -> h
+    None -> gen_holder()
+  }
+}
+
+/// Pull a held grant out of an acquire response's `result.output`. `Some` only
+/// when `acquired == true` with a fencing token; `None` means queued → poll.
+fn output_grant(resp: Dynamic, key: String, holder: String) -> Option(Grant) {
+  let decoder = {
+    use acquired <- decode.optional_field("acquired", False, decode.bool)
+    use token <- decode.optional_field(
+      "fencing_token",
+      None,
+      decode.optional(decode.int),
+    )
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(acquired, token, lease))
+  }
+  case decode.run(resp, decode.at(["result", "output"], decoder)) {
+    Ok(#(True, Some(token), lease)) ->
+      Some(Grant(
+        key: key,
+        holder: holder,
+        fencing_token: token,
+        lease_expires_ms: lease,
+      ))
+    _ -> None
+  }
+}
+
+/// Poll `lock_get(key)` until we hold the lock or the deadline / attempt cap is
+/// hit. A union lock is held iff we hold its first member, so single-key polling
+/// is correct here.
+fn poll_lock(
+  client: Client,
+  key: String,
+  holder: String,
+  deadline: Int,
+  retry: Retry,
+  attempt: Int,
+) -> Result(Grant, FiduciaError) {
+  case retry.max_retries {
+    Some(cap) if attempt >= cap -> Error(Timeout(retry.max_wait_ms))
+    _ -> {
+      let remaining = deadline - now_ms()
+      case remaining <= 0 {
+        True -> Error(Timeout(retry.max_wait_ms))
+        False -> {
+          nap(retry.retry_interval_ms, remaining)
+          use resp <- result.try(lock_get(client, key))
+          case lock_held_by(resp, key, holder) {
+            Some(grant) -> Ok(grant)
+            None -> poll_lock(client, key, holder, deadline, retry, attempt + 1)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Poll `semaphore_get(key)` until our holder holds a permit or the budget is
+/// exhausted.
+fn poll_semaphore(
+  client: Client,
+  key: String,
+  holder: String,
+  deadline: Int,
+  retry: Retry,
+  attempt: Int,
+) -> Result(Grant, FiduciaError) {
+  case retry.max_retries {
+    Some(cap) if attempt >= cap -> Error(Timeout(retry.max_wait_ms))
+    _ -> {
+      let remaining = deadline - now_ms()
+      case remaining <= 0 {
+        True -> Error(Timeout(retry.max_wait_ms))
+        False -> {
+          nap(retry.retry_interval_ms, remaining)
+          use resp <- result.try(semaphore_get(client, key))
+          case semaphore_held_by(resp, key, holder) {
+            Some(grant) -> Ok(grant)
+            None ->
+              poll_semaphore(client, key, holder, deadline, retry, attempt + 1)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// `lock_get` response → `Some(Grant)` iff `resp.lock.holder == holder` with a
+/// non-null fencing token.
+fn lock_held_by(resp: Dynamic, key: String, holder: String) -> Option(Grant) {
+  let decoder = {
+    use who <- decode.field("holder", decode.string)
+    use token <- decode.field("fencing_token", decode.int)
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(who, token, lease))
+  }
+  case decode.run(resp, decode.at(["lock"], decoder)) {
+    Ok(#(who, token, lease)) if who == holder ->
+      Some(Grant(
+        key: key,
+        holder: holder,
+        fencing_token: token,
+        lease_expires_ms: lease,
+      ))
+    _ -> None
+  }
+}
+
+/// `semaphore_get` response → `Some(Grant)` for the `semaphore.holders` entry
+/// matching our holder with a non-null fencing token.
+fn semaphore_held_by(
+  resp: Dynamic,
+  key: String,
+  holder: String,
+) -> Option(Grant) {
+  let entry = {
+    use who <- decode.field("holder", decode.string)
+    use token <- decode.optional_field(
+      "fencing_token",
+      None,
+      decode.optional(decode.int),
+    )
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(who, token, lease))
+  }
+  case decode.run(resp, decode.at(["semaphore", "holders"], decode.list(entry))) {
+    Ok(holders) ->
+      holders
+      |> list.find_map(fn(h) {
+        case h {
+          #(who, Some(token), lease) if who == holder ->
+            Ok(Grant(
+              key: key,
+              holder: holder,
+              fencing_token: token,
+              lease_expires_ms: lease,
+            ))
+          _ -> Error(Nil)
+        }
+      })
+      |> option.from_result
+    Error(_) -> None
+  }
+}
+
+/// Sleep for `min(interval, remaining)` ms (both are > 0 at the call site).
+fn nap(interval: Int, remaining: Int) -> Nil {
+  case interval < remaining {
+    True -> sleep(interval)
+    False -> sleep(remaining)
+  }
+}
+
+@external(erlang, "fiducia_ffi", "monotonic_ms")
+fn now_ms() -> Int
+
+@external(erlang, "fiducia_ffi", "sleep")
+fn sleep(ms: Int) -> Nil
+
+@external(erlang, "fiducia_ffi", "gen_holder")
+fn gen_holder() -> String
+
 /// Default per-request timeout (connect + response) in milliseconds. This equals
 /// gleam_httpc's own default; it is pinned here so the value is explicit and does
 /// not silently change if the library default changes.
