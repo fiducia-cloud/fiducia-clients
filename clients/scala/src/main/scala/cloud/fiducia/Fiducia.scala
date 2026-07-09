@@ -331,8 +331,13 @@ class FiduciaClient(baseUrl: String, requestTimeout: Option[Duration] = None) {
     }
     val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString())
     val text = response.body()
+    // An empty/204 body is null; a non-JSON body (e.g. a proxy's plain-text 502)
+    // must not crash the parser and lose the status — fall back to the raw text.
     val data: ujson.Value =
-      if (text == null || text.isEmpty) ujson.Null else ujson.read(text)
+      if (text == null || text.isEmpty) ujson.Null
+      else
+        try ujson.read(text)
+        catch { case NonFatal(_) => ujson.Str(text) }
     if (response.statusCode() >= 300) throw FiduciaException(response.statusCode(), data)
     data
   }
