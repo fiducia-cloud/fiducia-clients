@@ -131,8 +131,30 @@ try_lock(C, Key, Opts) -> lock_acquire(C, Key, Opts#{wait => false}).
 -spec must_lock(client(), binary() | string()) -> result().
 must_lock(C, Key) -> must_lock(C, Key, #{}).
 
+%% @doc Blocking acquire. The server does not hold the connection on wait=true
+%% (it reserves a FIFO slot and returns immediately), so this acquires with
+%% wait=true and then polls lock_get until THIS holder actually holds the lock
+%% or the wait budget elapses. Returns {ok, Grant} where Grant is a map with
+%% <<"holder">>, <<"fencing_token">> and <<"lease_expires_ms">> (the holder is
+%% generated when not supplied, so release with Grant's holder), or
+%% {error, timeout}. Opts knobs (atom keys): holder, ttl_ms (default 60000),
+%% max_wait_ms (default 30000), retry_interval_ms (default 250), max_retries.
 -spec must_lock(client(), binary() | string(), map()) -> result().
-must_lock(C, Key, Opts) -> lock_acquire(C, Key, Opts#{wait => true}).
+must_lock(C, Key, Opts) ->
+    Holder = resolve_holder(Opts),
+    Acq = lock_acquire(C, Key, Opts#{holder => Holder,
+                                     ttl_ms => maps:get(ttl_ms, Opts, 60000),
+                                     wait => true}),
+    case Acq of
+        {ok, Resp} ->
+            Out = output(Resp),
+            case maps:get(<<"acquired">>, Out, false) of
+                true -> {ok, held_grant(Holder, Out)};
+                _ -> poll_lock(C, Key, Holder, deadline(Opts), interval(Opts),
+                               maps:get(max_retries, Opts, undefined), 0)
+            end;
+        Err -> Err
+    end.
 
 %% @doc Alias for must_lock/2.
 -spec lock(client(), binary() | string()) -> result().
