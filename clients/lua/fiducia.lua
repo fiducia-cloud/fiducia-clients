@@ -15,6 +15,10 @@
 --
 -- Deps (LuaRocks): luasocket, luasec, dkjson. Optional fields are omitted from
 -- request bodies when nil (CAS-friendly); booleans such as wait are always sent.
+--
+-- TLS: luasec's ssl.https convenience module does NOT verify the server
+-- certificate by default. Pass Fiducia.new(url, { tls = { verify = "peer",
+-- cafile = "/path/ca.pem" } }) to enable certificate verification.
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")
