@@ -54,7 +54,9 @@ proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): J
         status = parseInt(parts[0])
       except ValueError:
         status = 0
-    let data = if raw.len == 0: nil else: parseJson(raw)
+    var data: JsonNode = nil
+    if raw.len > 0:
+      data = parseJson(raw)
     if status >= 300:
       raise newFiduciaError(status, data)
     result = data
