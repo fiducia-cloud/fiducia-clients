@@ -316,13 +316,22 @@ fn err(status: u16, body: JsValue) -> JsValue {
 #[wasm_bindgen]
 pub struct FiduciaClient {
     base: String,
+    timeout_ms: Option<f64>,
 }
 
 #[wasm_bindgen]
 impl FiduciaClient {
+    /// `timeout_ms` is optional (pass `undefined` for none); when set, each
+    /// request aborts after that many milliseconds via `AbortSignal.timeout`.
     #[wasm_bindgen(constructor)]
-    pub fn new(base_url: &str) -> FiduciaClient {
-        FiduciaClient { base: base_url.trim_end_matches('/').to_string() }
+    pub fn new(base_url: &str, timeout_ms: Option<f64>) -> FiduciaClient {
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string(), timeout_ms }
+    }
+
+    /// Set (or clear, with `undefined`) the per-request timeout in milliseconds.
+    #[wasm_bindgen(js_name = setTimeoutMs)]
+    pub fn set_timeout_ms(&mut self, timeout_ms: Option<f64>) {
+        self.timeout_ms = timeout_ms;
     }
 
     async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
@@ -330,6 +339,10 @@ impl FiduciaClient {
         opts.set_method(method);
         if let Some(ref b) = body {
             opts.set_body(&JsValue::from_str(b));
+        }
+        // Bound the request with AbortSignal.timeout (browser/worker/Node18+/Deno).
+        if let Some(ms) = self.timeout_ms {
+            opts.set_signal(Some(&AbortSignal::timeout(ms)));
         }
         let url = format!("{}{}", self.base, path);
         let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
