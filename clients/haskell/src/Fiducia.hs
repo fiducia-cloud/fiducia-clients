@@ -391,7 +391,12 @@ trimTrailingSlashes = reverse . dropWhile (== '/') . reverse
 request :: Client -> Method -> String -> Maybe Value -> IO Value
 request c httpMethod path mbody = do
   initReq <- parseRequest (clientBase c ++ path)
-  resp <- httpLbs (applyBody mbody (initReq {method = httpMethod})) (clientManager c)
+  -- redirectCount = 0: never auto-follow 3xx. Following a redirect on a mutating
+  -- POST/PUT/DELETE could re-submit the operation (duplicating a lock grant or
+  -- FIFO queue slot); the load balancer already routes to the shard leader. A 3xx
+  -- is >= 300 and so surfaces as a 'FiduciaError' carrying its status and body.
+  let req = (initReq {method = httpMethod, redirectCount = 0})
+  resp <- httpLbs (applyBody mbody req) (clientManager c)
   let code = statusCode (responseStatus resp)
       raw = responseBody resp
       val = if LBS.null raw then Null else fromMaybe Null (decode raw)
