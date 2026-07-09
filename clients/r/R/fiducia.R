@@ -59,6 +59,12 @@ fiducia_client <- function(base_url, timeout = 30) {
   )
 
   args <- list(url = url)
+  # Never auto-follow redirects. httr/libcurl follows a 3xx by default, and
+  # following one on a mutating POST/PUT/DELETE (e.g. /v1/locks/acquire) can
+  # re-submit the operation and duplicate a lock grant / FIFO queue slot. The
+  # edge/LB already handles leader redirects, so surfacing a 3xx as the client's
+  # >= 300 error (status + body) is the correct, safe behavior.
+  args <- c(args, list(httr::config(followlocation = 0L)))
   if (!is.null(body)) {
     args$body <- .fiducia_json_body(body)
     args$encode <- "raw"

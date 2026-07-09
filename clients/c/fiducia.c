@@ -23,6 +23,15 @@
 
 #define FIDUCIA_VERSION "0.1.0"
 
+/*
+ * Default per-request timeout (connect + transfer), in milliseconds. These
+ * clients never long-poll -- per PROTOCOL, waiting on wait:true is client-driven
+ * and the server returns immediately -- so every request completes promptly and
+ * a conservative default is safe. Override, or disable with <= 0, via
+ * fiducia_client_set_timeout_ms().
+ */
+#define FIDUCIA_DEFAULT_TIMEOUT_MS 30000L
+
 /* --------------------------------------------------------------------------
  * Growable string buffer (for URLs and JSON bodies).
  * On allocation failure `err` latches to 1 and further appends are no-ops.
@@ -250,7 +259,7 @@ fiducia_client *fiducia_client_new(const char *base_url) {
     }
     memcpy(c->base, base_url, n);
     c->base[n] = '\0';
-    c->timeout_ms = 0;
+    c->timeout_ms = FIDUCIA_DEFAULT_TIMEOUT_MS;
     return c;
 }
 
@@ -312,6 +321,10 @@ static int fiducia_request(fiducia_client *c, const char *method,
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &m);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+    /* Never auto-follow 3xx: following a redirect on a mutating POST/PUT/DELETE
+     * could re-submit the operation (duplicate a lock grant / queue slot). This
+     * is libcurl's default; pinned explicitly so it can never regress. A 3xx
+     * (>= 300) then surfaces as the client's result (status + body). */
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
     if (c->timeout_ms > 0) {
         curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, c->timeout_ms);

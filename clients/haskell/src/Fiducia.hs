@@ -83,13 +83,16 @@ import Network.HTTP.Client
   , Request
   , RequestBody (RequestBodyLBS)
   , httpLbs
+  , managerResponseTimeout
   , method
   , newManager
   , parseRequest
+  , redirectCount
   , requestBody
   , requestHeaders
   , responseBody
   , responseStatus
+  , responseTimeoutMicro
   )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (Method, hContentType, statusCode)
@@ -104,9 +107,11 @@ data Client = Client
 
 -- | Create a client for the given base URL, e.g. @"https://api.fiducia.cloud"@.
 -- The same client (and its connection pool) is safe to share across threads.
+-- A conservative 30s response timeout is applied so a stalled server cannot hang
+-- a caller forever (these operations do not long-poll).
 newClient :: String -> IO Client
 newClient baseUrl = do
-  mgr <- newManager tlsManagerSettings
+  mgr <- newManager tlsManagerSettings {managerResponseTimeout = responseTimeoutMicro 30000000}
   pure Client {clientManager = mgr, clientBase = trimTrailingSlashes baseUrl}
 
 -- | Raised on any response with HTTP status >= 300. Carries the numeric status
@@ -386,7 +391,12 @@ trimTrailingSlashes = reverse . dropWhile (== '/') . reverse
 request :: Client -> Method -> String -> Maybe Value -> IO Value
 request c httpMethod path mbody = do
   initReq <- parseRequest (clientBase c ++ path)
-  resp <- httpLbs (applyBody mbody (initReq {method = httpMethod})) (clientManager c)
+  -- redirectCount = 0: never auto-follow 3xx. Following a redirect on a mutating
+  -- POST/PUT/DELETE could re-submit the operation (duplicating a lock grant or
+  -- FIFO queue slot); the load balancer already routes to the shard leader. A 3xx
+  -- is >= 300 and so surfaces as a 'FiduciaError' carrying its status and body.
+  let req = (initReq {method = httpMethod, redirectCount = 0})
+  resp <- httpLbs (applyBody mbody req) (clientManager c)
   let code = statusCode (responseStatus resp)
       raw = responseBody resp
       val = if LBS.null raw then Null else fromMaybe Null (decode raw)

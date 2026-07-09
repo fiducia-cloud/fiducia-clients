@@ -42,6 +42,12 @@ JSON response (a `Dict`, `Vector`, scalar, or `nothing` for an empty body).
 Optional keyword arguments (`holder`, `ttl_ms`, `metadata`, …) are only sent
 when provided, which preserves compare-and-swap semantics.
 
+Each request carries a 30-second connect/read timeout by default; pass
+`Client(url; connect_timeout = 10, read_timeout = 10)` to change it (or `0` to
+disable). Requests are issued exactly once — they never auto-follow redirects and
+are never auto-retried — so a mutating call is never silently duplicated and a
+3xx from the edge surfaces as a `FiduciaError`.
+
 `lock(c, key; ...)` is the blocking alias of `must_lock`; because Julia already
 exports `lock`, it is added as a method on `Base.lock` and is callable as
 `lock(c, key)` without importing anything extra.

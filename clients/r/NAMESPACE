@@ -1,6 +1,6 @@
 # Hand-maintained namespace for the fiducia.client package.
 
-importFrom(httr, GET, POST, PUT, DELETE, content, content_type_json, status_code, timeout)
+importFrom(httr, GET, POST, PUT, DELETE, config, content, content_type_json, status_code, timeout)
 importFrom(jsonlite, fromJSON, toJSON)
 importFrom(utils, URLencode)
 

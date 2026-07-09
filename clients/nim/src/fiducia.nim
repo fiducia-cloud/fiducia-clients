@@ -24,7 +24,8 @@ type
   Client* = ref object
     ## A thin Fiducia HTTP client. Build one with `newClient`.
     baseUrl*: string
-    timeout*: int     ## per-request timeout in milliseconds (-1 = no timeout)
+    timeout*: int     ## per-request socket timeout in milliseconds (-1 = wait
+                      ## indefinitely). Defaults to 30_000 via `newClient`.
 
 proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
   new(result)
@@ -40,7 +41,12 @@ proc enc(s: string): string =
   encodeUrl(s, usePlus = false)
 
 proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): JsonNode =
-  let client = newHttpClient(timeout = c.timeout)
+  # maxRedirects = 0: never auto-follow a 3xx. The fixed load balancer routes to
+  # the owning shard leader internally, so a redirect is not expected; following
+  # one would re-issue a mutating POST/PUT/DELETE and could duplicate a lock
+  # grant or FIFO queue slot. A 3xx instead surfaces through the normal path
+  # (status >= 300 -> FiduciaError), which is the safe behavior.
+  let client = newHttpClient(maxRedirects = 0, timeout = c.timeout)
   try:
     let headers = newHttpHeaders()
     var payload = ""
@@ -72,9 +78,12 @@ proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): J
   finally:
     client.close()
 
-proc newClient*(baseUrl: string, timeout: int = -1): Client =
+proc newClient*(baseUrl: string, timeout: int = 30_000): Client =
   ## Build a client. Trailing slashes on `baseUrl` are trimmed. `timeout` is the
-  ## per-request timeout in milliseconds (-1 = no timeout).
+  ## per-request socket timeout in milliseconds; it defaults to 30_000 (30s) so a
+  ## dead or hung connection cannot block forever. Waiting is client-driven — the
+  ## server never holds a `wait:true` request open (it returns a queued result
+  ## immediately) — so a finite default is safe. Pass `-1` to wait indefinitely.
   var b = baseUrl
   b.removeSuffix('/')
   Client(baseUrl: b, timeout: timeout)

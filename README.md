@@ -201,9 +201,11 @@ wasm-pack build clients/rust-wasm --target web # -> pkg/ with .wasm + .d.ts
 import init, { FiduciaClient } from "./pkg/fiducia_client_wasm.js";
 await init();
 const c = new FiduciaClient("https://api.fiducia.cloud", 5000); // optional per-request timeout (ms)
+c.setHeader("Authorization", "Bearer <token>"); // default header on every request
 const lock = await c.lockAcquire("orders/checkout", "worker-a", 30000, false);
 await c.lockRelease("worker-a", lock.result.output.fencing_token);
-// c.setTimeoutMs(10000); // or adjust/clear later (undefined = no timeout)
+// c.setTimeoutMs(10000);         // adjust/clear the timeout (undefined = none)
+// c.setHeader("Idempotency-Key", key); c.removeHeader("Idempotency-Key");
 ```
 
 Each call resolves to the parsed JSON, or rejects with `{ status, body }` — `status`

@@ -32,20 +32,15 @@ let create ?(timeout = 30.) base_url =
     done;
     String.sub base_url 0 !n
   in
-  (* ezcurl's Config exposes none of these, so set them on the shared libcurl
-     handle directly; ezcurl re-applies [set_opts] after each Curl.reset, so a
-     reused client keeps them on every request.
-     - Never follow redirects: the fixed load balancer routes internally, and
-       following a 3xx on a mutating POST/PUT/DELETE could re-submit and
-       duplicate the operation. A 3xx instead surfaces as [Fiducia_error]
-       (status >= 300), which is the safe behavior. libcurl defaults
-       FOLLOWLOCATION off; we pin it (and maxredirs 0) explicitly.
-     - [timeout] (seconds) caps connect + total request time; defaults to 30s
-       and is caller-overridable. Pass [~timeout:0.] to disable it entirely
-       (libcurl's own default is no timeout). *)
+  (* ezcurl's Config exposes no timeout, so set libcurl's timeout on the shared
+     handle here; ezcurl re-applies [set_opts] after each Curl.reset, so a reused
+     client keeps it on every request. [timeout] (seconds) caps connect + total
+     request time; defaults to 30s and is caller-overridable — pass [~timeout:0.]
+     to disable it (libcurl's own default is no timeout).
+     NB redirect-following is disabled per-request via [no_follow] below, NOT
+     here: ezcurl applies its Config (whose follow_location defaults to true)
+     after set_opts, so a followlocation set here would just be overridden. *)
   let set_opts (h : Curl.t) =
-    Curl.set_followlocation h false;
-    Curl.set_maxredirs h 0;
     if timeout > 0. then begin
       let ms = int_of_float (timeout *. 1000.) in
       Curl.set_timeoutms h ms;
@@ -87,6 +82,15 @@ let obj (fields : (string * Yojson.Safe.t option) list) : Yojson.Safe.t =
        fields)
 
 (* --- request core --- *)
+
+(* Never follow redirects. The fixed load balancer routes internally, so a 3xx on
+   a mutating POST/PUT/DELETE would, if followed, re-submit the operation and could
+   duplicate a lock grant / queue slot. With following off a 3xx returns as-is and,
+   being >= 300, surfaces as [Fiducia_error]. ezcurl's default Config sets
+   follow_location=true and applies it after our [set_opts], so we must pass this
+   config on every request to actually disable it. *)
+let no_follow = Ezcurl.Config.follow_location false Ezcurl.Config.default
+
 let request c meth path (body : Yojson.Safe.t option) : Yojson.Safe.t =
   let url = c.base ^ path in
   let content =
@@ -106,7 +110,10 @@ let request c meth path (body : Yojson.Safe.t option) : Yojson.Safe.t =
     | `PUT -> Ezcurl.PUT
     | `DELETE -> Ezcurl.DELETE
   in
-  match Ezcurl.http ~client:c.ez ?content ~headers ~url ~meth:ez_meth () with
+  match
+    Ezcurl.http ~client:c.ez ~config:no_follow ?content ~headers ~url
+      ~meth:ez_meth ()
+  with
   | Error (_code, msg) -> failwith ("fiducia: HTTP transport error: " ^ msg)
   | Ok resp ->
     let raw = resp.Ezcurl.body in

@@ -295,7 +295,8 @@ RUST_WASM_PRE = BANNER_C + '''
 //! Every operation is an `async` method (exported to JS as camelCase) that
 //! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
 //! non-2xx response or transport failure. Pass an optional `timeout_ms` to the
-//! constructor (or `setTimeoutMs`) to bound each request.
+//! constructor (or `setTimeoutMs`) to bound each request, and `setHeader` to
+//! attach default headers such as `Authorization` to every request.
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -326,6 +327,9 @@ fn err(status: u16, body: JsValue) -> JsValue {
 pub struct FiduciaClient {
     base: String,
     timeout_ms: Option<f64>,
+    // Default headers applied to every request (e.g. Authorization). Header
+    // names are case-insensitive; the last value set for a name wins.
+    headers: Vec<(String, String)>,
 }
 
 #[wasm_bindgen]
@@ -334,13 +338,27 @@ impl FiduciaClient {
     /// request aborts after that many milliseconds via `AbortSignal.timeout`.
     #[wasm_bindgen(constructor)]
     pub fn new(base_url: &str, timeout_ms: Option<f64>) -> FiduciaClient {
-        FiduciaClient { base: base_url.trim_end_matches('/').to_string(), timeout_ms }
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string(), timeout_ms, headers: Vec::new() }
     }
 
     /// Set (or clear, with `undefined`) the per-request timeout in milliseconds.
     #[wasm_bindgen(js_name = setTimeoutMs)]
     pub fn set_timeout_ms(&mut self, timeout_ms: Option<f64>) {
         self.timeout_ms = timeout_ms;
+    }
+
+    /// Set a default header sent on every request — e.g. `Authorization`,
+    /// `Idempotency-Key`. Setting the same name again replaces it.
+    #[wasm_bindgen(js_name = setHeader)]
+    pub fn set_header(&mut self, name: &str, value: &str) {
+        self.headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.headers.push((name.to_string(), value.to_string()));
+    }
+
+    /// Remove a previously set default header (no-op if absent).
+    #[wasm_bindgen(js_name = removeHeader)]
+    pub fn remove_header(&mut self, name: &str) {
+        self.headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
     }
 
     async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
@@ -355,8 +373,14 @@ impl FiduciaClient {
         }
         let url = format!("{}{}", self.base, path);
         let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
+        let req_headers = request.headers();
         if body.is_some() {
-            request.headers().set("content-type", "application/json").map_err(|e| err(0, e))?;
+            req_headers.set("content-type", "application/json").map_err(|e| err(0, e))?;
+        }
+        // Default headers (auth, idempotency key, ...) override content-type only
+        // if the caller explicitly set that name.
+        for (name, value) in &self.headers {
+            req_headers.set(name, value).map_err(|e| err(0, e))?;
         }
         // Resolve `fetch` from the global scope so the client works on the
         // browser main thread, in Web Workers, and in Node 18+/Deno (global

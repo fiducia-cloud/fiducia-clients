@@ -34,16 +34,40 @@ public struct FiduciaError: Error, CustomStringConvertible {
 public final class FiduciaClient {
     private let baseURL: String
     private let session: URLSession
+    private let ownsSession: Bool
+    // Refuses to follow 3xx redirects. Held for the client's lifetime so it
+    // outlives individual tasks when passed as the per-task delegate on the async
+    // path (where URLSession does not retain it for us).
+    private let redirectBlocker: RedirectBlocker
 
     /// Optional per-request timeout (seconds) applied to every request.
     public var requestTimeout: TimeInterval?
 
-    public init(baseURL: String, session: URLSession = .shared, requestTimeout: TimeInterval? = nil) {
+    /// - Parameter session: a custom `URLSession` to use as-is. When omitted, the
+    ///   client builds a private session whose delegate does NOT follow redirects,
+    ///   so a mutating POST/PUT/DELETE is never silently re-submitted to a 3xx
+    ///   `Location` target — the redirect surfaces as a `FiduciaError` instead.
+    public init(baseURL: String, session: URLSession? = nil, requestTimeout: TimeInterval? = nil) {
         var trimmed = baseURL
         while trimmed.hasSuffix("/") { trimmed.removeLast() }
         self.baseURL = trimmed
-        self.session = session
         self.requestTimeout = requestTimeout
+        let blocker = RedirectBlocker()
+        self.redirectBlocker = blocker
+        if let session = session {
+            self.session = session
+            self.ownsSession = false
+        } else {
+            self.session = URLSession(configuration: .default, delegate: blocker, delegateQueue: nil)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        // A delegate-backed URLSession retains its delegate (and itself) until it
+        // is invalidated; tear down only the session we created, never the
+        // caller's, so nothing leaks.
+        if ownsSession { session.finishTasksAndInvalidate() }
     }
 
     // MARK: - misc
@@ -303,12 +327,15 @@ public final class FiduciaClient {
         return parsed ?? NSNull()
     }
 
-    /// Uses `URLSession.data(for:)` where available (macOS 12+/iOS 15+) and falls
-    /// back to a `dataTask` continuation on older iOS so the async surface still
-    /// works down to the package's iOS 13 floor.
+    /// Uses `URLSession.data(for:delegate:)` where available (macOS 12+/iOS 15+)
+    /// and falls back to a `dataTask` continuation on older iOS so the async
+    /// surface still works down to the package's iOS 13 floor. `redirectBlocker`
+    /// suppresses redirect following on BOTH paths: as the per-task delegate on
+    /// the async path (so it applies even to a caller-supplied session) and as the
+    /// owned session's delegate on the legacy `dataTask` path.
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         if #available(macOS 12.0, iOS 15.0, tvOS 15.0, watchOS 8.0, *) {
-            return try await session.data(for: request)
+            return try await session.data(for: request, delegate: redirectBlocker)
         } else {
             return try await withCheckedThrowingContinuation { continuation in
                 let task = session.dataTask(with: request) { data, response, error in
@@ -332,5 +359,20 @@ public final class FiduciaClient {
 
     private static func enc(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: encAllowed) ?? value
+    }
+}
+
+/// Blocks automatic HTTP redirect following. Returning `nil` from the redirect
+/// handler tells `URLSession` to deliver the 3xx response as-is rather than
+/// transparently re-issuing the (possibly mutating) request against `Location`.
+/// Because the status is >= 300 it becomes a `FiduciaError`, matching the "do not
+/// retry / follow — the edge already handles leader redirects" contract.
+private final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

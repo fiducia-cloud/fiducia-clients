@@ -37,16 +37,23 @@ end
 Base.showerror(io::IO, e::FiduciaError) = print(io, "FiduciaError: HTTP ", e.status)
 
 """
-    Client(base_url)
+    Client(base_url; connect_timeout = 30, read_timeout = 30)
 
 A thin HTTP client for a fiducia endpoint. The trailing slash of `base_url` is
 trimmed. Every operation takes the client as its first argument and returns the
 parsed JSON response (a `Dict`/`Vector`/scalar, or `nothing` for an empty body).
+
+`connect_timeout` and `read_timeout` bound every request in seconds (pass `0` to
+disable). Requests never auto-follow redirects and are never auto-retried, so a
+mutating call is issued exactly once and a 3xx surfaces as a `FiduciaError`.
 """
 struct Client
     base_url::String
+    connect_timeout::Int
+    read_timeout::Int
 
-    Client(base_url::AbstractString) = new(String(rstrip(base_url, '/')))
+    Client(base_url::AbstractString; connect_timeout::Integer = 30, read_timeout::Integer = 30) =
+        new(String(rstrip(base_url, '/')), connect_timeout, read_timeout)
 end
 
 # --- internals ---
@@ -84,7 +91,14 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
         push!(headers, "Content-Type" => "application/json")
         payload = JSON.json(body)
     end
-    resp = HTTP.request(method, c.base_url * path, headers, payload; status_exception = false)
+    # redirect=false: never auto-follow a 3xx. Following a redirect on a mutating
+    # POST/PUT/DELETE could re-submit the operation (duplicate a lock grant / FIFO
+    # queue slot); since a 3xx is >= 300 it surfaces as a FiduciaError instead.
+    # retry=false: issue each request exactly once (the edge/LB already handles
+    # leader redirects, and HTTP.jl otherwise auto-retries idempotent methods).
+    resp = HTTP.request(method, c.base_url * path, headers, payload;
+        status_exception = false, redirect = false, retry = false,
+        connect_timeout = c.connect_timeout, readtimeout = c.read_timeout)
     text = String(resp.body)
     data = _parse_body(text)
     resp.status >= 300 && throw(FiduciaError(resp.status, data))

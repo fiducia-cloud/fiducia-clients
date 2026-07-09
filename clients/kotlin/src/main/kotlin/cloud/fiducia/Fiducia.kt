@@ -16,6 +16,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.UUID
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -37,10 +38,15 @@ class FiduciaException(val status: Int, val body: JsonElement?) :
  */
 class FiduciaClient(baseUrl: String) {
     private val base: String = baseUrl.trimEnd('/')
-    private val http: HttpClient = HttpClient.newHttpClient()
+    // Do NOT auto-follow redirects: a 3xx on a mutating POST/PUT/DELETE must not be
+    // silently re-submitted (it could duplicate a lock grant / queue slot). NEVER is
+    // java.net.http's default; pin it explicitly so the safety is not config-dependent.
+    private val http: HttpClient = HttpClient.newBuilder()
+        .followRedirects(HttpClient.Redirect.NEVER)
+        .build()
 
-    /** Per-request timeout applied to every call. */
-    var requestTimeout: Duration? = null
+    /** Per-request timeout (connect + response) applied to every call; set to null to disable. */
+    var requestTimeout: Duration? = Duration.ofSeconds(30)
 
     /** Overrides [requestTimeout] for the blocking acquire calls (locks/semaphores). */
     var lockRequestTimeout: Duration? = null
@@ -287,10 +293,16 @@ class FiduciaClient(baseUrl: String) {
     // --- request core ---------------------------------------------------------
 
     private fun request(method: String, path: String, body: JsonObject? = null, lockAcquire: Boolean = false): JsonElement {
+        // One stable Idempotency-Key per logical request, reused on every retry, so a
+        // client-side retry of a mutating call cannot duplicate a lock grant / queue slot
+        // (the server dedups on the header). Only attached when retries are enabled, so
+        // retryMax == 0 sends exactly the bytes it did before.
+        val idempotencyKey: String? =
+            if (retryMax > 0 && isMutating(method)) UUID.randomUUID().toString() else null
         var attempt = 0
         while (true) {
             try {
-                return requestOnce(method, path, body, lockAcquire)
+                return requestOnce(method, path, body, lockAcquire, idempotencyKey)
             } catch (e: RuntimeException) {
                 if (attempt >= retryMax || !retryable(e)) throw e
                 attempt++
@@ -299,9 +311,13 @@ class FiduciaClient(baseUrl: String) {
         }
     }
 
-    private fun requestOnce(method: String, path: String, body: JsonObject?, lockAcquire: Boolean): JsonElement {
+    private fun isMutating(method: String): Boolean =
+        method == "POST" || method == "PUT" || method == "DELETE"
+
+    private fun requestOnce(method: String, path: String, body: JsonObject?, lockAcquire: Boolean, idempotencyKey: String?): JsonElement {
         val builder = HttpRequest.newBuilder(URI.create(base + path))
         resolveTimeout(lockAcquire)?.let { builder.timeout(it) }
+        idempotencyKey?.let { builder.header("Idempotency-Key", it) }
         if (body != null) {
             builder.header("content-type", "application/json")
             builder.method(method, HttpRequest.BodyPublishers.ofString(body.toString()))

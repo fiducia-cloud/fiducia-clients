@@ -67,7 +67,7 @@ cc my_app.c fiducia.o -lcurl -o my_app
 
 int main(void) {
     fiducia_client *c = fiducia_client_new("https://api.fiducia.cloud");
-    /* optional: fiducia_client_set_timeout_ms(c, 5000); */
+    /* default 30s request timeout; override e.g. fiducia_client_set_timeout_ms(c, 5000); */
 
     fiducia_response r;
 
