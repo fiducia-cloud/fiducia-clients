@@ -24,7 +24,8 @@ type
   Client* = ref object
     ## A thin Fiducia HTTP client. Build one with `newClient`.
     baseUrl*: string
-    timeout*: int     ## per-request timeout in milliseconds (-1 = no timeout)
+    timeout*: int     ## per-request socket timeout in milliseconds (-1 = wait
+                      ## indefinitely). Defaults to 30_000 via `newClient`.
 
 proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
   new(result)
