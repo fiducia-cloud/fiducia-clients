@@ -119,6 +119,47 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
     return data
 end
 
+# A stable holder id when the caller does not supply one.
+_gen_holder() = "fdc-" * bytes2hex(rand(UInt8, 16))
+
+# Monotonic clock in milliseconds, for poll deadlines.
+_now_ms() = time_ns() / 1_000_000
+
+# The acquire envelope's `result.output` (or an empty Dict if absent).
+function _acquire_output(resp)
+    resp isa AbstractDict || return Dict{String,Any}()
+    r = get(resp, "result", nothing)
+    r isa AbstractDict || return Dict{String,Any}()
+    o = get(r, "output", nothing)
+    return o isa AbstractDict ? o : Dict{String,Any}()
+end
+
+# A held grant: exactly what a caller needs to release later.
+_grant(key, holder, src) = Dict{String,Any}(
+    "key" => key,
+    "holder" => holder,
+    "fencing_token" => get(src, "fencing_token", nothing),
+    "lease_expires_ms" => get(src, "lease_expires_ms", nothing),
+    "acquired" => true,
+)
+
+# Poll `check` every `retry_interval_ms` until it returns a held grant (non-nothing)
+# or the `max_wait_ms` monotonic budget (or `max_retries`) is exhausted — then throw
+# `LockTimeout`. `check` runs one GET and returns the grant, or `nothing` to retry.
+function _poll_until_held(check, keys, max_wait_ms, retry_interval_ms, max_retries)
+    deadline = _now_ms() + max_wait_ms
+    attempts = 0
+    while max_retries === nothing || attempts < max_retries
+        attempts += 1
+        remaining = deadline - _now_ms()
+        remaining <= 0 && break
+        sleep(min(retry_interval_ms, remaining) / 1000)
+        grant = check()
+        grant === nothing || return grant
+    end
+    throw(LockTimeout(keys, max_wait_ms))
+end
+
 # --- misc ---
 health(c::Client) = _request(c, "GET", "/healthz")
 status(c::Client) = _request(c, "GET", "/v1/status")
