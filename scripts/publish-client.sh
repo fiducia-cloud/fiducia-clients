@@ -63,6 +63,15 @@ run_root() {
   fi
 }
 
+# Languages without a central package registry (C, C++, Zig, Swift/SPM, Crystal
+# shards, Julia General, MATLAB File Exchange) are distributed by git tag +
+# GitHub Release: consumers fetch the tag. Usage: gh_release <word> <file...>
+gh_release() {
+  word="$1"
+  shift
+  run_root ': "${PACKAGE_VERSION:?set PACKAGE_VERSION}"; test -z "$(git status --porcelain)"; git tag "clients/'"$client"'/v${PACKAGE_VERSION}"; git push origin "clients/'"$client"'/v${PACKAGE_VERSION}"; gh release create "clients/'"$client"'/v${PACKAGE_VERSION}" '"$*"' --title "fiducia '"$word"' ${PACKAGE_VERSION}" --notes "'"$word"' client release for fiducia.cloud."'
+}
+
 case "$client" in
   ts)
     run 'npm pack --dry-run && npm publish --access public'
