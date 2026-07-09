@@ -242,8 +242,39 @@
   ([c key limit opts] (semaphore-acquire c key limit (assoc opts :wait false))))
 
 (defn must-semaphore
+  "Blocking acquire: reserve a permit (wait=true) then POLL `semaphore-get` until
+   this holder holds a permit on `key`, or the wait budget is exhausted.
+
+   Returns a held-grant map {:key :holder :fencing_token :lease_expires_ms};
+   release with (semaphore-release c (:key g) (:holder g) (:fencing_token g)).
+   opts are the same as `must-lock`. Throws `ex-info` with ex-data
+   {:timeout true ...} if no permit is acquired within :max_wait_ms."
   ([c key limit] (must-semaphore c key limit nil))
-  ([c key limit opts] (semaphore-acquire c key limit (assoc opts :wait true))))
+  ([c key limit opts]
+   (let [holder      (or (:holder opts) (gen-holder))
+         ttl-ms      (get opts :ttl_ms default-acquire-ttl-ms)
+         max-wait-ms (get opts :max_wait_ms default-max-wait-ms)
+         interval    (get opts :retry_interval_ms default-retry-interval-ms)
+         max-retries (:max_retries opts)
+         out         (acquire-output
+                      (semaphore-acquire c key limit
+                                         {:holder holder :ttl_ms ttl-ms :wait true}))]
+     (if (:acquired out)
+       (grant key holder out)
+       (let [deadline (+ (now-ms) (long max-wait-ms))]
+         (loop [attempts 0]
+           (when (and max-retries (>= attempts max-retries))
+             (acquire-timeout! "semaphore" key holder max-wait-ms attempts))
+           (let [remaining (- deadline (now-ms))]
+             (when (<= remaining 0)
+               (acquire-timeout! "semaphore" key holder max-wait-ms attempts))
+             (Thread/sleep (long (min (long interval) remaining)))
+             (let [slot (->> (get-in (semaphore-get c key) [:semaphore :holders])
+                             (filter #(= (:holder %) holder))
+                             first)]
+               (if (and slot (some? (:fencing_token slot)))
+                 (grant key holder slot)
+                 (recur (inc attempts)))))))))))
 
 (def ^{:doc "Alias for `must-semaphore` (blocking acquire)."} semaphore must-semaphore)
 
