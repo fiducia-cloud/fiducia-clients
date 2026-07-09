@@ -714,3 +714,35 @@ test "response check maps >=300 to error.Http" {
     try std.testing.expect(!r.ok());
     try std.testing.expectError(error.Http, r.check());
 }
+
+test "kv put keeps prev_revision:0 (CAS create-only), never dropped" {
+    var sink: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer sink.deinit();
+    var js = Stringify{ .writer = &sink.writer };
+    try js.beginObject();
+    try fJson(&js, "value", Value{ .string = "v" });
+    try fIntOpt(&js, "ttl_ms", null);
+    try fIntOpt(&js, "prev_revision", 0);
+    try js.endObject();
+    try std.testing.expectEqualStrings("{\"value\":\"v\",\"prev_revision\":0}", sink.written());
+}
+
+test "parseBody: empty body -> null" {
+    const parsed = try parseBody(std.testing.allocator, "");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .null);
+}
+
+test "parseBody: valid JSON parses normally" {
+    const parsed = try parseBody(std.testing.allocator, "{\"a\":1}");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .object);
+    try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("a").?.integer);
+}
+
+test "parseBody: non-JSON body -> raw string, not a transport error" {
+    const parsed = try parseBody(std.testing.allocator, "502 Bad Gateway");
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value == .string);
+    try std.testing.expectEqualStrings("502 Bad Gateway", parsed.value.string);
+}
