@@ -82,13 +82,19 @@ function Fiducia:_request(method, path, body)
   end
 
   local chunks = {}
-  local ok, code = transport_for(url).request({
-    url = url,
-    method = method,
-    headers = headers,
-    source = source,
-    sink = ltn12.sink.table(chunks),
-  })
+  local transport, is_https = transport_for(url)
+  -- Seed the request table with caller-supplied TLS params (https only), then set
+  -- the core fields last so url/method/headers/source/sink can never be clobbered.
+  local reqt = {}
+  if is_https and self.tls then
+    for k, v in pairs(self.tls) do reqt[k] = v end
+  end
+  reqt.url = url
+  reqt.method = method
+  reqt.headers = headers
+  reqt.source = source
+  reqt.sink = ltn12.sink.table(chunks)
+  local ok, code = transport.request(reqt)
 
   if not ok then
     -- Connection / TLS / DNS failure: `code` holds the error message.
