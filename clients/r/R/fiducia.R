@@ -74,7 +74,12 @@ fiducia_client <- function(base_url, timeout = 30) {
   data <- if (length(text) == 0 || is.na(text) || !nzchar(text)) {
     NULL
   } else {
-    jsonlite::fromJSON(text, simplifyVector = FALSE)
+    # A non-JSON body (e.g. a proxy's plain-text/HTML 5xx page) must not crash
+    # the client: fall back to the raw text so the status + message still surface.
+    tryCatch(
+      jsonlite::fromJSON(text, simplifyVector = FALSE),
+      error = function(e) text
+    )
   }
 
   if (status >= 300) {
