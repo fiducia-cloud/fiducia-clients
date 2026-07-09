@@ -83,8 +83,12 @@ On HTTP status `>= 300` the client throws an `ex-info`:
   (f/lock-get c "missing")
   (catch clojure.lang.ExceptionInfo e
     (:status (ex-data e))    ; => numeric HTTP status
-    (:body   (ex-data e))))  ; => parsed JSON body (keywordized) or nil
+    (:body   (ex-data e))))  ; => parsed JSON body (keywordized), raw text, or nil
 ```
+
+The blocking helpers (`must-lock`/`must-semaphore`) also throw an `ex-info` when
+they cannot acquire within `:max_wait_ms` (or `:max_retries` polls); that one
+carries `{:timeout true :key ... :holder ...}` in its `ex-data` (no `:status`).
 
 ## Method surface
 
