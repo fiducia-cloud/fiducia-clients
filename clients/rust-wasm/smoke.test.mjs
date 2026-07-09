@@ -117,6 +117,40 @@ test("non-JSON error body surfaces as raw text", async () => {
   );
 });
 
+test("integer bodies are bounds-checked (NaN/Infinity/fractional/unsafe reject)", async () => {
+  const calls = stubFetch(() => json({}));
+  const c = new wasm.FiduciaClient("https://x");
+  await c.lockAcquire("k", "h", 30000, false); // valid
+  assert.match(calls[0].body, /"ttl_ms":30000(,|})/);
+  for (const bad of [NaN, Infinity, 30000.5, 9007199254740993]) {
+    await assert.rejects(
+      () => c.lockAcquire("k", "h", bad, false),
+      (e) => {
+        assert.equal(e.status, 0);
+        assert.match(e.body, /ttl_ms.*safe integer/);
+        return true;
+      },
+      `should reject ttl_ms=${bad}`,
+    );
+  }
+});
+
+test("metadata values must be strings (non-string rejects with the key)", async () => {
+  stubFetch(() => json({ instances: [] }));
+  const c = new wasm.FiduciaClient("https://x");
+  await c.serviceInstances("api", { region: "us-east-1" }); // ok
+  for (const [md, key] of [[{ version: 1 }, "version"], [{ tags: ["a"] }, "tags"]]) {
+    await assert.rejects(
+      () => c.serviceInstances("api", md),
+      (e) => {
+        assert.equal(e.status, 0);
+        assert.equal(e.body, `metadata.${key} must be a string`);
+        return true;
+      },
+    );
+  }
+});
+
 test("default headers (auth, idempotency-key) are attached; replace/remove work", async () => {
   let seen;
   globalThis.fetch = async (req) => {
