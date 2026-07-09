@@ -19,22 +19,31 @@
 ;; A Fiducia client. Build one with `client`; pass it first to every op.
 (defrecord Client [base http timeout-ms])
 
+;; Conservative default so a request can never hang forever. These ops do not
+;; long-poll, so a bounded default is safe; callers can still override per client.
+(def ^:private default-timeout-ms 30000)
+
 (defn client
   "Build a Fiducia client.
 
      (client \"https://api.fiducia.cloud\")
      (client \"https://api.fiducia.cloud\" {:timeout-ms 5000 :connect-timeout-ms 2000})
 
-   The trailing slash of the base URL is trimmed. Options:
+   The trailing slash of the base URL is trimmed. Options (both default to 30000 ms):
      :timeout-ms         per-request read/response timeout (ms)
-     :connect-timeout-ms TCP connect timeout (ms)"
+     :connect-timeout-ms TCP connect timeout (ms)
+
+   Redirects are never followed: a 3xx surfaces as an error like any other
+   status >= 300, so a redirect can never silently re-submit a mutating
+   POST/PUT/DELETE (which could duplicate a lock grant / queue slot)."
   ([base-url] (client base-url nil))
   ([base-url opts]
    (let [base (str/replace (str base-url) #"/+$" "")
+         connect-ms (get opts :connect-timeout-ms default-timeout-ms)
          ^HttpClient$Builder builder (HttpClient/newBuilder)]
-     (when-let [t (:connect-timeout-ms opts)]
-       (.connectTimeout builder (Duration/ofMillis (long t))))
-     (->Client base (.build builder) (:timeout-ms opts)))))
+     (.followRedirects builder HttpClient$Redirect/NEVER)
+     (.connectTimeout builder (Duration/ofMillis (long connect-ms)))
+     (->Client base (.build builder) (get opts :timeout-ms default-timeout-ms)))))
 
 ;; ---------------------------------------------------------------------------
 ;; internals
