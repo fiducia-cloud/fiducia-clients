@@ -163,13 +163,26 @@ public final class FiduciaClient {
         try await semaphoreAcquire(key, limit: limit, holder: holder, ttlMs: ttlMs, wait: false)
     }
 
-    public func mustSemaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await semaphoreAcquire(key, limit: limit, holder: holder, ttlMs: ttlMs, wait: true)
+    /// Blocks until a semaphore permit is actually HELD, then returns a held-grant
+    /// dictionary (`["key", "holder", "fencing_token", "lease_expires_ms"]`). Like
+    /// `mustLock`, the acquire returns a queued ticket immediately, so this POLLS
+    /// `semaphoreGet` until `holder` appears among the permit holders with a
+    /// fencing token, or the `maxWaitMs` budget (or optional `maxRetries`) is
+    /// exhausted — then it throws `FiduciaTimeout`.
+    public func mustSemaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil,
+                              maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        let who = holder ?? Self.genHolder()
+        let out = Self.output(try await semaphoreAcquire(key, limit: limit, holder: who, ttlMs: ttlMs ?? 60000, wait: true))
+        if out["acquired"] as? Bool == true {
+            return Self.heldGrant(key: key, holder: who, fencingToken: out["fencing_token"], leaseExpiresMs: out["lease_expires_ms"])
+        }
+        return try await pollSemaphoreUntilHeld(key: key, holder: who, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
-    /// Alias for `mustSemaphore`.
-    public func semaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await mustSemaphore(key, limit: limit, holder: holder, ttlMs: ttlMs)
+    /// Alias for `mustSemaphore` — blocks by polling until held or `FiduciaTimeout`.
+    public func semaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil,
+                          maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        try await mustSemaphore(key, limit: limit, holder: holder, ttlMs: ttlMs, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
     public func semaphoreRelease(_ key: String, holder: String, fencingToken: Any) async throws -> Any {
