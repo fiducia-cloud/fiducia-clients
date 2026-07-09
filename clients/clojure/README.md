@@ -66,6 +66,14 @@ keyword keys (or `nil` for an empty body). Optional arguments go in a trailing
 options map; only the keys you actually pass are placed in the request body (so
 compare-and-set semantics like `:prev_revision` behave correctly).
 
+The blocking helpers `must-lock`/`lock` and `must-semaphore`/`semaphore` are the
+exception: a `wait=true` acquire only reserves a FIFO slot server-side, so these
+reserve the slot and then **poll** the matching `*-get` until this holder actually
+holds the resource. They return a held-grant map — `{:key :holder :fencing_token
+:lease_expires_ms}` — ready to pass to `lock-release`/`semaphore-release`, and
+accept `:holder :ttl_ms :max_wait_ms` (30000) `:retry_interval_ms` (250)
+`:max_retries`. `try-lock`/`try-semaphore` stay single-shot (no poll).
+
 ## Errors
 
 On HTTP status `>= 300` the client throws an `ex-info`:
