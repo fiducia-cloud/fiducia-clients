@@ -77,8 +77,8 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 **semaphores**
 - `c:semaphore_get(key)`
 - `c:semaphore_acquire(key, limit, { holder, ttl_ms, wait = true })`
-- `c:try_semaphore(key, limit, { holder, ttl_ms })` — `wait = false`
-- `c:must_semaphore(key, limit, { holder, ttl_ms })` / `c:semaphore(...)` — `wait = true`
+- `c:try_semaphore(key, limit, { holder, ttl_ms })` — `wait = false`, single shot; returns the raw response
+- `c:must_semaphore(key, limit, { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries })` / `c:semaphore(...)` — **blocks** (polls) until held; returns a grant (see [Blocking helpers](#blocking-helpers))
 - `c:semaphore_release(key, holder, fencing_token)`
 
 **idempotency**
