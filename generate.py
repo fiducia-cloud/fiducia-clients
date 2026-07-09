@@ -494,7 +494,7 @@ def _rw_body_value(x):
         return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
     if x["type"] == "string":
         return "serde_json::Value::String(%s)" % x["name"]
-    return _rw_json_scalar(x["type"], x["name"])
+    return _rw_json_scalar(x["type"], x["name"], x["name"])
 
 
 def emit_rust_wasm(op):
