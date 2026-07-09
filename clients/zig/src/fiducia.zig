@@ -533,8 +533,9 @@ pub const Client = struct {
     // ============================ internals ============================
 
     /// Build `<base><path>`, issue the request, capture the whole body, and
-    /// parse it as JSON (empty body -> a `.null` value). Never throws on a
-    /// non-2xx status; that is reported on `Response.status`.
+    /// parse it as JSON (empty body -> a `.null` value; a non-JSON body ->
+    /// a `.string` of the raw bytes). Never throws on a non-2xx status; that
+    /// is reported on `Response.status`.
     fn request(self: *Client, method: std.http.Method, path: []const u8, body: ?[]const u8) Error!Response {
         const url = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base, path });
         defer self.allocator.free(url);
