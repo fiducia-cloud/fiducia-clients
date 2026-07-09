@@ -107,9 +107,11 @@ data Client = Client
 
 -- | Create a client for the given base URL, e.g. @"https://api.fiducia.cloud"@.
 -- The same client (and its connection pool) is safe to share across threads.
+-- A conservative 30s response timeout is applied so a stalled server cannot hang
+-- a caller forever (these operations do not long-poll).
 newClient :: String -> IO Client
 newClient baseUrl = do
-  mgr <- newManager tlsManagerSettings
+  mgr <- newManager tlsManagerSettings {managerResponseTimeout = responseTimeoutMicro 30000000}
   pure Client {clientManager = mgr, clientBase = trimTrailingSlashes baseUrl}
 
 -- | Raised on any response with HTTP status >= 300. Carries the numeric status
