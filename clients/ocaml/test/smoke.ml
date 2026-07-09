@@ -24,4 +24,19 @@ let () =
   (* sanity: a normal 200 still works *)
   (match Fiducia.lock_get c ~key:"normal" with
    | `Assoc _ -> pf "OK   %-26s -> ok\n" "GET 200 sanity"
-   | other -> pf "FAIL %-26s -> %s\n" "GET 200 sanity" (jstr other))
+   | other -> pf "FAIL %-26s -> %s\n" "GET 200 sanity" (jstr other));
+
+  (* item 3: a short timeout must actually fire against a slow endpoint that
+     never responds within it (server sleeps 10s); default is 30s but we pass a
+     short override here to keep the test quick. *)
+  let cslow = Fiducia.create ~timeout:2.0 base in
+  let t0 = Unix.gettimeofday () in
+  (try
+     ignore (Fiducia.lock_get cslow ~key:"slow");
+     pf "FAIL %-26s returned instead of timing out\n" "timeout(2s) fires"
+   with
+   | Failure _ ->
+     let dt = Unix.gettimeofday () -. t0 in
+     if dt < 6.0 then pf "OK   %-26s -> aborted in %.1fs\n" "timeout(2s) fires" dt
+     else pf "FAIL %-26s took %.1fs (timeout not applied)\n" "timeout(2s) fires" dt
+   | e -> pf "FAIL %-26s wrong exn %s\n" "timeout(2s) fires" (Printexc.to_string e))
