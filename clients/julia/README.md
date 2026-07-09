@@ -51,8 +51,14 @@ disable). Requests are issued exactly once — they never auto-follow redirects 
 are never auto-retried — so a mutating call is never silently duplicated and a
 3xx from the edge surfaces as a `FiduciaError`.
 
-`lock(c, key; ...)` is the blocking alias of `must_lock`; because Julia already
-exports `lock`, it is added as a method on `Base.lock` and is callable as
+`must_lock`/`lock` and `must_semaphore`/`semaphore` BLOCK until the lock or permit
+is actually held. Because the server only reserves a FIFO slot on `wait = true`,
+they poll `lock_get`/`semaphore_get` until this client's holder owns it, then return
+a held-grant `Dict` (`"holder"`, `"fencing_token"`, `"lease_expires_ms"`). A
+`holder` is generated when not supplied, and they throw `LockTimeout` if the grant
+does not arrive within `max_wait_ms` (default 30000; tune `retry_interval_ms`,
+`max_retries`). `try_lock`/`try_semaphore` stay single-shot (`wait = false`) and
+return the raw response. `lock` is a method on `Base.lock`, callable as
 `lock(c, key)` without importing anything extra.
 
 ## Errors
