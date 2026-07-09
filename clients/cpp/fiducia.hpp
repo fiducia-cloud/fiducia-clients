@@ -90,9 +90,11 @@ private:
 // empty body decodes to null). See PROTOCOL.md for the full method surface.
 class Client {
 public:
-    // base_url has any trailing slashes trimmed. request_timeout_ms == 0 means
-    // no client-side timeout (libcurl default).
-    explicit Client(std::string base_url, long request_timeout_ms = 0)
+    // base_url has any trailing slashes trimmed. request_timeout_ms is the total
+    // per-request deadline (connect + transfer); it defaults to 30s and can be
+    // overridden. Pass 0 to disable the client-side timeout (libcurl default).
+    // These calls are single-shot (no long-poll), so a finite default is safe.
+    explicit Client(std::string base_url, long request_timeout_ms = 30000)
         : base_(trim_trailing_slash(std::move(base_url))),
           request_timeout_ms_(request_timeout_ms) {
         detail::global_init();
@@ -435,6 +437,10 @@ private:
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &Client::write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        // Never auto-follow 3xx (libcurl's default, pinned for safety): following
+        // a redirect on a mutating POST/PUT/DELETE could re-submit the operation
+        // and duplicate a grant. A 3xx is >= 300, so it surfaces as fiducia::Error.
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
         if (request_timeout_ms_ > 0)
             curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, request_timeout_ms_);
 

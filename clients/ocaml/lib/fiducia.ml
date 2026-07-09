@@ -23,7 +23,7 @@ type client = {
   ez : Ezcurl.t;
 }
 
-let create ?timeout base_url =
+let create ?(timeout = 30.) base_url =
   (* trim trailing slashes from the base URL *)
   let base =
     let n = ref (String.length base_url) in
@@ -32,16 +32,25 @@ let create ?timeout base_url =
     done;
     String.sub base_url 0 !n
   in
-  (* ezcurl's Config exposes no timeout, so set libcurl's timeout directly on
-     the shared handle. ezcurl re-applies these opts after each Curl.reset, so a
-     reused client keeps the timeout on every request. [timeout] is in seconds. *)
+  (* ezcurl's Config exposes none of these, so set them on the shared libcurl
+     handle directly; ezcurl re-applies [set_opts] after each Curl.reset, so a
+     reused client keeps them on every request.
+     - Never follow redirects: the fixed load balancer routes internally, and
+       following a 3xx on a mutating POST/PUT/DELETE could re-submit and
+       duplicate the operation. A 3xx instead surfaces as [Fiducia_error]
+       (status >= 300), which is the safe behavior. libcurl defaults
+       FOLLOWLOCATION off; we pin it (and maxredirs 0) explicitly.
+     - [timeout] (seconds) caps connect + total request time; defaults to 30s
+       and is caller-overridable. Pass [~timeout:0.] to disable it entirely
+       (libcurl's own default is no timeout). *)
   let set_opts (h : Curl.t) =
-    match timeout with
-    | Some t when t > 0. ->
-      let ms = int_of_float (t *. 1000.) in
+    Curl.set_followlocation h false;
+    Curl.set_maxredirs h 0;
+    if timeout > 0. then begin
+      let ms = int_of_float (timeout *. 1000.) in
       Curl.set_timeoutms h ms;
       Curl.set_connecttimeoutms h ms
-    | _ -> ()
+    end
   in
   { base; ez = Ezcurl.make ~set_opts () }
 

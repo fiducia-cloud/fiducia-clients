@@ -78,8 +78,14 @@ Uses only the standard library: `httpc` (inets) for transport and `json`
 
 -export_type([client/0, result/0]).
 
--type client() :: #{base := binary()}.
+%% The client is a plain map: `base` is required; `timeout` (milliseconds,
+%% applied to both connect and read) is optional and defaults to 30s. Override
+%% per client with, e.g., (fiducia:new(Url))#{timeout => 60000}.
+-type client() :: #{base := binary(), timeout => non_neg_integer()}.
 -type result() :: {ok, term()} | {error, {non_neg_integer(), term()} | term()}.
+
+%% Default connect+read timeout (ms); httpc otherwise defaults to infinity.
+-define(DEFAULT_TIMEOUT_MS, 30000).
 
 %% @doc Build a client from a base URL. Trailing slashes are trimmed.
 -spec new(binary() | string()) -> client().
@@ -384,14 +390,15 @@ to_bin(F) when is_float(F) -> float_to_binary(F, [short]).
 
 request(C, Method, Path) -> request(C, Method, Path, undefined).
 
-request(#{base := Base}, Method, Path, Body) ->
+request(#{base := Base} = C, Method, Path, Body) ->
     Url = unicode:characters_to_list(<<Base/binary, Path/binary>>),
     Request =
         case Body of
             undefined -> {Url, []};
             _ -> {Url, [], "application/json", iolist_to_binary(json:encode(Body))}
         end,
-    case httpc:request(Method, Request, http_opts(Base), [{body_format, binary}]) of
+    Timeout = maps:get(timeout, C, ?DEFAULT_TIMEOUT_MS),
+    case httpc:request(Method, Request, http_opts(Base, Timeout), [{body_format, binary}]) of
         {ok, {{_Version, Status, _Reason}, _Headers, RespBody}} ->
             Data = decode_body(RespBody),
             case Status >= 300 of
@@ -402,15 +409,24 @@ request(#{base := Base}, Method, Path, Body) ->
             {error, Reason}
     end.
 
+%% Per-request HTTP options. autoredirect=false so a 3xx on a mutating POST/PUT
+%% is never re-followed/re-sent (it surfaces as {error,{3xx,Body}}); a bounded
+%% connect+read timeout instead of httpc's infinity default; TLS verify on HTTPS.
+http_opts(Base, TimeoutMs) ->
+    [{autoredirect, false},
+     {timeout, TimeoutMs},
+     {connect_timeout, TimeoutMs}
+     | tls_opts(Base)].
+
 %% Verify the server certificate on HTTPS. httpc only enables verification by
 %% default from OTP 28 on; set it explicitly so the client is also safe on the
 %% OTP 27 it supports. Plain HTTP needs no TLS options.
-http_opts(<<"https:", _/binary>>) ->
+tls_opts(<<"https:", _/binary>>) ->
     [{ssl, [{verify, verify_peer},
             {cacerts, public_key:cacerts_get()},
             {customize_hostname_check,
              [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}]}];
-http_opts(_) ->
+tls_opts(_) ->
     [].
 
 decode_body(<<>>) -> null;
