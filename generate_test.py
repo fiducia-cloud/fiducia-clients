@@ -79,6 +79,14 @@ class RustWasmEmitter(unittest.TestCase):
         # A non-JSON response body must surface as raw text, not silently null.
         self.assertIn("unwrap_or_else(|_| JsValue::from_str(&text))", self.src)
 
+    def test_default_headers_support(self):
+        # Auth / idempotency-key etc. via case-insensitive default headers.
+        self.assertIn("headers: Vec<(String, String)>", self.src)
+        self.assertIn("js_name = setHeader", self.src)
+        self.assertIn("js_name = removeHeader", self.src)
+        self.assertIn("eq_ignore_ascii_case(name)", self.src)
+        self.assertIn("for (name, value) in &self.headers", self.src)
+
     def test_no_op_leaks_a_body_for_get(self):
         # GET/DELETE without body params must pass None, never an empty payload.
         for op in g.OPS:
