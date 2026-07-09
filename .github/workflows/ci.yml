@@ -112,7 +112,7 @@ jobs:
       - name: Type-check generated .d.ts (tsc)
         run: |
           dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
-          npx -y -p typescript@5 tsc --noEmit --lib es2020,dom "$dts"
+          npx -y -p typescript@5 tsc --noEmit --lib esnext,dom "$dts"
       # Runtime behavior: drive the compiled wasm against a stubbed fetch
       # (wire format, integer bodies, timeout, error shape).
       - name: Runtime smoke test
