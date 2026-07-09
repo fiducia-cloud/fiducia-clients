@@ -124,6 +124,10 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 - **Thin by design.** The `try_*` / `must_*` / `lock` / `semaphore` helpers only
   flip the `wait` flag on the corresponding acquire call — there is no
   client-side wait/poll loop.
+- **Redirects are not followed.** luasocket's default redirect-following is
+  disabled, so a `3xx` is raised as an error (like any `>= 300`) rather than
+  replaying the request — and its `Authorization` / idempotency headers — to the
+  `Location` (which could be cross-origin or an `https://`→`http://` downgrade).
 - **TLS (fail-closed).** For `https://` URLs the client verifies the server
   certificate by default (`verify = "peer"`) — luasec's insecure `verify = "none"`
   default is **not** used. A CA bundle is auto-detected at request time from, in
