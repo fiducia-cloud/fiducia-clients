@@ -110,7 +110,10 @@ let request c meth path (body : Yojson.Safe.t option) : Yojson.Safe.t =
     | `PUT -> Ezcurl.PUT
     | `DELETE -> Ezcurl.DELETE
   in
-  match Ezcurl.http ~client:c.ez ?content ~headers ~url ~meth:ez_meth () with
+  match
+    Ezcurl.http ~client:c.ez ~config:no_follow ?content ~headers ~url
+      ~meth:ez_meth ()
+  with
   | Error (_code, msg) -> failwith ("fiducia: HTTP transport error: " ^ msg)
   | Ok resp ->
     let raw = resp.Ezcurl.body in
