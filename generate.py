@@ -323,6 +323,19 @@ fn err(status: u16, body: JsValue) -> JsValue {
     o.into()
 }
 
+// Integer fields cross JS as f64. Reject values a JSON integer can't faithfully
+// represent (NaN/Infinity, fractional, or beyond 2^53) so the client fails loudly
+// instead of silently coercing (`NaN as i64` == 0, `Infinity as i64` == i64::MAX).
+const MAX_SAFE_INT: f64 = 9_007_199_254_740_991.0;
+fn checked_int(v: f64, field: &str) -> Result<i64, JsValue> {
+    if !v.is_finite() || v.fract() != 0.0 || v.abs() > MAX_SAFE_INT {
+        return Err(err(0, JsValue::from_str(&format!(
+            "field `{field}` must be a safe integer, got {v}"
+        ))));
+    }
+    Ok(v as i64)
+}
+
 #[wasm_bindgen]
 pub struct FiduciaClient {
     base: String,
