@@ -221,8 +221,13 @@ export class FiduciaClient {
     return this.pickRetryDelayMs({ retryDelayMs: opts.retryDelayMs ?? this.retryDelayMs });
   }
 
-  private retryable(err: unknown, signal?: AbortSignal): boolean {
+  private retryable(err: unknown, signal: AbortSignal | undefined, method: string, idempotencyKey?: string): boolean {
     if (signal?.aborted) return false;
+    // Belt-and-suspenders: never retry a non-idempotent mutation that carries no
+    // idempotency key — replaying it could duplicate a committed-but-unacked effect.
+    // request() attaches a stable key to retry-enabled POSTs, so in practice a key is
+    // always present here; this guard keeps the safety even if that ever changes.
+    if (!isIdempotentMethod(method) && !idempotencyKey) return false;
     if (err instanceof FiduciaTimeoutError) return true;
     if (err instanceof FiduciaError) return [408, 425, 429, 500, 502, 503, 504].includes(err.status);
     return ["AbortError", "TimeoutError", "TypeError"].includes(String((err as any)?.name));
@@ -272,7 +277,7 @@ export class FiduciaClient {
       try {
         return await this.requestOnce(method, path, body, effectiveOpts, attempt + 1, lockAcquire);
       } catch (err) {
-        if (attempt >= maxRetries || !this.retryable(err, opts.signal)) throw err;
+        if (attempt >= maxRetries || !this.retryable(err, opts.signal, method, effectiveOpts.idempotencyKey)) throw err;
         await this.sleep(retryDelayMs, opts.signal);
       }
     }
