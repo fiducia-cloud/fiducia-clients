@@ -17,7 +17,7 @@ classdef Fiducia < handle
 
     properties
         BaseUrl            % Base URL, trailing slash trimmed.
-        RequestTimeout = []  % Optional per-request timeout in seconds (connect + response).
+        RequestTimeout = 30  % Request timeout in seconds (connect + response). Set [] to use the matlab.net.http default.
     end
 
     methods
