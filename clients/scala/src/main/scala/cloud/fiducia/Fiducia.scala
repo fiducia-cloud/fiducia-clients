@@ -27,7 +27,19 @@ final case class FiduciaException(status: Int, body: ujson.Value)
   *
   * Optional arguments are expressed as `Option`s: a field is included in the
   * request body only when the caller passes `Some(..)` (this matters for the
-  * compare-and-swap semantics of `prevRevision`, `holder`, etc.).
+  * compare-and-swap semantics of `prevRevision`, `holder`, etc.). A supplied
+  * `Some(0)` — e.g. `prevRevision = Some(0L)`, meaning "must not exist" — is
+  * always sent; it is not dropped as a falsy value.
+  *
+  * '''Numeric precision:''' ujson's `Num` is `Double`-backed, so 64-bit integers
+  * (fencing tokens, KV revisions) are exact only up to 2^53. This client returns
+  * the parsed response tree untouched — it never narrows a token to a different
+  * type — so read such values straight off the tree, e.g.
+  * `resp("result")("output")("fencing_token").num.toLong`. On the request side a
+  * `Long` is likewise carried through a `Num`; integral values render as plain
+  * integers on the wire (no `.0`, no exponent), exactly up to 2^53 and rounded
+  * beyond it. Real monotonic counters never approach 2^53; this ceiling is an
+  * inherent limit of the ujson AST, not of the wire protocol.
   *
   * @param baseUrl        service base URL; a trailing slash is trimmed
   * @param requestTimeout optional per-request timeout applied to every call
