@@ -117,13 +117,28 @@ public final class FiduciaClient {
         try await lockAcquire(key, holder: holder, ttlMs: ttlMs, wait: false)
     }
 
-    public func mustLock(_ key: String, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await lockAcquire(key, holder: holder, ttlMs: ttlMs, wait: true)
+    /// Blocks until the lock is actually HELD, then returns a held-grant dictionary
+    /// (`["key", "holder", "fencing_token", "lease_expires_ms"]`) — everything a
+    /// caller needs to `lockRelease`. The server does not hold the connection on
+    /// `wait:true`; it reserves a FIFO slot and returns a queued ticket
+    /// immediately. So this issues the acquire and then POLLS `lockGet` every
+    /// `retryIntervalMs` until `holder` holds the lock, or the `maxWaitMs` budget
+    /// (or optional `maxRetries`) is exhausted — in which case it throws
+    /// `FiduciaTimeout`. Unlike `tryLock`, it never returns a not-yet-held result.
+    public func mustLock(_ key: String, holder: String? = nil, ttlMs: Int? = nil,
+                         maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        let who = holder ?? Self.genHolder()
+        let out = Self.output(try await lockAcquire(key, holder: who, ttlMs: ttlMs ?? 60000, wait: true))
+        if out["acquired"] as? Bool == true {
+            return Self.heldGrant(key: key, holder: who, fencingToken: out["fencing_token"], leaseExpiresMs: out["lease_expires_ms"])
+        }
+        return try await pollLockUntilHeld(key: key, holder: who, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
-    /// Alias for `mustLock`.
-    public func lock(_ key: String, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await mustLock(key, holder: holder, ttlMs: ttlMs)
+    /// Alias for `mustLock` — blocks by polling until held or `FiduciaTimeout`.
+    public func lock(_ key: String, holder: String? = nil, ttlMs: Int? = nil,
+                     maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        try await mustLock(key, holder: holder, ttlMs: ttlMs, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
     /// `key` is accepted for call-site symmetry but is intentionally omitted from the body.
