@@ -280,6 +280,283 @@ def gen_go():
     return GO_PRE + "\n" + "\n".join(emit_go(op) for op in OPS)
 
 
+# ------------------------------------------------------------------- rust-wasm
+# A Rust client compiled to WebAssembly. Unlike clients/rust (blocking `ureq`),
+# the wasm build cannot open sockets, so its transport is the browser `fetch`
+# API via wasm-bindgen. Every op is an async method; wasm-bindgen exports the
+# snake_case names to JS as camelCase. Kept separate from clients/rust so that
+# native client stays a plain blocking crate.
+RUST_WASM_PRE = BANNER_C + '''
+//! Fiducia client (Rust -> WebAssembly) — generated. Transport is the global
+//! `fetch` (browser main thread, Web Workers, and Node 18+/Deno).
+//!
+//! Build:  wasm-pack build clients/rust-wasm --target web
+//!
+//! Every operation is an `async` method (exported to JS as camelCase) that
+//! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
+//! non-2xx response or transport failure. Pass an optional `timeout_ms` to the
+//! constructor (or `setTimeoutMs`) to bound each request, and `setHeader` to
+//! attach default headers such as `Authorization` to every request.
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{AbortSignal, Request, RequestInit, Response};
+
+// web-sys (0.3) doesn't bind the `AbortSignal.timeout` static, so bind the
+// runtime one directly (available in browsers 2022+, Node 17.3+, and Deno).
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = AbortSignal, js_name = timeout)]
+    fn abort_signal_timeout(ms: f64) -> AbortSignal;
+}
+
+/// URL-encode a path/query segment via the JS `encodeURIComponent`.
+fn enc(s: &str) -> String {
+    String::from(js_sys::encode_uri_component(s))
+}
+
+/// Build the `{ status, body }` rejection value used for every failure.
+fn err(status: u16, body: JsValue) -> JsValue {
+    let o = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("status"), &JsValue::from(status));
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("body"), &body);
+    o.into()
+}
+
+// Integer fields cross JS as f64. Reject values a JSON integer can't faithfully
+// represent (NaN/Infinity, fractional, or beyond 2^53) so the client fails loudly
+// instead of silently coercing (`NaN as i64` == 0, `Infinity as i64` == i64::MAX).
+const MAX_SAFE_INT: f64 = 9_007_199_254_740_991.0;
+fn checked_int(v: f64, field: &str) -> Result<i64, JsValue> {
+    if !v.is_finite() || v.fract() != 0.0 || v.abs() > MAX_SAFE_INT {
+        return Err(err(0, JsValue::from_str(&format!(
+            "field `{field}` must be a safe integer, got {v}"
+        ))));
+    }
+    Ok(v as i64)
+}
+
+#[wasm_bindgen]
+pub struct FiduciaClient {
+    base: String,
+    timeout_ms: Option<f64>,
+    // Default headers applied to every request (e.g. Authorization). Header
+    // names are case-insensitive; the last value set for a name wins.
+    headers: Vec<(String, String)>,
+}
+
+#[wasm_bindgen]
+impl FiduciaClient {
+    /// `timeout_ms` is optional (pass `undefined` for none); when set, each
+    /// request aborts after that many milliseconds via `AbortSignal.timeout`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(base_url: &str, timeout_ms: Option<f64>) -> FiduciaClient {
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string(), timeout_ms, headers: Vec::new() }
+    }
+
+    /// Set (or clear, with `undefined`) the per-request timeout in milliseconds.
+    #[wasm_bindgen(js_name = setTimeoutMs)]
+    pub fn set_timeout_ms(&mut self, timeout_ms: Option<f64>) {
+        self.timeout_ms = timeout_ms;
+    }
+
+    /// Set a default header sent on every request — e.g. `Authorization`,
+    /// `Idempotency-Key`. Setting the same name again replaces it.
+    #[wasm_bindgen(js_name = setHeader)]
+    pub fn set_header(&mut self, name: &str, value: &str) {
+        self.headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.headers.push((name.to_string(), value.to_string()));
+    }
+
+    /// Remove a previously set default header (no-op if absent).
+    #[wasm_bindgen(js_name = removeHeader)]
+    pub fn remove_header(&mut self, name: &str) {
+        self.headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+    }
+
+    async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
+        let opts = RequestInit::new();
+        opts.set_method(method);
+        if let Some(ref b) = body {
+            opts.set_body(&JsValue::from_str(b));
+        }
+        // Bound the request with AbortSignal.timeout (browser/worker/Node18+/Deno).
+        if let Some(ms) = self.timeout_ms {
+            opts.set_signal(Some(&abort_signal_timeout(ms)));
+        }
+        let url = format!("{}{}", self.base, path);
+        let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
+        let req_headers = request.headers();
+        if body.is_some() {
+            req_headers.set("content-type", "application/json").map_err(|e| err(0, e))?;
+        }
+        // Default headers (auth, idempotency key, ...) override content-type only
+        // if the caller explicitly set that name.
+        for (name, value) in &self.headers {
+            req_headers.set(name, value).map_err(|e| err(0, e))?;
+        }
+        // Resolve `fetch` from the global scope so the client works on the
+        // browser main thread, in Web Workers, and in Node 18+/Deno (global
+        // fetch) — not just `window`.
+        let global = js_sys::global();
+        let fetch = js_sys::Reflect::get(&global, &JsValue::from_str("fetch"))
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .ok_or_else(|| err(0, JsValue::from_str("no global fetch available")))?;
+        let promise: js_sys::Promise = fetch
+            .call1(&global, &request)
+            .map_err(|e| err(0, e))?
+            .dyn_into()
+            .map_err(|e| err(0, e))?;
+        let resp_value = JsFuture::from(promise).await.map_err(|e| err(0, e))?;
+        let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
+        let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
+        let text = text_value.as_string().unwrap_or_default();
+        // Parse JSON; if the body isn't JSON, surface the raw text (not null) so
+        // non-JSON error pages (proxies, 502s) remain diagnosable.
+        let parsed = if text.is_empty() {
+            JsValue::NULL
+        } else {
+            js_sys::JSON::parse(&text).unwrap_or_else(|_| JsValue::from_str(&text))
+        };
+        if !resp.ok() {
+            return Err(err(resp.status(), parsed));
+        }
+        Ok(parsed)
+    }
+'''
+
+# `int` maps to f64 (JS `number`), not i64: wasm-bindgen would expose i64 as a JS
+# `bigint`, which mismatches the response JSON (numbers) and the sibling TS
+# client. Integer-valued params are re-cast to i64 when building the JSON body so
+# the wire form stays a clean integer (e.g. 30000, never 30000.0).
+RUST_WASM_TYPE = {"string": "String", "int": "f64", "number": "f64", "bool": "bool",
+                  "string[]": "Vec<String>", "object": "JsValue"}
+
+
+def _rw_scalar_enc(typ, var):
+    # A scalar path/query value, encoded for a URL.
+    if typ == "string":
+        return "enc(&%s)" % var
+    if typ == "int":
+        return "enc(&(%s as i64).to_string())" % var
+    return "enc(&%s.to_string())" % var
+
+
+def _rw_json_scalar(typ, var, field):
+    # A scalar body value as a serde_json::Value. Integers go through checked_int
+    # (fail loudly on NaN/Infinity/fractional/unsafe) and land as a clean integer.
+    if typ == "int":
+        return 'serde_json::json!(checked_int(%s, "%s")?)' % (var, field)
+    return "serde_json::json!(%s)" % var
+
+
+def _rw_object_query_lines(name):
+    # An object query param expands to `name.KEY=VALUE` pairs, ANDed by the
+    # server (PROTOCOL.md: e.g. metadata.region=us-east). Not a JSON blob.
+    # dyn_ref returns None for null/undefined/non-objects, so the loop is skipped.
+    return [
+        "        if let Some(_obj) = %s.dyn_ref::<js_sys::Object>() {" % name,
+        "            for _entry in js_sys::Object::entries(_obj).iter() {",
+        "                let _pair = js_sys::Array::from(&_entry);",
+        "                let _k = _pair.get(0).as_string().unwrap_or_default();",
+        "                if _k.is_empty() { continue; }",
+        "                let _v = _pair.get(1);",
+        # Contract is Record<string,string>; reject non-string values loudly
+        # instead of silently JSON-stringifying them (cross-client surprises).
+        "                let _vs = match _v.as_string() {",
+        "                    Some(_s) => _s,",
+        '                    None => return Err(err(0, JsValue::from_str(&format!("%s.{_k} must be a string")))),' % name,
+        "                };",
+        '                _q.push(format!("%s.{}={}", enc(&_k), enc(&_vs)));' % name,
+        "            }",
+        "        }",
+    ]
+
+
+def _rw_query_lines(x):
+    # Code that appends one query param to `_q` (optional ones only when present).
+    name = x["name"]
+    if x["type"] == "object":
+        return _rw_object_query_lines(name)
+    if not x.get("optional"):
+        return ['        _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], name))]
+    return ["        if let Some(v) = %s {" % name,
+            '            _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], "v")),
+            "        }"]
+
+
+def _rw_body_value(x):
+    # A required body param -> serde_json::Value expression.
+    if x["type"] == "object":
+        return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
+    if x["type"] == "string":
+        return "serde_json::Value::String(%s)" % x["name"]
+    return _rw_json_scalar(x["type"], x["name"], x["name"])
+
+
+def emit_rust_wasm(op):
+    pp, qp, bp, req, opt = parts(op)
+    sig = ["&self"]
+    for x in req:
+        sig.append("%s: %s" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    for x in opt:
+        # Optional objects stay a nullable JsValue; other optionals are Option<T>.
+        if x["type"] == "object":
+            sig.append("%s: JsValue" % x["name"])
+        else:
+            sig.append("%s: Option<%s>" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    lines = []
+    # path (path params only; query is appended below so optionals can be omitted)
+    fmt = op["path"]
+    penc = []
+    for x in pp:
+        fmt = fmt.replace("{%s}" % x["name"], "{}")
+        penc.append(_rw_scalar_enc(x["type"], x["name"]))
+    decl = "let mut path" if qp else "let path"
+    if penc:
+        lines.append('        %s = format!("%s", %s);' % (decl, fmt, ", ".join(penc)))
+    else:
+        lines.append('        %s = String::from("%s");' % (decl, fmt))
+    # query string (required always, optional only when provided)
+    if qp:
+        lines.append("        let mut _q: Vec<String> = Vec::new();")
+        for x in qp:
+            lines.extend(_rw_query_lines(x))
+        lines.append("        if !_q.is_empty() {")
+        lines.append("            path.push('?');")
+        lines.append('            path.push_str(&_q.join("&"));')
+        lines.append("        }")
+    # body map
+    if bp:
+        lines.append("        let mut _body = serde_json::Map::new();")
+        for x in bp:
+            if not x.get("optional"):
+                lines.append('        _body.insert("%s".to_string(), %s);' % (x["name"], _rw_body_value(x)))
+            elif x["type"] == "object":
+                lines.append("        if !%s.is_null() && !%s.is_undefined() {" % (x["name"], x["name"]))
+                lines.append('            _body.insert("%s".to_string(), serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?);'
+                             % (x["name"], x["name"]))
+                lines.append("        }")
+            else:
+                lines.append("        if let Some(v) = %s {" % x["name"])
+                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v", x["name"])))
+                lines.append("        }")
+        lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
+        bodyarg = "Some(_payload)"
+    else:
+        bodyarg = "None"
+    lines.append('        self.request("%s", path, %s).await' % (op["method"], bodyarg))
+    doc = op.get("doc", "")
+    # Export camelCase JS names to match the TypeScript client's surface.
+    return ('    /// %s\n    #[wasm_bindgen(js_name = %s)]\n    pub async fn %s(%s) -> Result<JsValue, JsValue> {\n%s\n    }\n'
+            % (doc, camel(op["name"]), op["name"], ", ".join(sig), "\n".join(lines)))
+
+
+def gen_rust_wasm():
+    return RUST_WASM_PRE + "\n" + "\n".join(emit_rust_wasm(op) for op in OPS) + "}\n"
+
+
 # ------------------------------------------------------------------------- docs
 def gen_markdown():
     rows = ["<!-- GENERATED by generate.py from operations.json — DO NOT EDIT BY HAND. -->",
@@ -300,17 +577,37 @@ TARGETS = {
     "python": ("clients/python/fiducia.py", gen_python),
     "ts": ("clients/ts/fiducia.ts", gen_ts),
     "go": ("clients/go/fiducia.go", gen_go),
+    "rust-wasm": ("clients/rust-wasm/src/lib.rs", gen_rust_wasm),
     "docs": ("ENDPOINTS.md", gen_markdown),
 }
 
 
 def main():
-    want = sys.argv[1:] or list(TARGETS)
+    args = sys.argv[1:]
+    # --check <targets...>  verifies the named targets are up to date without
+    # writing (exit 1 on drift). Scope it to specific targets — e.g.
+    # `--check rust-wasm` — since some clients are hand-enhanced beyond the
+    # generator baseline and would otherwise report expected drift.
+    check = "--check" in args
+    want = [a for a in args if not a.startswith("--")] or list(TARGETS)
+    drift = 0
     for lang in want:
         rel, gen = TARGETS[lang]
         path = os.path.join(ROOT, rel)
-        open(path, "w").write(gen())
+        content = gen()
+        if check:
+            current = open(path).read() if os.path.exists(path) else None
+            if current != content:
+                print("drift: %s (run: python3 generate.py %s)" % (rel, lang))
+                drift += 1
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(content)
         print("generated %-8s -> %s (%d ops)" % (lang, rel, len(OPS)))
+    if check:
+        if drift:
+            sys.exit(1)
+        print("up to date (%d target(s))." % len(want))
 
 
 if __name__ == "__main__":

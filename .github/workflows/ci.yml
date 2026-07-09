@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on the same ref (a new push obsoletes the previous one).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Each language client is tested best-effort: several carry local path deps on
 # the sibling fiducia-interfaces repo (go `replace`, cargo `path`, npm registry
 # @fiducia/interfaces) that aren't present in single-repo CI, so a failure must
@@ -59,3 +64,51 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - working-directory: clients/rust
         run: cargo test
+
+  # clients/rust-wasm is generated from operations.json and self-contained (no
+  # sibling-repo path deps), so it is a HARD gate — not continue-on-error.
+  rust-wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      # generator self-tests + drift check (committed lib.rs vs operations.json)
+      - run: python3 -m unittest generate_test
+      - run: python3 generate.py --check rust-wasm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust-wasm
+      # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      # compile gate
+      - name: Compile to wasm32
+        run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
+      # full wasm-bindgen for the nodejs target (emits pkg/ with .wasm + .d.ts);
+      # the .d.ts is target-agnostic, and the nodejs pkg drives the smoke test.
+      - name: wasm-bindgen package
+        run: wasm-pack build clients/rust-wasm --target nodejs --dev
+      # Regression guard: no `bigint` (i64 leak) may reach the generated .d.ts.
+      - name: Assert generated .d.ts is clean
+        run: |
+          dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
+          echo "checking $dts"
+          if grep -nE ':[[:space:]]*(bigint|Map<)|:[[:space:]]*Value([;[]|$)' "$dts"; then
+            echo "::error::generated .d.ts has a bigint / Value / Map<> — type-mapping regression"
+            exit 1
+          fi
+          echo "clean"
+      # Runtime behavior: drive the compiled wasm against a stubbed fetch
+      # (wire format, integer bodies, timeout, error shape).
+      - name: Runtime smoke test
+        run: node --test clients/rust-wasm/smoke.test.mjs

@@ -1,0 +1,4 @@
+(library
+ (name fiducia)
+ (public_name fiducia-client)
+ (libraries ezcurl curl yojson uri))
