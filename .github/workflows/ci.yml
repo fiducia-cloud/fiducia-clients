@@ -1,0 +1,61 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Each language client is tested best-effort: several carry local path deps on
+# the sibling fiducia-interfaces repo (go `replace`, cargo `path`, npm registry
+# @fiducia/interfaces) that aren't present in single-repo CI, so a failure must
+# not gate the others. Mirrors the multi-language Dockerfile.
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: clients/go/go.mod
+      - working-directory: clients/go
+        run: go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - working-directory: clients/python
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest fiducia_test.py
+
+  ts:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - working-directory: clients/ts
+        run: npm ci || npm install
+      # npm test == node --test --experimental-strip-types fiducia.test.ts
+      - working-directory: clients/ts
+        run: npm test
+
+  rust:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - working-directory: clients/rust
+        run: cargo test
