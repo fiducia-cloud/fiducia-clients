@@ -1,0 +1,13 @@
+name = "Fiducia"
+uuid = "1b225e7a-2078-4660-a2a3-9f9a3eaf8229"
+version = "0.1.0"
+authors = ["fiducia.cloud"]
+
+[deps]
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+
+[compat]
+julia = "1.6"
+HTTP = "1"
+JSON = "0.21"
