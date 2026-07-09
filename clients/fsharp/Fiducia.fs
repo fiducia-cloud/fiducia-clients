@@ -22,6 +22,14 @@ type FiduciaError(status: int, body: JsonNode) =
     member _.Status = status
     member _.Body = body
 
+/// Raised by the blocking acquire helpers (MustLock/Lock/MustSemaphore/Semaphore)
+/// when the wait budget elapses before the lock/permit is actually held. Distinct
+/// from FiduciaError because a timeout carries no HTTP status or response body.
+type LockTimeout(keys: string[], waitedMs: int64) =
+    inherit Exception(sprintf "fiducia: timed out after %dms waiting for %s" waitedMs (String.Join(", ", keys)))
+    member _.Keys = keys
+    member _.WaitedMs = waitedMs
+
 [<AutoOpen>]
 module internal Internal =
 
