@@ -223,13 +223,38 @@ proc trySemaphore*(c: Client, key: string, limit: int, holder = none(string),
                    ttlMs = none(int)): JsonNode =
   c.semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
+proc pollSemaphore(c: Client, key, holder: string, maxWaitMs,
+                   retryIntervalMs: int, maxRetries: Option[int]): JsonNode =
+  let deadline = getMonoTime() + initDuration(milliseconds = maxWaitMs)
+  var attempts = 0
+  while maxRetries.isNone or attempts < maxRetries.get:
+    inc attempts
+    let remaining = inMilliseconds(deadline - getMonoTime()).int
+    if remaining <= 0: break
+    sleep(min(retryIntervalMs, remaining))
+    let holders = c.semaphoreGet(key){"semaphore", "holders"}
+    if holders != nil and holders.kind == JArray:
+      for slot in holders:
+        if slot.heldBy(holder): return mkGrant(key, holder, slot)
+  raise newLockTimeout(@[key], maxWaitMs)
+
 proc mustSemaphore*(c: Client, key: string, limit: int, holder = none(string),
-                    ttlMs = none(int)): JsonNode =
-  c.semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+                    ttlMs = none(int), maxWaitMs = 30_000,
+                    retryIntervalMs = 250, maxRetries = none(int)): JsonNode =
+  ## Block until a permit is actually held, else raise `LockTimeout` after
+  ## `maxWaitMs`. Acquires with wait:true, then polls `semaphoreGet` for this
+  ## holder's slot. Returns a held grant `{key, holder, fencing_token,
+  ## lease_expires_ms}`; a holder is generated when none is given.
+  let h = if holder.isSome: holder.get else: genHolder()
+  let o = jsonOutput(c.semaphoreAcquire(key, limit, some(h), ttlMs, wait = true))
+  if o{"acquired"}.getBool: return mkGrant(key, h, o)
+  c.pollSemaphore(key, h, maxWaitMs, retryIntervalMs, maxRetries)
 
 proc semaphore*(c: Client, key: string, limit: int, holder = none(string),
-                ttlMs = none(int)): JsonNode =
-  c.mustSemaphore(key, limit, holder, ttlMs)
+                ttlMs = none(int), maxWaitMs = 30_000, retryIntervalMs = 250,
+                maxRetries = none(int)): JsonNode =
+  c.mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs,
+                  maxRetries)
 
 proc semaphoreRelease*(c: Client, key: string, holder: string,
                        fencingToken: JsonNode): JsonNode =
