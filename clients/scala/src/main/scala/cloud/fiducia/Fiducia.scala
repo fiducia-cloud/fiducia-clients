@@ -42,12 +42,25 @@ final case class FiduciaException(status: Int, body: ujson.Value)
   * inherent limit of the ujson AST, not of the wire protocol.
   *
   * @param baseUrl        service base URL; a trailing slash is trimmed
-  * @param requestTimeout optional per-request timeout applied to every call
+  * @param requestTimeout connect + per-request timeout applied to every call;
+  *                       defaults to 30s. Pass `None` to disable it (e.g. for a
+  *                       caller that deliberately blocks on a long `wait`).
   */
-class FiduciaClient(baseUrl: String, requestTimeout: Option[Duration] = None) {
+class FiduciaClient(
+    baseUrl: String,
+    requestTimeout: Option[Duration] = Some(Duration.ofSeconds(30))
+) {
 
   private val base: String = baseUrl.replaceAll("/+$", "")
-  private val http: HttpClient = HttpClient.newHttpClient()
+  // Redirects are NOT followed. A 3xx on a mutating POST/PUT/DELETE must surface
+  // as an error (status >= 300) rather than silently re-submitting the operation
+  // to the Location and duplicating a lock grant / FIFO queue slot. NEVER is also
+  // the java.net.http default; pinned here so it cannot drift.
+  private val http: HttpClient = {
+    val b = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER)
+    requestTimeout.foreach(t => b.connectTimeout(t))
+    b.build()
+  }
 
   // --- misc ----------------------------------------------------------------
   def health(): ujson.Value = request("GET", "/healthz")
