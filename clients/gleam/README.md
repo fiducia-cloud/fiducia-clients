@@ -110,4 +110,3 @@ Published to [Hex](https://hex.pm) via the repo's publish wrapper:
 ## License
 
 Proprietary / UNLICENSED. See [`LICENSE.txt`](./LICENSE.txt).
-```
