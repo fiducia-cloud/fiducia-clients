@@ -352,18 +352,50 @@ impl FiduciaClient {
     }
 '''
 
-RUST_WASM_TYPE = {"string": "String", "int": "i64", "number": "f64", "bool": "bool",
+# `int` maps to f64 (JS `number`), not i64: wasm-bindgen would expose i64 as a JS
+# `bigint`, which mismatches the response JSON (numbers) and the sibling TS
+# client. Integer-valued params are re-cast to i64 when building the JSON body so
+# the wire form stays a clean integer (e.g. 30000, never 30000.0).
+RUST_WASM_TYPE = {"string": "String", "int": "f64", "number": "f64", "bool": "bool",
                   "string[]": "Vec<String>", "object": "JsValue"}
 
+_RW_OBJ_TO_STR = "js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default()"
 
-def _rw_enc_expr(x):
-    # Path/query params encoded to a String before URL-encoding.
-    if x["type"] == "string":
-        return "enc(&%s)" % x["name"]
+
+def _rw_scalar_enc(typ, var):
+    # A scalar path/query value, encoded for a URL.
+    if typ == "string":
+        return "enc(&%s)" % var
+    if typ == "int":
+        return "enc(&(%s as i64).to_string())" % var
+    return "enc(&%s.to_string())" % var
+
+
+def _rw_json_scalar(typ, var):
+    # A scalar body value as a serde_json::Value. Integers cast back to i64 so the
+    # JSON is an integer rather than a float.
+    if typ == "int":
+        return "serde_json::json!(%s as i64)" % var
+    return "serde_json::json!(%s)" % var
+
+
+def _rw_query_lines(x):
+    # Code that appends one query param to `_q` (optional ones only when present).
+    name = x["name"]
     if x["type"] == "object":
-        # An object in the query string is sent as its JSON text.
-        return "enc(&js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default())" % x["name"]
-    return "enc(&%s.to_string())" % x["name"]
+        val = "enc(&%s)" % (_RW_OBJ_TO_STR % name)
+    else:
+        val = _rw_scalar_enc(x["type"], name)
+    push = '        _q.push(format!("%s={}", %s));' % (name, val)
+    if not x.get("optional"):
+        return [push]
+    if x["type"] == "object":
+        return ["        if !%s.is_null() && !%s.is_undefined() {" % (name, name),
+                "    " + push, "        }"]
+    val = _rw_scalar_enc(x["type"], "v")
+    return ["        if let Some(v) = %s {" % name,
+            '            _q.push(format!("%s={}", %s));' % (name, val),
+            "        }"]
 
 
 def _rw_body_value(x):
@@ -372,7 +404,7 @@ def _rw_body_value(x):
         return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
     if x["type"] == "string":
         return "serde_json::Value::String(%s)" % x["name"]
-    return "serde_json::json!(%s)" % x["name"]
+    return _rw_json_scalar(x["type"], x["name"])
 
 
 def emit_rust_wasm(op):
@@ -387,19 +419,26 @@ def emit_rust_wasm(op):
         else:
             sig.append("%s: Option<%s>" % (x["name"], RUST_WASM_TYPE[x["type"]]))
     lines = []
-    # path + query string
+    # path (path params only; query is appended below so optionals can be omitted)
     fmt = op["path"]
-    enc_args = []
+    penc = []
     for x in pp:
         fmt = fmt.replace("{%s}" % x["name"], "{}")
-        enc_args.append(_rw_enc_expr(x))
-    for x in qp:
-        fmt += ("&" if "?" in fmt else "?") + x["name"] + "={}"
-        enc_args.append(_rw_enc_expr(x))
-    if enc_args:
-        lines.append('        let path = format!("%s", %s);' % (fmt, ", ".join(enc_args)))
+        penc.append(_rw_scalar_enc(x["type"], x["name"]))
+    decl = "let mut path" if qp else "let path"
+    if penc:
+        lines.append('        %s = format!("%s", %s);' % (decl, fmt, ", ".join(penc)))
     else:
-        lines.append('        let path = String::from("%s");' % fmt)
+        lines.append('        %s = String::from("%s");' % (decl, fmt))
+    # query string (required always, optional only when provided)
+    if qp:
+        lines.append("        let mut _q: Vec<String> = Vec::new();")
+        for x in qp:
+            lines.extend(_rw_query_lines(x))
+        lines.append("        if !_q.is_empty() {")
+        lines.append("            path.push('?');")
+        lines.append('            path.push_str(&_q.join("&"));')
+        lines.append("        }")
     # body map
     if bp:
         lines.append("        let mut _body = serde_json::Map::new();")
@@ -413,7 +452,7 @@ def emit_rust_wasm(op):
                 lines.append("        }")
             else:
                 lines.append("        if let Some(v) = %s {" % x["name"])
-                lines.append('            _body.insert("%s".to_string(), serde_json::json!(v));' % x["name"])
+                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v")))
                 lines.append("        }")
         lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
         bodyarg = "Some(_payload)"
