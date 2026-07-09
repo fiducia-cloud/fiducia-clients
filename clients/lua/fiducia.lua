@@ -116,10 +116,11 @@ Fiducia._VERSION = "0.1.0"
 
 -- new(base_url [, opts]) -> client. The trailing slash of base_url is trimmed.
 -- opts.tls (optional): a table of luasec TLS parameters (verify, cafile, capath,
--- protocol, options, ...) merged into every https request. luasec's ssl.https
--- convenience module defaults to verify = "none" (it does NOT authenticate the
--- server); pass e.g. opts.tls = { verify = "peer", cafile = "/path/ca.pem" } to
--- turn certificate verification ON. Ignored for http:// URLs.
+-- protocol, options, ...) merged into every https request; it always overrides
+-- the defaults. https verifies the server certificate by default (verify =
+-- "peer") against an auto-detected CA bundle -- pass opts.tls.cafile/capath to
+-- point at your own, or opts.tls = { verify = "none" } to opt out (insecure).
+-- Ignored for http:// URLs.
 function Fiducia.new(base_url, opts)
   opts = opts or {}
   return setmetatable({
