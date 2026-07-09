@@ -6,7 +6,6 @@
                     inets,
                     ssl]},
     {description, "Gleam bindings to Erlang's built in HTTP client, httpc"},
-    {modules, [gleam@httpc,
-               gleam_httpc_ffi]},
+    {modules, []},
     {registered, []}
 ]}.

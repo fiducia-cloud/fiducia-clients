@@ -366,7 +366,10 @@ pub fn kv_delete(client: Client, key: String) -> Result(Dynamic, FiduciaError) {
 }
 
 /// `GET /v1/kv?prefix=…` — list config keys under a prefix.
-pub fn kv_list(client: Client, prefix: String) -> Result(Dynamic, FiduciaError) {
+pub fn kv_list(
+  client: Client,
+  prefix: String,
+) -> Result(Dynamic, FiduciaError) {
   send(client, Get, "/v1/kv?prefix=" <> enc(prefix), None)
 }
 
@@ -617,7 +620,8 @@ fn send(
 ) -> Result(Dynamic, FiduciaError) {
   let url = client.base <> path
   case request.to(url) {
-    Error(_) -> Error(Transport("fiducia: could not build request url: " <> url))
+    Error(_) ->
+      Error(Transport("fiducia: could not build request url: " <> url))
     Ok(base_request) -> {
       let req =
         base_request
