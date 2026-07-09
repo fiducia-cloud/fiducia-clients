@@ -299,6 +299,18 @@ module Fiducia
       "fdc-#{Random::Secure.hex(16)}"
     end
 
+    # Monotonic clock reading for the poll deadline (unaffected by wall-clock
+    # jumps). Uses Time.instant on compilers that provide it (>= 1.20) and the
+    # equivalent Time.monotonic on older supported versions (shard floor is 1.0)
+    # — both support `+`/`-` with Time::Span — so we stay warning-free either way.
+    private def mono
+      {% if Time.class.has_method?("instant") %}
+        Time.instant
+      {% else %}
+        Time.monotonic
+      {% end %}
+    end
+
     # Navigate resp["result"]["output"] safely; missing links -> null JSON::Any.
     private def nav_output(resp : JSON::Any) : JSON::Any
       resp["result"]?.try(&.["output"]?) || JSON::Any.new(nil)
