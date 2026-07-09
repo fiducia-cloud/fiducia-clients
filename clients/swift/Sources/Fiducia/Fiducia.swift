@@ -326,12 +326,15 @@ public final class FiduciaClient {
         return parsed ?? NSNull()
     }
 
-    /// Uses `URLSession.data(for:)` where available (macOS 12+/iOS 15+) and falls
-    /// back to a `dataTask` continuation on older iOS so the async surface still
-    /// works down to the package's iOS 13 floor.
+    /// Uses `URLSession.data(for:delegate:)` where available (macOS 12+/iOS 15+)
+    /// and falls back to a `dataTask` continuation on older iOS so the async
+    /// surface still works down to the package's iOS 13 floor. `redirectBlocker`
+    /// suppresses redirect following on BOTH paths: as the per-task delegate on
+    /// the async path (so it applies even to a caller-supplied session) and as the
+    /// owned session's delegate on the legacy `dataTask` path.
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         if #available(macOS 12.0, iOS 15.0, tvOS 15.0, watchOS 8.0, *) {
-            return try await session.data(for: request)
+            return try await session.data(for: request, delegate: redirectBlocker)
         } else {
             return try await withCheckedThrowingContinuation { continuation in
                 let task = session.dataTask(with: request) { data, response, error in
