@@ -222,11 +222,34 @@ semaphore_acquire(c::Client, key, limit; holder = nothing, ttl_ms = nothing, wai
 try_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
     semaphore_acquire(c, key, limit; holder = holder, ttl_ms = ttl_ms, wait = false)
 
-must_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
-    semaphore_acquire(c, key, limit; holder = holder, ttl_ms = ttl_ms, wait = true)
+"""
+    must_semaphore(c, key, limit; holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    semaphore(c, key, limit; ...)
 
-semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
-    must_semaphore(c, key, limit; holder = holder, ttl_ms = ttl_ms)
+Block until a semaphore permit is actually HELD, then return a held-grant `Dict`
+(see [`must_lock`](@ref)). Polls `semaphore_get` for this client's `holder` among
+the permit holders, or throws [`LockTimeout`](@ref) once `max_wait_ms` elapses.
+"""
+function must_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing,
+        max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    h = holder === nothing ? _gen_holder() : holder
+    out = _acquire_output(semaphore_acquire(c, key, limit;
+        holder = h, ttl_ms = ttl_ms === nothing ? 60000 : ttl_ms, wait = true))
+    get(out, "acquired", false) === true && return _grant(key, h, out)
+    return _poll_until_held([key], max_wait_ms, retry_interval_ms, max_retries) do
+        resp = semaphore_get(c, key)
+        sem = resp isa AbstractDict ? get(resp, "semaphore", nothing) : nothing
+        holders = sem isa AbstractDict ? get(sem, "holders", nothing) : nothing
+        holders isa AbstractVector || return nothing
+        idx = findfirst(holders) do hd
+            hd isa AbstractDict && get(hd, "holder", nothing) == h &&
+                get(hd, "fencing_token", nothing) !== nothing
+        end
+        idx === nothing ? nothing : _grant(key, h, holders[idx])
+    end
+end
+
+semaphore(c::Client, key, limit; kwargs...) = must_semaphore(c, key, limit; kwargs...)
 
 semaphore_release(c::Client, key, holder, fencing_token) =
     _request(c, "POST", "/v1/semaphores/release",
