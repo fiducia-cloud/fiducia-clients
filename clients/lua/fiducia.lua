@@ -56,6 +56,60 @@ local function transport_for(url)
   return http, false
 end
 
+-- True if a path exists and is openable for reading (works for files and, on
+-- Linux/macOS, directories -- fopen() succeeds on a directory there).
+local function path_exists(p)
+  if not p or p == "" then return false end
+  local f = io.open(p, "r")
+  if f then f:close(); return true end
+  return false
+end
+
+-- Auto-detect a CA source. Returns (cafile, capath) with at most one set, trying
+-- $SSL_CERT_FILE, $SSL_CERT_DIR, then the common OS bundle/dir locations in order.
+local function detect_ca()
+  local file_env = os.getenv("SSL_CERT_FILE")
+  if path_exists(file_env) then return file_env, nil end
+  local dir_env = os.getenv("SSL_CERT_DIR")
+  if path_exists(dir_env) then return nil, dir_env end
+  local files = {
+    "/etc/ssl/cert.pem",                    -- macOS / LibreSSL, some BSDs
+    "/etc/ssl/certs/ca-certificates.crt",   -- Debian / Ubuntu / Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",     -- RHEL / Fedora / CentOS
+  }
+  for _, p in ipairs(files) do
+    if path_exists(p) then return p, nil end
+  end
+  if path_exists("/etc/ssl/certs") then return nil, "/etc/ssl/certs" end
+  return nil, nil
+end
+
+-- Resolve the effective luasec TLS params for an https request. Verification is
+-- ON by default (fail-closed); caller-supplied opts.tls always wins. If verify is
+-- on and no CA (opts.tls cafile/capath or auto-detected) is available, raise.
+local function resolve_tls(user_tls)
+  local params = {}
+  if user_tls then
+    for k, v in pairs(user_tls) do params[k] = v end
+  end
+  if params.verify == nil then params.verify = "peer" end
+  if params.verify ~= "none" and params.cafile == nil and params.capath == nil then
+    local cafile, capath = detect_ca()
+    if cafile then
+      params.cafile = cafile
+    elseif capath then
+      params.capath = capath
+    else
+      error({ status = 0, body =
+        "fiducia: HTTPS certificate verification is enabled but no CA bundle was found. "
+        .. "Set $SSL_CERT_FILE (a CA bundle file) or $SSL_CERT_DIR (a CA directory), "
+        .. "or pass Fiducia.new(url, { tls = { cafile = \"/path/to/ca.pem\" } }). "
+        .. "To disable verification (insecure) pass { tls = { verify = \"none\" } }." })
+    end
+  end
+  return params
+end
+
 local Fiducia = {}
 Fiducia.__index = Fiducia
 Fiducia._VERSION = "0.1.0"
