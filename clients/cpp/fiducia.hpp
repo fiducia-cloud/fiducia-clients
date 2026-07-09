@@ -409,11 +409,11 @@ private:
     // URL-encode one path/query segment (RFC 3986) via libcurl.
     static std::string enc(const std::string& s) {
         detail::global_init();
-        CURL* curl = curl_easy_init();
-        char* escaped = curl_easy_escape(curl, s.c_str(), static_cast<int>(s.size()));
+        detail::EasyHandle easy;  // freed on every return path (incl. throws)
+        char* escaped =
+            curl_easy_escape(easy.get(), s.c_str(), static_cast<int>(s.size()));
         std::string out = escaped ? std::string(escaped) : std::string();
         if (escaped) curl_free(escaped);
-        if (curl) curl_easy_cleanup(curl);
         return out;
     }
 
