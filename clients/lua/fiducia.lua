@@ -44,9 +44,9 @@ local function transport_for(url)
   local scheme = (url:match("^(%a[%w+.-]*)://") or ""):lower()
   if scheme == "https" then
     if not https then https = require("ssl.https") end
-    return https
+    return https, true
   end
-  return http
+  return http, false
 end
 
 local Fiducia = {}
