@@ -43,10 +43,16 @@ static void sbuf_init(struct sbuf *s) {
 
 static int sbuf_reserve(struct sbuf *s, size_t extra) {
     if (s->err) return 0;
-    /* need room for len + extra + trailing NUL */
-    if (s->len + extra + 1 <= s->cap) return 1;
+    /* need room for len + extra + trailing NUL; guard the size_t math so a
+     * wrapped total can never fool the capacity check into under-allocating */
+    if (extra > SIZE_MAX - 1 || s->len > SIZE_MAX - 1 - extra) {
+        s->err = 1;
+        return 0;
+    }
+    size_t need = s->len + extra + 1;
+    if (need <= s->cap) return 1;
     size_t ncap = s->cap ? s->cap : 64;
-    while (ncap < s->len + extra + 1) {
+    while (ncap < need) {
         size_t doubled = ncap * 2;
         if (doubled < ncap) { s->err = 1; return 0; } /* overflow */
         ncap = doubled;
