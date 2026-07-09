@@ -647,7 +647,7 @@ fn send(
         base_request
         |> request.set_method(method)
         |> apply_body(body)
-      case httpc.send(req) {
+      case httpc.dispatch(http_config(), req) {
         Error(err) ->
           Error(Transport("fiducia: transport error: " <> string.inspect(err)))
         Ok(response) -> {
