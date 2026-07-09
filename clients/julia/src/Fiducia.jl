@@ -86,7 +86,7 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
     end
     resp = HTTP.request(method, c.base_url * path, headers, payload; status_exception = false)
     text = String(resp.body)
-    data = isempty(strip(text)) ? nothing : JSON.parse(text)
+    data = _parse_body(text)
     resp.status >= 300 && throw(FiduciaError(resp.status, data))
     return data
 end
