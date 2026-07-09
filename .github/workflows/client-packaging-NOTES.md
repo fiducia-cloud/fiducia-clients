@@ -2,8 +2,8 @@
 
 Two-tier design (reviewer "Codex") implemented in `client-packaging.yml`. Every job is
 `continue-on-error: true`, short-timeout, network-allowed. MATLAB is **excluded** (no CI
-runner / proprietary). `clojure` is present under `clients/` but was **not** assigned a
-tier by the reviewer, so it is out of scope here.
+runner / proprietary). `clojure` was not in the reviewer's original tier list; it was added
+as a TIER A job at the coordinator's request and grounded locally.
 
 "LOCALLY VERIFIED" = the pack/assert (and smoke where feasible) were run **green** on this
 machine, in a temp dir **outside** the repo, against the **artifact** (not repo source).
