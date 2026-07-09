@@ -25,7 +25,9 @@ targets: [
 
 Every method is `async` and returns the parsed JSON response as `Any`
 (a `[String: Any]`, `[Any]`, `NSNumber`, `String`, or `NSNull`). An empty body
-comes back as `NSNull()`. On HTTP status ≥ 300 a `FiduciaError` is thrown.
+comes back as `NSNull()`. On HTTP status ≥ 300 a `FiduciaError` is thrown; the
+blocking `mustLock`/`mustSemaphore` also throw `FiduciaTimeout` when the wait
+budget elapses.
 
 ```swift
 import Fiducia

@@ -252,12 +252,12 @@ module Fiducia
       acq_out = nav_output(lock_acquire(key, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
       return held_grant(hold, acq_out) if acquired?(acq_out)
 
-      deadline = Time.monotonic + max_wait_ms.milliseconds
+      deadline = mono + max_wait_ms.milliseconds
       attempts = 0
       loop do
         break if (mr = max_retries) && attempts >= mr
         attempts += 1
-        remaining = deadline - Time.monotonic
+        remaining = deadline - mono
         break if remaining <= Time::Span.zero
         sleep(remaining < retry_interval_ms.milliseconds ? remaining : retry_interval_ms.milliseconds)
 
@@ -276,12 +276,12 @@ module Fiducia
       acq_out = nav_output(semaphore_acquire(key, limit, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
       return held_grant(hold, acq_out) if acquired?(acq_out)
 
-      deadline = Time.monotonic + max_wait_ms.milliseconds
+      deadline = mono + max_wait_ms.milliseconds
       attempts = 0
       loop do
         break if (mr = max_retries) && attempts >= mr
         attempts += 1
-        remaining = deadline - Time.monotonic
+        remaining = deadline - mono
         break if remaining <= Time::Span.zero
         sleep(remaining < retry_interval_ms.milliseconds ? remaining : retry_interval_ms.milliseconds)
 
@@ -301,13 +301,13 @@ module Fiducia
 
     # Monotonic clock reading for the poll deadline (unaffected by wall-clock
     # jumps). Uses Time.instant on compilers that provide it (>= 1.20) and the
-    # equivalent Time.monotonic on older supported versions (shard floor is 1.0)
+    # equivalent mono on older supported versions (shard floor is 1.0)
     # — both support `+`/`-` with Time::Span — so we stay warning-free either way.
     private def mono
       {% if Time.class.has_method?("instant") %}
         Time.instant
       {% else %}
-        Time.monotonic
+        mono
       {% end %}
     end
 
