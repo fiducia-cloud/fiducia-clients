@@ -34,16 +34,39 @@ public struct FiduciaError: Error, CustomStringConvertible {
 public final class FiduciaClient {
     private let baseURL: String
     private let session: URLSession
+    private let ownsSession: Bool
+    // Refuses to follow 3xx redirects; retained for the client's lifetime because
+    // a delegate-backed URLSession keeps only a weak-until-running ref to it.
+    private let redirectBlocker: RedirectBlocker
 
     /// Optional per-request timeout (seconds) applied to every request.
     public var requestTimeout: TimeInterval?
 
-    public init(baseURL: String, session: URLSession = .shared, requestTimeout: TimeInterval? = nil) {
+    /// - Parameter session: a custom `URLSession` to use as-is. When omitted, the
+    ///   client builds a private session whose delegate does NOT follow redirects,
+    ///   so a mutating POST/PUT/DELETE is never silently re-submitted to a 3xx
+    ///   `Location` target — the redirect surfaces as a `FiduciaError` instead.
+    public init(baseURL: String, session: URLSession? = nil, requestTimeout: TimeInterval? = nil) {
         var trimmed = baseURL
         while trimmed.hasSuffix("/") { trimmed.removeLast() }
         self.baseURL = trimmed
-        self.session = session
         self.requestTimeout = requestTimeout
+        let blocker = RedirectBlocker()
+        self.redirectBlocker = blocker
+        if let session = session {
+            self.session = session
+            self.ownsSession = false
+        } else {
+            self.session = URLSession(configuration: .default, delegate: blocker, delegateQueue: nil)
+            self.ownsSession = true
+        }
+    }
+
+    deinit {
+        // A delegate-backed URLSession retains its delegate (and itself) until it
+        // is invalidated; tear down only the session we created, never the
+        // caller's, so nothing leaks.
+        if ownsSession { session.finishTasksAndInvalidate() }
     }
 
     // MARK: - misc
