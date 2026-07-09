@@ -108,12 +108,20 @@ module Fiducia
       semaphore_acquire(key, limit, holder: holder, ttl_ms: ttl_ms, wait: false)
     end
 
-    def must_semaphore(key : String, limit : Int64, holder : String? = nil, ttl_ms : Int64? = nil) : JSON::Any
-      semaphore_acquire(key, limit, holder: holder, ttl_ms: ttl_ms, wait: true)
+    # Block until a semaphore permit is actually HELD, or raise Fiducia::Timeout.
+    # Polls semaphore_get for our holder entry (see must_lock). Returns a
+    # normalized held-grant JSON::Any; release it via semaphore_release.
+    def must_semaphore(key : String, limit : Int64, holder : String? = nil, ttl_ms : Int64? = nil,
+                       max_wait_ms : Int32 = 30_000, retry_interval_ms : Int32 = 250,
+                       max_retries : Int32? = nil) : JSON::Any
+      poll_semaphore(key, limit, holder, ttl_ms, max_wait_ms, retry_interval_ms, max_retries)
     end
 
-    def semaphore(key : String, limit : Int64, holder : String? = nil, ttl_ms : Int64? = nil) : JSON::Any
-      must_semaphore(key, limit, holder: holder, ttl_ms: ttl_ms)
+    def semaphore(key : String, limit : Int64, holder : String? = nil, ttl_ms : Int64? = nil,
+                  max_wait_ms : Int32 = 30_000, retry_interval_ms : Int32 = 250,
+                  max_retries : Int32? = nil) : JSON::Any
+      must_semaphore(key, limit, holder: holder, ttl_ms: ttl_ms, max_wait_ms: max_wait_ms,
+        retry_interval_ms: retry_interval_ms, max_retries: max_retries)
     end
 
     def semaphore_release(key : String, holder : String, fencing_token : Int64) : JSON::Any
