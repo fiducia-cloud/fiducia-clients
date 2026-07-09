@@ -650,6 +650,10 @@ fn fJsonOpt(js: *Stringify, name: []const u8, v: ?Value) !void {
 
 // ================================ tests ================================
 
+test "reference all client methods (forces full semantic analysis)" {
+    std.testing.refAllDecls(Client);
+}
+
 test "base url trims trailing slashes" {
     var c = try Client.init(std.testing.allocator, "https://api.fiducia.cloud///");
     defer c.deinit();
