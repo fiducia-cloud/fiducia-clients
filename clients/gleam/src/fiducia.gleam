@@ -612,6 +612,26 @@ pub fn service_list(client: Client) -> Result(Dynamic, FiduciaError) {
 
 // --- internals ---
 
+/// Default per-request timeout (connect + response) in milliseconds. This equals
+/// gleam_httpc's own default; it is pinned here so the value is explicit and does
+/// not silently change if the library default changes.
+const default_timeout_ms = 30_000
+
+/// Transport configuration applied to every request. TLS verification stays ON;
+/// the two safety-relevant knobs are pinned explicitly rather than left to the
+/// library defaults:
+///   * `follow_redirects: False` — a 3xx on a mutating POST/PUT/DELETE (e.g.
+///     `/v1/locks/acquire`) must NOT be auto-followed, or the operation could be
+///     re-submitted and duplicate a grant / FIFO slot; it surfaces as an `Http`
+///     error (status >= 300) instead.
+///   * `timeout: default_timeout_ms` — a finite default so a stalled connection
+///     cannot hang the caller indefinitely.
+fn http_config() -> httpc.Configuration {
+  httpc.configure()
+  |> httpc.follow_redirects(False)
+  |> httpc.timeout(default_timeout_ms)
+}
+
 fn send(
   client: Client,
   method: Method,
