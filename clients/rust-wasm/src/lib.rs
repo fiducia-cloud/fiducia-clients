@@ -272,7 +272,7 @@ impl FiduciaClient {
 
     /// List live instances of a service, optionally filtered by exact metadata matches.
     pub async fn service_instances(&self, service: String, metadata: JsValue) -> Result<JsValue, JsValue> {
-        let path = format!("/v1/services/{}?metadata={}", enc(&service), enc(&metadata.to_string()));
+        let path = format!("/v1/services/{}?metadata={}", enc(&service), enc(&js_sys::JSON::stringify(&metadata).ok().and_then(|s| s.as_string()).unwrap_or_default()));
         self.request("GET", path, None).await
     }
 

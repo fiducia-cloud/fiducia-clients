@@ -27,7 +27,8 @@ Each lives under [`clients/`](clients/):
 | TypeScript | [`clients/ts`](clients/ts) | `fetch` (stdlib) |
 | Python | [`clients/python`](clients/python) | `urllib` (stdlib) |
 | Go | [`clients/go`](clients/go) | `net/http` (stdlib) |
-| Rust | [`clients/rust`](clients/rust) | `ureq` |
+| Rust | [`clients/rust`](clients/rust) | `ureq` (blocking) |
+| Rust → WebAssembly | [`clients/rust-wasm`](clients/rust-wasm) | browser `fetch` (`wasm-bindgen` + `web-sys`) |
 | Java | [`clients/java`](clients/java) | `java.net.http` (JDK 11+) |
 | C# | [`clients/csharp`](clients/csharp) | `HttpClient` (.NET) |
 | Ruby | [`clients/ruby`](clients/ruby) | `net/http` (stdlib) |
