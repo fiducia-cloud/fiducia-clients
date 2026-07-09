@@ -178,13 +178,34 @@ lock_acquire_many(c::Client, keys; holder = nothing, ttl_ms = nothing, wait = tr
 try_lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
     lock_acquire(c, key; holder = holder, ttl_ms = ttl_ms, wait = false)
 
-must_lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
-    lock_acquire(c, key; holder = holder, ttl_ms = ttl_ms, wait = true)
+"""
+    must_lock(c, key; holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    lock(c, key; ...)
 
-# `lock` is the blocking alias of `must_lock`; provided as a method on
-# `Base.lock` (Julia already exports `lock`) so `lock(c, key)` just works.
-Base.lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
-    must_lock(c, key; holder = holder, ttl_ms = ttl_ms)
+Block until the lock is actually HELD, then return a held-grant `Dict` carrying
+`"holder"`, `"fencing_token"` and `"lease_expires_ms"`. The server only reserves a
+FIFO slot on `wait = true`, so this polls `lock_get` until this client's `holder`
+owns the lock, or throws [`LockTimeout`](@ref) once `max_wait_ms` elapses. A
+`holder` is generated when not supplied; release with
+`lock_release(c, key, grant["holder"], grant["fencing_token"])`.
+"""
+function must_lock(c::Client, key; holder = nothing, ttl_ms = nothing,
+        max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    h = holder === nothing ? _gen_holder() : holder
+    out = _acquire_output(lock_acquire(c, key;
+        holder = h, ttl_ms = ttl_ms === nothing ? 60000 : ttl_ms, wait = true))
+    get(out, "acquired", false) === true && return _grant(key, h, out)
+    return _poll_until_held([key], max_wait_ms, retry_interval_ms, max_retries) do
+        resp = lock_get(c, key)
+        lk = resp isa AbstractDict ? get(resp, "lock", nothing) : nothing
+        (lk isa AbstractDict && get(lk, "holder", nothing) == h &&
+            get(lk, "fencing_token", nothing) !== nothing) ? _grant(key, h, lk) : nothing
+    end
+end
+
+# `lock` is the blocking alias of `must_lock`; provided as a method on `Base.lock`
+# (Julia already exports `lock`) so `lock(c, key)` just works.
+Base.lock(c::Client, key; kwargs...) = must_lock(c, key; kwargs...)
 
 # `key` is accepted for symmetry with the other release calls but is not sent.
 lock_release(c::Client, key, holder, fencing_token) =
