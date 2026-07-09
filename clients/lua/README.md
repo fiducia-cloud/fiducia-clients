@@ -124,19 +124,28 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 - **Thin by design.** The `try_*` / `must_*` / `lock` / `semaphore` helpers only
   flip the `wait` flag on the corresponding acquire call — there is no
   client-side wait/poll loop.
-- **TLS.** luasec's `ssl.https` convenience module does **not** verify the server
-  certificate by default (`verify = "none"`). To turn certificate verification on,
-  pass TLS parameters to the constructor — they are merged into every `https://`
-  request:
+- **TLS (fail-closed).** For `https://` URLs the client verifies the server
+  certificate by default (`verify = "peer"`) — luasec's insecure `verify = "none"`
+  default is **not** used. A CA bundle is auto-detected at request time from, in
+  order, `$SSL_CERT_FILE`, `$SSL_CERT_DIR`, then the common OS locations
+  (`/etc/ssl/cert.pem`, `/etc/ssl/certs/ca-certificates.crt`,
+  `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/certs`). If verification is on but
+  **no CA source is found the request fails** with a clear error rather than
+  connecting insecurely.
+
+  Point the client at a specific CA (e.g. for a private CA or when the OS bundle
+  isn't in a standard place) via `$SSL_CERT_FILE` or the constructor:
 
   ```lua
   local c = Fiducia.new("https://api.fiducia.cloud", {
-    tls = { verify = "peer", protocol = "any", cafile = "/etc/ssl/cert.pem" },
+    tls = { cafile = "/path/to/ca.pem" },   -- or capath = "/path/to/certs"
   })
   ```
 
-  `tls` accepts any luasec parameter (`verify`, `cafile`, `capath`, `protocol`,
-  `options`, …). It is ignored for `http://` URLs.
+  Constructor `tls` params always override the defaults and accept any luasec
+  parameter (`verify`, `cafile`, `capath`, `protocol`, `options`, …). To opt out
+  of verification (insecure — e.g. a self-signed dev server), pass
+  `tls = { verify = "none" }`. TLS settings are ignored for `http://` URLs.
 
 ## License
 
