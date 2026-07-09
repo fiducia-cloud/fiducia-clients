@@ -40,11 +40,16 @@ The only runtime dependency is `org.clojure/data.json` (HTTP uses the JDK).
 (def tok (get-in lk [:result :output :fencing_token]))
 (f/lock-release c "orders/checkout" "worker-a" tok)
 
-;; Non-blocking / blocking variants + union lock
-(f/try-lock  c "orders/checkout")                      ; wait=false
-(f/must-lock c "orders/checkout")                      ; wait=true
-(f/lock      c "orders/checkout")                      ; alias of must-lock
-(f/lock-acquire-many c ["a" "b" "c"] {:ttl_ms 10000})  ; union lock
+;; try-lock: single, non-blocking shot (wait=false) — raw acquire response
+(f/try-lock  c "orders/checkout")
+
+;; must-lock / lock: BLOCK until actually held (reserve slot + poll), or time out.
+;; Returns a held-grant map you can release directly:
+(let [g (f/must-lock c "orders/checkout" {:max_wait_ms 30000 :retry_interval_ms 250})]
+  (f/lock-release c (:key g) (:holder g) (:fencing_token g)))
+;; (f/lock c "orders/checkout") is an alias of must-lock.
+
+(f/lock-acquire-many c ["a" "b" "c"] {:ttl_ms 10000})  ; union lock (single shot)
 
 ;; A sampling of the rest
 (f/semaphore-acquire c "pool/db" 5 {:ttl_ms 10000})
