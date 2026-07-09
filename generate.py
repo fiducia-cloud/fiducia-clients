@@ -446,6 +446,7 @@ TARGETS = {
     "python": ("clients/python/fiducia.py", gen_python),
     "ts": ("clients/ts/fiducia.ts", gen_ts),
     "go": ("clients/go/fiducia.go", gen_go),
+    "rust-wasm": ("clients/rust-wasm/src/lib.rs", gen_rust_wasm),
     "docs": ("ENDPOINTS.md", gen_markdown),
 }
 
