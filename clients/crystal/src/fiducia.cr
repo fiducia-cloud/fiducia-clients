@@ -273,8 +273,8 @@ module Fiducia
     private def poll_semaphore(key : String, limit : Int64, holder : String?, ttl_ms : Int64?,
                                max_wait_ms : Int32, retry_interval_ms : Int32, max_retries : Int32?) : JSON::Any
       hold = holder || gen_holder
-      out = nav_output(semaphore_acquire(key, limit, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
-      return held_grant(hold, out) if acquired?(out)
+      acq_out = nav_output(semaphore_acquire(key, limit, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
+      return held_grant(hold, acq_out) if acquired?(acq_out)
 
       deadline = Time.monotonic + max_wait_ms.milliseconds
       attempts = 0
