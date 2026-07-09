@@ -111,6 +111,59 @@ local function resolve_tls(user_tls)
   return params
 end
 
+-- --- blocking (must_*) poll-loop helpers ---
+-- Defaults for the blocking lock/semaphore helpers (all overridable per call).
+local MUST_TTL_MS            = 60000   -- lease requested on the acquire
+local MUST_MAX_WAIT_MS       = 30000   -- total time budget for the poll loop
+local MUST_RETRY_INTERVAL_MS = 250     -- delay between polls
+
+-- Millisecond clock (luasocket wall clock) used for poll deadlines.
+local function now_ms()
+  return math.floor(socket.gettime() * 1000)
+end
+
+-- A stable, unique holder id, generated when the caller does not supply one.
+local function gen_holder()
+  return string.format("fdc-%x-%06x", now_ms(), math.random(0, 0xFFFFFF))
+end
+
+-- resp.result.output (the acquire grant payload), or {} when absent.
+local function output_of(resp)
+  local r = type(resp) == "table" and resp.result
+  local o = type(r) == "table" and r.output
+  return type(o) == "table" and o or {}
+end
+
+-- resp.lock (from lock_get), or {} when absent/null.
+local function lock_of(resp)
+  local lk = type(resp) == "table" and resp.lock
+  return type(lk) == "table" and lk or {}
+end
+
+-- The holders entry matching `holder` in a semaphore_get response, or nil.
+local function find_holder(resp, holder)
+  local sem = type(resp) == "table" and resp.semaphore
+  local hs = type(sem) == "table" and sem.holders
+  if type(hs) == "table" then
+    for _, h in ipairs(hs) do
+      if type(h) == "table" and h.holder == holder then return h end
+    end
+  end
+  return nil
+end
+
+-- The value raised (and pcall-caught) when a blocking helper's budget elapses.
+-- Carries status/body (matching the client's error convention) plus timeout=true.
+local function timeout_error(keys, waited_ms)
+  return {
+    status = 0,
+    timeout = true,
+    keys = keys,
+    waited_ms = waited_ms,
+    body = "fiducia: timed out after " .. waited_ms .. "ms waiting for " .. table.concat(keys, ", "),
+  }
+end
+
 local Fiducia = {}
 Fiducia.__index = Fiducia
 Fiducia._VERSION = "0.1.0"
