@@ -712,6 +712,16 @@ fn output_grant(resp: Dynamic, key: String, holder: String) -> Option(Grant) {
   }
 }
 
+/// True once an optional `max_retries` cap has been reached. Kept out of the
+/// `case` guard so the client still compiles on Gleam 1.0 (ordering comparisons
+/// in guards need 1.3+).
+fn retries_exhausted(max_retries: Option(Int), attempt: Int) -> Bool {
+  case max_retries {
+    Some(cap) -> attempt >= cap
+    None -> False
+  }
+}
+
 /// Poll `lock_get(key)` until we hold the lock or the deadline / attempt cap is
 /// hit. A union lock is held iff we hold its first member, so single-key polling
 /// is correct here.

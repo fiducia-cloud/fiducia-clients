@@ -11,7 +11,7 @@ module Fiducia
 import HTTP
 import JSON
 
-export Client, FiduciaError
+export Client, FiduciaError, LockTimeout
 export health, status
 export lock_get, lock_acquire, lock_acquire_many, try_lock, must_lock, lock_release
 export semaphore_get, semaphore_acquire, try_semaphore, must_semaphore, semaphore, semaphore_release
