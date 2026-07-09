@@ -391,22 +391,33 @@ def _rw_json_scalar(typ, var):
     return "serde_json::json!(%s)" % var
 
 
+def _rw_object_query_lines(name):
+    # An object query param expands to `name.KEY=VALUE` pairs, ANDed by the
+    # server (PROTOCOL.md: e.g. metadata.region=us-east). Not a JSON blob.
+    # dyn_ref returns None for null/undefined/non-objects, so the loop is skipped.
+    return [
+        "        if let Some(_obj) = %s.dyn_ref::<js_sys::Object>() {" % name,
+        "            for _entry in js_sys::Object::entries(_obj).iter() {",
+        "                let _pair = js_sys::Array::from(&_entry);",
+        "                let _k = _pair.get(0).as_string().unwrap_or_default();",
+        "                if _k.is_empty() { continue; }",
+        "                let _v = _pair.get(1);",
+        "                let _vs = _v.as_string().unwrap_or_else(|| %s);" % (_RW_OBJ_TO_STR % "_v"),
+        '                _q.push(format!("%s.{}={}", enc(&_k), enc(&_vs)));' % name,
+        "            }",
+        "        }",
+    ]
+
+
 def _rw_query_lines(x):
     # Code that appends one query param to `_q` (optional ones only when present).
     name = x["name"]
     if x["type"] == "object":
-        val = "enc(&%s)" % (_RW_OBJ_TO_STR % name)
-    else:
-        val = _rw_scalar_enc(x["type"], name)
-    push = '        _q.push(format!("%s={}", %s));' % (name, val)
+        return _rw_object_query_lines(name)
     if not x.get("optional"):
-        return [push]
-    if x["type"] == "object":
-        return ["        if !%s.is_null() && !%s.is_undefined() {" % (name, name),
-                "    " + push, "        }"]
-    val = _rw_scalar_enc(x["type"], "v")
+        return ['        _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], name))]
     return ["        if let Some(v) = %s {" % name,
-            '            _q.push(format!("%s={}", %s));' % (name, val),
+            '            _q.push(format!("%s={}", %s));' % (name, _rw_scalar_enc(x["type"], "v")),
             "        }"]
 
 
