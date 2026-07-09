@@ -10,7 +10,7 @@
  *   fiducia_response r;
  *   if (fiducia_lock_acquire(c, "orders/checkout", "worker-a", 30000, 0, &r) == 0
  *       && r.status < 300) {
- *       /* parse r.body with your JSON lib, then release with the fencing_token */
+ *       ... parse r.body with your JSON lib, release with the fencing_token ...
  *   }
  *   fiducia_response_free(&r);
  *   fiducia_client_free(c);
