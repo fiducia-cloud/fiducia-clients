@@ -26,7 +26,12 @@ type FiduciaError(status: int, body: JsonNode) =
 module internal Internal =
 
     // A single, shared HttpClient for the process (mirrors the C# sibling).
-    let http = new HttpClient()
+    // AllowAutoRedirect is turned OFF: the fixed load balancer routes internally,
+    // so a 3xx should never be followed. Following one on a mutating POST/PUT/DELETE
+    // could re-submit the operation and duplicate a lock grant / FIFO slot. A 3xx is
+    // >= 300, so it surfaces through the normal error path as FiduciaError. (Other
+    // handler defaults are left untouched: TLS certificate validation stays ON.)
+    let http = new HttpClient(new HttpClientHandler(AllowAutoRedirect = false))
 
     let enc (s: string) = Uri.EscapeDataString(s)
 
