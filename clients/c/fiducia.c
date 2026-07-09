@@ -23,6 +23,15 @@
 
 #define FIDUCIA_VERSION "0.1.0"
 
+/*
+ * Default per-request timeout (connect + transfer), in milliseconds. These
+ * clients never long-poll -- per PROTOCOL, waiting on wait:true is client-driven
+ * and the server returns immediately -- so every request completes promptly and
+ * a conservative default is safe. Override, or disable with <= 0, via
+ * fiducia_client_set_timeout_ms().
+ */
+#define FIDUCIA_DEFAULT_TIMEOUT_MS 30000L
+
 /* --------------------------------------------------------------------------
  * Growable string buffer (for URLs and JSON bodies).
  * On allocation failure `err` latches to 1 and further appends are no-ops.
