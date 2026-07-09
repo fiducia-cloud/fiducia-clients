@@ -22,6 +22,13 @@ import scala.util.control.NonFatal
 final case class FiduciaException(status: Int, body: ujson.Value)
     extends RuntimeException(s"fiducia: HTTP $status")
 
+/** Raised by the blocking [[FiduciaClient.mustLock]] / [[FiduciaClient.lock]] /
+  * [[FiduciaClient.mustSemaphore]] / [[FiduciaClient.semaphore]] helpers when the
+  * wait budget elapses before the lock/permit is actually held. */
+final case class LockTimeoutException(keys: Seq[String], waitedMs: Long)
+    extends RuntimeException(
+      s"fiducia: timed out after ${waitedMs}ms waiting for ${keys.mkString(", ")}")
+
 /** A thin, dependency-light HTTP wrapper over the fiducia.cloud contract. Every
   * method returns the parsed JSON response as a [[ujson.Value]] and throws a
   * [[FiduciaException]] on any non-2xx status.
