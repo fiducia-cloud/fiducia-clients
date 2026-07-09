@@ -5,6 +5,6 @@
                     gleam_json,
                     gleam_stdlib]},
     {description, "Thin HTTP client for fiducia.cloud (distributed locks, semaphores, KV, cron, elections, service discovery)."},
-    {modules, []},
+    {modules, [fiducia_smoke]},
     {registered, []}
 ]}.
