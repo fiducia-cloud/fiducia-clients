@@ -200,7 +200,7 @@ import init, { FiduciaClient } from "./pkg/fiducia_client_wasm.js";
 await init();
 const c = new FiduciaClient("https://api.fiducia.cloud");
 const lock = await c.lockAcquire("orders/checkout", "worker-a", 30000, false);
-await c.lockRelease("orders/checkout", "worker-a", lock.result.output.fencing_token);
+await c.lockRelease("worker-a", lock.result.output.fencing_token);
 ```
 
 ## CLI
