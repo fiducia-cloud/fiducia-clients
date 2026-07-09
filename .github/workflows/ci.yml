@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on the same ref (a new push obsoletes the previous one).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Each language client is tested best-effort: several carry local path deps on
 # the sibling fiducia-interfaces repo (go `replace`, cargo `path`, npm registry
 # @fiducia/interfaces) that aren't present in single-repo CI, so a failure must
