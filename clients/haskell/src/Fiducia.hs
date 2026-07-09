@@ -496,3 +496,92 @@ applyBody (Just v) req =
     { requestHeaders = (hContentType, "application/json") : requestHeaders req
     , requestBody = RequestBodyLBS (encode v)
     }
+
+-- --- blocking-acquire internals (poll loop; ports ruby/elixir reference) ---
+
+-- | Default lease when the caller passes 'Nothing' as @ttl_ms@ to a blocking
+-- helper (a blocking acquire wants a lease long enough to outlast the poll).
+defaultLeaseMs :: Int
+defaultLeaseMs = 60000
+
+-- | Monotonic clock in milliseconds (immune to wall-clock jumps).
+nowMs :: IO Int
+nowMs = fmap (fromIntegral . (`div` 1000000)) getMonotonicTimeNSec
+
+-- | A stable holder id (@fdc-@ + 16 random bytes as hex). Falls back to a
+-- monotonic-clock + process-unique token if the OS entropy source is missing.
+genHolder :: IO Text
+genHolder = do
+  ent <-
+    try (withBinaryFile "/dev/urandom" ReadMode (\h -> BS.hGet h 16)) ::
+      IO (Either SomeException BS.ByteString)
+  case ent of
+    Right bs | BS.length bs == 16 -> pure (T.pack ("fdc-" ++ concatMap hex2 (BS.unpack bs)))
+    _ -> do
+      t <- getMonotonicTimeNSec
+      u <- newUnique
+      pure (T.pack ("fdc-" ++ showHex t "-" ++ show (hashUnique u)))
+  where
+    hex2 :: Word8 -> String
+    hex2 w = let s = showHex w "" in if length s < 2 then '0' : s else s
+
+-- | Look up one field of a JSON object ('Nothing' for non-objects/absent keys).
+field :: Text -> Value -> Maybe Value
+field k (Object o) = KM.lookup (K.fromText k) o
+field _ _ = Nothing
+
+-- | The @result.output@ sub-object of an acquire response envelope.
+output :: Value -> Value
+output v = fromMaybe Null (field "result" v >>= field "output")
+
+-- | 'Nothing' for an absent or JSON-@null@ field (the refs' @!= nil@ check).
+nonNull :: Maybe Value -> Maybe Value
+nonNull (Just Null) = Nothing
+nonNull m = m
+
+-- | A JSON array as a plain list (empty for anything that is not an array).
+asArray :: Value -> [Value]
+asArray (Array a) = toList a
+asArray _ = []
+
+-- | Normalized held-grant object. @fencing_token@ is passed through as its
+-- native JSON node so 64-bit tokens keep full precision.
+grantValue :: Text -> Value -> Maybe Value -> Value
+grantValue holder ft mLease =
+  object (["holder" .= holder, "fencing_token" .= ft] ++ opt "lease_expires_ms" mLease)
+
+-- | Grant built from an acquire @output@ that already reported @acquired:true@
+-- (the holder is the one we sent).
+grantFromOutput :: Text -> Value -> Value
+grantFromOutput holder out =
+  grantValue holder (fromMaybe Null (field "fencing_token" out)) (nonNull (field "lease_expires_ms" out))
+
+-- | 'Just' the grant when @obj@ shows @holder@ holding with a non-null token.
+heldGrant :: Text -> Value -> Maybe Value
+heldGrant holder obj =
+  case (field "holder" obj, nonNull (field "fencing_token" obj)) of
+    (Just (String h), Just ft)
+      | h == holder -> Just (grantValue holder ft (nonNull (field "lease_expires_ms" obj)))
+    _ -> Nothing
+
+-- | Poll @probe@ (which returns 'Just' the grant once held) until it succeeds or
+-- the budget in @opts@ is exhausted, then throw 'LockTimeout'. Mirrors the loop
+-- in the Ruby\/Elixir reference clients: check the attempt cap, then the deadline,
+-- then sleep @min interval remaining@, then probe once.
+pollUntilHeld :: PollOpts -> Text -> Text -> IO (Maybe Value) -> IO Value
+pollUntilHeld opts key holder probe = do
+  start <- nowMs
+  let deadline = start + maxWaitMs opts
+      timeout = throwIO (LockTimeout key holder (maxWaitMs opts))
+      go attempt
+        | maybe False (attempt >=) (maxRetries opts) = timeout
+        | otherwise = do
+            now <- nowMs
+            let remaining = deadline - now
+            if remaining <= 0
+              then timeout
+              else do
+                threadDelay (max 1 (min (retryIntervalMs opts) remaining) * 1000)
+                held <- probe
+                maybe (go (attempt + 1)) pure held
+  go 0
