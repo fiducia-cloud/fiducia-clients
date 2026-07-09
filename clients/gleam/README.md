@@ -42,13 +42,17 @@ pub fn main() {
 
 ## Return values and errors
 
-Every method returns `Result(Dynamic, FiduciaError)`:
+Most methods return `Result(Dynamic, FiduciaError)`; the blocking `must_lock` /
+`lock` / `must_semaphore` / `semaphore` helpers return `Result(Grant, FiduciaError)`
+(see [Blocking acquire](#blocking-acquire)).
 
 - `Ok(Dynamic)` — the parsed JSON response body (an empty body decodes to JSON
   `null`). Decode it with `gleam/dynamic/decode`.
 - `Error(Http(status, body))` — a non-2xx response. `status: Int` and `body`
   is the parsed JSON body as a `Dynamic`.
 - `Error(Transport(message))` — a network/transport failure (`message: String`).
+- `Error(Timeout(waited_ms))` — a blocking acquire never became held within its
+  wait budget (`waited_ms: Int`).
 
 ```gleam
 case fiducia.kv_get(client, "feature/checkout") {
