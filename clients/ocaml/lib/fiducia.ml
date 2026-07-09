@@ -82,6 +82,15 @@ let obj (fields : (string * Yojson.Safe.t option) list) : Yojson.Safe.t =
        fields)
 
 (* --- request core --- *)
+
+(* Never follow redirects. The fixed load balancer routes internally, so a 3xx on
+   a mutating POST/PUT/DELETE would, if followed, re-submit the operation and could
+   duplicate a lock grant / queue slot. With following off a 3xx returns as-is and,
+   being >= 300, surfaces as [Fiducia_error]. ezcurl's default Config sets
+   follow_location=true and applies it after our [set_opts], so we must pass this
+   config on every request to actually disable it. *)
+let no_follow = Ezcurl.Config.follow_location false Ezcurl.Config.default
+
 let request c meth path (body : Yojson.Safe.t option) : Yojson.Safe.t =
   let url = c.base ^ path in
   let content =
