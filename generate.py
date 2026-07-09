@@ -542,7 +542,7 @@ def emit_rust_wasm(op):
                 lines.append("        }")
             else:
                 lines.append("        if let Some(v) = %s {" % x["name"])
-                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v")))
+                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v", x["name"])))
                 lines.append("        }")
         lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
         bodyarg = "Some(_payload)"
