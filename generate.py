@@ -335,8 +335,20 @@ impl FiduciaClient {
         if body.is_some() {
             request.headers().set("content-type", "application/json").map_err(|e| err(0, e))?;
         }
-        let window = web_sys::window().ok_or_else(|| err(0, JsValue::from_str("no global `window`")))?;
-        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await.map_err(|e| err(0, e))?;
+        // Resolve `fetch` from the global scope so the client works on the
+        // browser main thread, in Web Workers, and in Node 18+/Deno (global
+        // fetch) — not just `window`.
+        let global = js_sys::global();
+        let fetch = js_sys::Reflect::get(&global, &JsValue::from_str("fetch"))
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .ok_or_else(|| err(0, JsValue::from_str("no global fetch available")))?;
+        let promise: js_sys::Promise = fetch
+            .call1(&global, &request)
+            .map_err(|e| err(0, e))?
+            .dyn_into()
+            .map_err(|e| err(0, e))?;
+        let resp_value = JsFuture::from(promise).await.map_err(|e| err(0, e))?;
         let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
         let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
         let text = text_value.as_string().unwrap_or_default();

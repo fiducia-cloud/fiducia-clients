@@ -1,4 +1,0 @@
-module Fiducia {
-    header "/Users/maca5/codes/fiducia.cloud/fiducia-clients/clients/swift/.build/arm64-apple-macosx/debug/Fiducia.build/Fiducia-Swift.h"
-    requires objc
-}

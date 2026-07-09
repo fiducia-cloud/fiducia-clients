@@ -43,3 +43,21 @@ deps/
 
 # Scratch / git worktrees (tmp/worktrees/*)
 tmp/
+
+# Gleam
+build/
+
+# Swift (SwiftPM)
+.build/
+.swiftpm/
+
+# Zig
+.zig-cache/
+zig-out/
+
+# Haskell (Cabal / Stack)
+dist-newstyle/
+.stack-work/
+
+# Nim
+nimcache/

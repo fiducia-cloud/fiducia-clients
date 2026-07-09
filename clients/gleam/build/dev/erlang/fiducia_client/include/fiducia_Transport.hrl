@@ -1,1 +1,0 @@
--record(transport, {message :: binary()}).
