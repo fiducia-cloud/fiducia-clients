@@ -37,6 +37,24 @@ Each lives under [`clients/`](clients/):
 | PowerShell | [`clients/powershell`](clients/powershell) | `Invoke-RestMethod` |
 | Dart | [`clients/dart`](clients/dart) | `dart:io` (stdlib) |
 | Elixir | [`clients/elixir`](clients/elixir) | `:httpc` + `:json` (OTP 27+) |
+| Gleam | [`clients/gleam`](clients/gleam) | `gleam_httpc` + `gleam_json` |
+| F# | [`clients/fsharp`](clients/fsharp) | `HttpClient` + `System.Text.Json` (.NET) |
+| OCaml | [`clients/ocaml`](clients/ocaml) | `ezcurl` + `yojson` |
+| Clojure | [`clients/clojure`](clients/clojure) | `java.net.http` + `data.json` |
+| Scala | [`clients/scala`](clients/scala) | `java.net.http` + `ujson` |
+| Kotlin | [`clients/kotlin`](clients/kotlin) | `java.net.http` + `kotlinx.serialization` |
+| Erlang | [`clients/erlang`](clients/erlang) | `httpc` + `json` (OTP 27+) |
+| Swift | [`clients/swift`](clients/swift) | `URLSession` (Foundation) |
+| C++ | [`clients/cpp`](clients/cpp) | `libcurl` + `nlohmann/json` |
+| C | [`clients/c`](clients/c) | `libcurl` (bring your own JSON) |
+| Zig | [`clients/zig`](clients/zig) | `std.http` + `std.json` (stdlib) |
+| Haskell | [`clients/haskell`](clients/haskell) | `http-client` + `aeson` |
+| Julia | [`clients/julia`](clients/julia) | `HTTP.jl` + `JSON.jl` |
+| R | [`clients/r`](clients/r) | `httr` + `jsonlite` |
+| MATLAB | [`clients/matlab`](clients/matlab) | `webread`/`webwrite` + `jsondecode` |
+| Nim | [`clients/nim`](clients/nim) | `std/httpclient` + `std/json` (stdlib) |
+| Crystal | [`clients/crystal`](clients/crystal) | `HTTP::Client` + `JSON` (stdlib) |
+| Lua | [`clients/lua`](clients/lua) | `luasocket`/`luasec` + `dkjson` |
 
 ## Shape (same everywhere)
 
