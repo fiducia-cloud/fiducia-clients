@@ -416,10 +416,16 @@ classdef Fiducia < handle
                 request = matlab.net.http.RequestMessage(method);
             end
 
+            % MaxRedirects=0: do NOT auto-follow 3xx. Following a redirect on a
+            % mutating POST/PUT/DELETE could re-submit and duplicate the operation
+            % (e.g. a lock grant / FIFO queue slot). A 3xx is >= 300, so it surfaces
+            % through the normal error path below rather than being followed.
             if isempty(obj.RequestTimeout)
-                options = matlab.net.http.HTTPOptions('SavePayload', true);
+                options = matlab.net.http.HTTPOptions('SavePayload', true, ...
+                    'MaxRedirects', 0);
             else
                 options = matlab.net.http.HTTPOptions('SavePayload', true, ...
+                    'MaxRedirects', 0, ...
                     'ConnectTimeout', obj.RequestTimeout, ...
                     'ResponseTimeout', obj.RequestTimeout);
             end
