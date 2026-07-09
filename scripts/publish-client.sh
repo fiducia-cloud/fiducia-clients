@@ -105,6 +105,12 @@ case "$client" in
   rust)
     run 'cargo package && cargo publish'
     ;;
+  rust-wasm)
+    # Not a crates.io crate: wasm-pack compiles the cdylib and emits an npm
+    # package under pkg/ (with the .d.ts), which we publish to npm like the ts
+    # client. Requires wasm-pack + the wasm32-unknown-unknown target.
+    run 'wasm-pack build --target bundler --release && npm publish pkg --access public'
+    ;;
   csharp)
     run 'tmp="$(mktemp -d "${TMPDIR:-/tmp}/fiducia-client-nuget.XXXXXX")"; dotnet pack -c Release --output "$tmp"; dotnet nuget push "$tmp"/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "${NUGET_API_KEY:?set NUGET_API_KEY}"'
     ;;
