@@ -78,9 +78,12 @@ proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): J
   finally:
     client.close()
 
-proc newClient*(baseUrl: string, timeout: int = -1): Client =
+proc newClient*(baseUrl: string, timeout: int = 30_000): Client =
   ## Build a client. Trailing slashes on `baseUrl` are trimmed. `timeout` is the
-  ## per-request timeout in milliseconds (-1 = no timeout).
+  ## per-request socket timeout in milliseconds; it defaults to 30_000 (30s) so a
+  ## dead or hung connection cannot block forever. Waiting is client-driven — the
+  ## server never holds a `wait:true` request open (it returns a queued result
+  ## immediately) — so a finite default is safe. Pass `-1` to wait indefinitely.
   var b = baseUrl
   b.removeSuffix('/')
   Client(baseUrl: b, timeout: timeout)
