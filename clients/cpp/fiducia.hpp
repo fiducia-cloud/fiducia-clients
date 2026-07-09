@@ -394,9 +394,16 @@ private:
 
     static std::size_t write_cb(char* ptr, std::size_t size, std::size_t nmemb,
                                 void* userdata) {
+        std::size_t n = size * nmemb;
         auto* out = static_cast<std::string*>(userdata);
-        out->append(ptr, size * nmemb);
-        return size * nmemb;
+        // Never let a C++ exception unwind through libcurl's C stack (UB). On
+        // allocation failure, signal a short write so curl aborts the transfer.
+        try {
+            out->append(ptr, n);
+        } catch (...) {
+            return 0;
+        }
+        return n;
     }
 
     // URL-encode one path/query segment (RFC 3986) via libcurl.
