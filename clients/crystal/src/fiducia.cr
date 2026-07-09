@@ -305,8 +305,8 @@ module Fiducia
     end
 
     # True only when the acquire output reports the grant is held now.
-    private def acquired?(out : JSON::Any) : Bool
-      out["acquired"]?.try(&.as_bool?) == true
+    private def acquired?(acq_out : JSON::Any) : Bool
+      acq_out["acquired"]?.try(&.as_bool?) == true
     end
 
     # A JSON value is "present" iff it exists and is not JSON null.
