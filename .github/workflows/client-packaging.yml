@@ -273,6 +273,35 @@ jobs:
           KT
           gradle compileKotlin --no-daemon
 
+  clojure:
+    name: "A · clojure (build jar → require)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"          # transport is JDK java.net.http (JDK 11+)
+      - uses: DeLaGuardo/setup-clojure@12
+        with:
+          cli: "1.12.0.1488"
+      - name: Build jar (publishable artifact → Clojars/Maven)
+        working-directory: clients/clojure
+        run: clojure -T:build jar
+      - name: Assert artifact contents (must_contain)
+        run: |
+          jar="clients/clojure/target/fiducia-client-0.1.0.jar"
+          echo "artifact: $jar"
+          unzip -l "$jar" | grep -q 'fiducia/client.clj'
+      - name: Smoke — require the ns FROM the artifact jar (cwd outside repo)
+        run: |
+          jar="$GITHUB_WORKSPACE/clients/clojure/target/fiducia-client-0.1.0.jar"
+          cd "$RUNNER_TEMP"
+          clojure -Sdeps "{:deps {cloud.fiducia/fiducia-client {:local/root \"$jar\"} org.clojure/data.json {:mvn/version \"2.5.0\"}}}" \
+            -M -e "(require 'fiducia.client)(println \"clojure artifact require OK\")"
+
   # ────────────────────────── TIER A-compile: external consumer compile ──────────────────────────
 
   c:
