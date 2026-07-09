@@ -91,7 +91,14 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
         push!(headers, "Content-Type" => "application/json")
         payload = JSON.json(body)
     end
-    resp = HTTP.request(method, c.base_url * path, headers, payload; status_exception = false)
+    # redirect=false: never auto-follow a 3xx. Following a redirect on a mutating
+    # POST/PUT/DELETE could re-submit the operation (duplicate a lock grant / FIFO
+    # queue slot); since a 3xx is >= 300 it surfaces as a FiduciaError instead.
+    # retry=false: issue each request exactly once (the edge/LB already handles
+    # leader redirects, and HTTP.jl otherwise auto-retries idempotent methods).
+    resp = HTTP.request(method, c.base_url * path, headers, payload;
+        status_exception = false, redirect = false, retry = false,
+        connect_timeout = c.connect_timeout, readtimeout = c.read_timeout)
     text = String(resp.body)
     data = _parse_body(text)
     resp.status >= 300 && throw(FiduciaError(resp.status, data))
