@@ -41,7 +41,9 @@ pub const Response = struct {
         self.json.deinit();
     }
 
-    /// Parsed JSON body. A `.null` value means the response body was empty.
+    /// Parsed JSON body. A `.null` value means the response body was empty;
+    /// a body that was not valid JSON is surfaced as a `.string` of the raw
+    /// bytes (so a non-JSON error page never fails the request).
     pub fn value(self: Response) Value {
         return self.json.value;
     }
