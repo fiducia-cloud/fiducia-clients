@@ -245,7 +245,14 @@ pub fn must_semaphore(
 ) -> Result(Grant, FiduciaError) {
   let hold = resolve_holder(holder)
   let ttl = Some(option.unwrap(ttl_ms, 60_000))
-  use resp <- result.try(semaphore_acquire(client, key, limit, Some(hold), ttl, True))
+  use resp <- result.try(semaphore_acquire(
+    client,
+    key,
+    limit,
+    Some(hold),
+    ttl,
+    True,
+  ))
   case output_grant(resp, key, hold) {
     Some(grant) -> Ok(grant)
     None ->
@@ -811,7 +818,9 @@ fn semaphore_held_by(
     )
     decode.success(#(who, token, lease))
   }
-  case decode.run(resp, decode.at(["semaphore", "holders"], decode.list(entry))) {
+  case
+    decode.run(resp, decode.at(["semaphore", "holders"], decode.list(entry)))
+  {
     Ok(holders) ->
       holders
       |> list.find_map(fn(h) {

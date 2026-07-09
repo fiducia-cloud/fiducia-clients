@@ -3,8 +3,16 @@
 --
 --   local Fiducia = require("fiducia")
 --   local c = Fiducia.new("https://api.fiducia.cloud")
---   local lock = c:lock_acquire("orders/checkout", { ttl_ms = 30000 })
---   c:lock_release("orders/checkout", "worker-a", lock.result.output.fencing_token)
+--   local grant = c:must_lock("orders/checkout", { ttl_ms = 30000 })  -- BLOCKS until held
+--   -- ... guarded work using grant.fencing_token ...
+--   grant.release()   -- or c:lock_release(grant.key, grant.holder, grant.fencing_token)
+--
+-- Blocking vs try: must_lock/lock and must_semaphore/semaphore POLL until the lock
+-- is held or the wait budget elapses (the server queues wait:true acquires and
+-- returns immediately -- it does not hold the connection). They return a grant
+-- table { key, holder, fencing_token, lease_expires_ms, release() } and raise a
+-- timeout table { status = 0, timeout = true, keys, waited_ms, body } on timeout.
+-- try_lock/try_semaphore are single-shot (wait:false) and return the raw response.
 --
 -- Errors: on HTTP status >= 300 (or a transport failure) each op raises a Lua
 -- error whose value is a table { status = <number>, body = <parsed JSON | string> }.
