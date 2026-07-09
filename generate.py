@@ -323,6 +323,19 @@ fn err(status: u16, body: JsValue) -> JsValue {
     o.into()
 }
 
+// Integer fields cross JS as f64. Reject values a JSON integer can't faithfully
+// represent (NaN/Infinity, fractional, or beyond 2^53) so the client fails loudly
+// instead of silently coercing (`NaN as i64` == 0, `Infinity as i64` == i64::MAX).
+const MAX_SAFE_INT: f64 = 9_007_199_254_740_991.0;
+fn checked_int(v: f64, field: &str) -> Result<i64, JsValue> {
+    if !v.is_finite() || v.fract() != 0.0 || v.abs() > MAX_SAFE_INT {
+        return Err(err(0, JsValue::from_str(&format!(
+            "field `{field}` must be a safe integer, got {v}"
+        ))));
+    }
+    Ok(v as i64)
+}
+
 #[wasm_bindgen]
 pub struct FiduciaClient {
     base: String,
@@ -420,8 +433,6 @@ impl FiduciaClient {
 RUST_WASM_TYPE = {"string": "String", "int": "f64", "number": "f64", "bool": "bool",
                   "string[]": "Vec<String>", "object": "JsValue"}
 
-_RW_OBJ_TO_STR = "js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default()"
-
 
 def _rw_scalar_enc(typ, var):
     # A scalar path/query value, encoded for a URL.
@@ -432,11 +443,11 @@ def _rw_scalar_enc(typ, var):
     return "enc(&%s.to_string())" % var
 
 
-def _rw_json_scalar(typ, var):
-    # A scalar body value as a serde_json::Value. Integers cast back to i64 so the
-    # JSON is an integer rather than a float.
+def _rw_json_scalar(typ, var, field):
+    # A scalar body value as a serde_json::Value. Integers go through checked_int
+    # (fail loudly on NaN/Infinity/fractional/unsafe) and land as a clean integer.
     if typ == "int":
-        return "serde_json::json!(%s as i64)" % var
+        return 'serde_json::json!(checked_int(%s, "%s")?)' % (var, field)
     return "serde_json::json!(%s)" % var
 
 
@@ -451,7 +462,12 @@ def _rw_object_query_lines(name):
         "                let _k = _pair.get(0).as_string().unwrap_or_default();",
         "                if _k.is_empty() { continue; }",
         "                let _v = _pair.get(1);",
-        "                let _vs = _v.as_string().unwrap_or_else(|| %s);" % (_RW_OBJ_TO_STR % "_v"),
+        # Contract is Record<string,string>; reject non-string values loudly
+        # instead of silently JSON-stringifying them (cross-client surprises).
+        "                let _vs = match _v.as_string() {",
+        "                    Some(_s) => _s,",
+        '                    None => return Err(err(0, JsValue::from_str(&format!("%s.{_k} must be a string")))),' % name,
+        "                };",
         '                _q.push(format!("%s.{}={}", enc(&_k), enc(&_vs)));' % name,
         "            }",
         "        }",
@@ -476,7 +492,7 @@ def _rw_body_value(x):
         return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
     if x["type"] == "string":
         return "serde_json::Value::String(%s)" % x["name"]
-    return _rw_json_scalar(x["type"], x["name"])
+    return _rw_json_scalar(x["type"], x["name"], x["name"])
 
 
 def emit_rust_wasm(op):
@@ -524,7 +540,7 @@ def emit_rust_wasm(op):
                 lines.append("        }")
             else:
                 lines.append("        if let Some(v) = %s {" % x["name"])
-                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v")))
+                lines.append('            _body.insert("%s".to_string(), %s);' % (x["name"], _rw_json_scalar(x["type"], "v", x["name"])))
                 lines.append("        }")
         lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
         bodyarg = "Some(_payload)"
