@@ -280,6 +280,152 @@ def gen_go():
     return GO_PRE + "\n" + "\n".join(emit_go(op) for op in OPS)
 
 
+# ------------------------------------------------------------------- rust-wasm
+# A Rust client compiled to WebAssembly. Unlike clients/rust (blocking `ureq`),
+# the wasm build cannot open sockets, so its transport is the browser `fetch`
+# API via wasm-bindgen. Every op is an async method; wasm-bindgen exports the
+# snake_case names to JS as camelCase. Kept separate from clients/rust so that
+# native client stays a plain blocking crate.
+RUST_WASM_PRE = BANNER_C + '''
+//! Fiducia client (Rust -> WebAssembly) — generated. Browser transport via `fetch`.
+//!
+//! Build:  wasm-pack build clients/rust-wasm --target web
+//!
+//! Every operation is an `async` method (exported to JS as camelCase) that
+//! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
+//! non-2xx response or transport failure.
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{Request, RequestInit, Response};
+
+/// URL-encode a path/query segment via the JS `encodeURIComponent`.
+fn enc(s: &str) -> String {
+    String::from(js_sys::encode_uri_component(s))
+}
+
+/// Build the `{ status, body }` rejection value used for every failure.
+fn err(status: u16, body: JsValue) -> JsValue {
+    let o = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("status"), &JsValue::from(status));
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("body"), &body);
+    o.into()
+}
+
+#[wasm_bindgen]
+pub struct FiduciaClient {
+    base: String,
+}
+
+#[wasm_bindgen]
+impl FiduciaClient {
+    #[wasm_bindgen(constructor)]
+    pub fn new(base_url: &str) -> FiduciaClient {
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string() }
+    }
+
+    async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
+        let opts = RequestInit::new();
+        opts.set_method(method);
+        if let Some(ref b) = body {
+            opts.set_body(&JsValue::from_str(b));
+        }
+        let url = format!("{}{}", self.base, path);
+        let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
+        if body.is_some() {
+            request.headers().set("content-type", "application/json").map_err(|e| err(0, e))?;
+        }
+        let window = web_sys::window().ok_or_else(|| err(0, JsValue::from_str("no global `window`")))?;
+        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await.map_err(|e| err(0, e))?;
+        let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
+        let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
+        let text = text_value.as_string().unwrap_or_default();
+        let parsed = if text.is_empty() {
+            JsValue::NULL
+        } else {
+            js_sys::JSON::parse(&text).unwrap_or(JsValue::NULL)
+        };
+        if !resp.ok() {
+            return Err(err(resp.status(), parsed));
+        }
+        Ok(parsed)
+    }
+'''
+
+RUST_WASM_TYPE = {"string": "String", "int": "i64", "number": "f64", "bool": "bool",
+                  "string[]": "Vec<String>", "object": "JsValue"}
+
+
+def _rw_enc_expr(x):
+    # Path/query params encoded to a String before URL-encoding.
+    if x["type"] == "string":
+        return "enc(&%s)" % x["name"]
+    return "enc(&%s.to_string())" % x["name"]
+
+
+def _rw_body_value(x):
+    # A required body param -> serde_json::Value expression.
+    if x["type"] == "object":
+        return "serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?" % x["name"]
+    if x["type"] == "string":
+        return "serde_json::Value::String(%s)" % x["name"]
+    return "serde_json::json!(%s)" % x["name"]
+
+
+def emit_rust_wasm(op):
+    pp, qp, bp, req, opt = parts(op)
+    sig = ["&self"]
+    for x in req:
+        sig.append("%s: %s" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    for x in opt:
+        # Optional objects stay a nullable JsValue; other optionals are Option<T>.
+        if x["type"] == "object":
+            sig.append("%s: JsValue" % x["name"])
+        else:
+            sig.append("%s: Option<%s>" % (x["name"], RUST_WASM_TYPE[x["type"]]))
+    lines = []
+    # path + query string
+    fmt = op["path"]
+    enc_args = []
+    for x in pp:
+        fmt = fmt.replace("{%s}" % x["name"], "{}")
+        enc_args.append(_rw_enc_expr(x))
+    for x in qp:
+        fmt += ("&" if "?" in fmt else "?") + x["name"] + "={}"
+        enc_args.append(_rw_enc_expr(x))
+    if enc_args:
+        lines.append('        let path = format!("%s", %s);' % (fmt, ", ".join(enc_args)))
+    else:
+        lines.append('        let path = String::from("%s");' % fmt)
+    # body map
+    if bp:
+        lines.append("        let mut _body = serde_json::Map::new();")
+        for x in bp:
+            if not x.get("optional"):
+                lines.append('        _body.insert("%s".to_string(), %s);' % (x["name"], _rw_body_value(x)))
+            elif x["type"] == "object":
+                lines.append("        if !%s.is_null() && !%s.is_undefined() {" % (x["name"], x["name"]))
+                lines.append('            _body.insert("%s".to_string(), serde_wasm_bindgen::from_value(%s).map_err(|e| err(0, e.into()))?);'
+                             % (x["name"], x["name"]))
+                lines.append("        }")
+            else:
+                lines.append("        if let Some(v) = %s {" % x["name"])
+                lines.append('            _body.insert("%s".to_string(), serde_json::json!(v));' % x["name"])
+                lines.append("        }")
+        lines.append("        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();")
+        bodyarg = "Some(_payload)"
+    else:
+        bodyarg = "None"
+    lines.append('        self.request("%s", path, %s).await' % (op["method"], bodyarg))
+    doc = op.get("doc", "")
+    return ("    /// %s\n    pub async fn %s(%s) -> Result<JsValue, JsValue> {\n%s\n    }\n"
+            % (doc, op["name"], ", ".join(sig), "\n".join(lines)))
+
+
+def gen_rust_wasm():
+    return RUST_WASM_PRE + "\n" + "\n".join(emit_rust_wasm(op) for op in OPS) + "}\n"
+
+
 # ------------------------------------------------------------------------- docs
 def gen_markdown():
     rows = ["<!-- GENERATED by generate.py from operations.json — DO NOT EDIT BY HAND. -->",
