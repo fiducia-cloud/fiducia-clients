@@ -59,3 +59,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - working-directory: clients/rust
         run: cargo test
+
+  # clients/rust-wasm is generated from operations.json and self-contained (no
+  # sibling-repo path deps), so it is a HARD gate — not continue-on-error.
+  rust-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # generator self-tests + drift check (committed lib.rs vs operations.json)
+      - run: python3 -m unittest generate_test
+      - run: python3 generate.py --check rust-wasm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      # compile gate + full wasm-bindgen (emits pkg/ with .wasm + .d.ts)
+      - run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
+      - run: wasm-pack build clients/rust-wasm --target web
