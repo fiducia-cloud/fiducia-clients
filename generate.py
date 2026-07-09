@@ -433,8 +433,6 @@ impl FiduciaClient {
 RUST_WASM_TYPE = {"string": "String", "int": "f64", "number": "f64", "bool": "bool",
                   "string[]": "Vec<String>", "object": "JsValue"}
 
-_RW_OBJ_TO_STR = "js_sys::JSON::stringify(&%s).ok().and_then(|s| s.as_string()).unwrap_or_default()"
-
 
 def _rw_scalar_enc(typ, var):
     # A scalar path/query value, encoded for a URL.
