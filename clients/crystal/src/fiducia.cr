@@ -301,13 +301,13 @@ module Fiducia
 
     # Monotonic clock reading for the poll deadline (unaffected by wall-clock
     # jumps). Uses Time.instant on compilers that provide it (>= 1.20) and the
-    # equivalent mono on older supported versions (shard floor is 1.0)
+    # equivalent Time.monotonic on older supported versions (shard floor is 1.0)
     # — both support `+`/`-` with Time::Span — so we stay warning-free either way.
     private def mono
       {% if Time.class.has_method?("instant") %}
         Time.instant
       {% else %}
-        mono
+        Time.monotonic
       {% end %}
     end
 
