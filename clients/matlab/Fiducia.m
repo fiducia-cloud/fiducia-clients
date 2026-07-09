@@ -537,5 +537,153 @@ classdef Fiducia < handle
             end
             e = strjoin(parts, '');
         end
+
+        function grant = acquireLockBlocking(obj, key, holder, ttl_ms, max_wait_ms, retry_interval_ms, max_retries)
+            % Acquire (wait=true) then poll lockGet until held or timeout. Port of
+            % the reference clients' _acquire_lock / poll_lock.
+            if isempty(holder), holder = obj.genHolder(); end
+            if isempty(ttl_ms), ttl_ms = 60000; end
+            out = obj.outputOf(obj.lockAcquire(key, 'holder', holder, 'ttl_ms', ttl_ms, 'wait', true));
+            if obj.isTrue(obj.fieldOr(out, 'acquired', false))
+                grant = obj.grantStruct(key, holder, out);
+                return;
+            end
+            startTic = tic;
+            maxWaitS = max_wait_ms / 1000;
+            intervalS = retry_interval_ms / 1000;
+            attempt = 0;
+            while isempty(max_retries) || attempt < max_retries
+                attempt = attempt + 1;
+                remainingS = maxWaitS - toc(startTic);
+                if remainingS <= 0, break; end
+                pause(min(intervalS, remainingS));
+                % A union lock is held iff you hold its first member key.
+                lk = obj.fieldOr(obj.lockGet(key), 'lock', []);
+                if obj.holderMatches(lk, holder)
+                    grant = obj.grantStruct(key, holder, lk);
+                    return;
+                end
+            end
+            obj.raiseTimeout('fiducia:lockTimeout', key, max_wait_ms);
+        end
+
+        function grant = acquireSemaphoreBlocking(obj, key, limit, holder, ttl_ms, max_wait_ms, retry_interval_ms, max_retries)
+            % Acquire (wait=true) then poll semaphoreGet.holders until this holder
+            % has a permit or timeout. Port of _acquire_semaphore / poll_semaphore.
+            if isempty(holder), holder = obj.genHolder(); end
+            if isempty(ttl_ms), ttl_ms = 60000; end
+            out = obj.outputOf(obj.semaphoreAcquire(key, limit, 'holder', holder, 'ttl_ms', ttl_ms, 'wait', true));
+            if obj.isTrue(obj.fieldOr(out, 'acquired', false))
+                grant = obj.grantStruct(key, holder, out);
+                return;
+            end
+            startTic = tic;
+            maxWaitS = max_wait_ms / 1000;
+            intervalS = retry_interval_ms / 1000;
+            attempt = 0;
+            while isempty(max_retries) || attempt < max_retries
+                attempt = attempt + 1;
+                remainingS = maxWaitS - toc(startTic);
+                if remainingS <= 0, break; end
+                pause(min(intervalS, remainingS));
+                sem = obj.fieldOr(obj.semaphoreGet(key), 'semaphore', []);
+                slot = obj.findHolder(obj.fieldOr(sem, 'holders', {}), holder);
+                if ~isempty(slot)
+                    grant = obj.grantStruct(key, holder, slot);
+                    return;
+                end
+            end
+            obj.raiseTimeout('fiducia:semaphoreTimeout', key, max_wait_ms);
+        end
+
+        function h = genHolder(~)
+            % Unique holder id in the reference style ("fdc-" + token). tempname
+            % yields an OS-unique token per call without creating a file or
+            % disturbing the caller's global rng() state.
+            [~, token] = fileparts(tempname);
+            token = regexprep(token, '[^A-Za-z0-9]', '');
+            if isempty(token)
+                token = sprintf('%.0f', mod(now, 1) * 1e12);
+            end
+            h = ['fdc-', token];
+        end
+
+        function out = outputOf(obj, resp)
+            % resp.result.output, or an empty struct when absent.
+            out = obj.fieldOr(obj.fieldOr(resp, 'result', []), 'output', struct([]));
+        end
+
+        function g = grantStruct(obj, key, holder, src)
+            % Held-grant view the caller can release; pulls fencing_token and
+            % lease_expires_ms from src (an acquire output or a lockGet entry).
+            g = struct('key', obj.asChar(key), 'holder', obj.asChar(holder), ...
+                'fencing_token', obj.fieldOr(src, 'fencing_token', []), ...
+                'lease_expires_ms', obj.fieldOr(src, 'lease_expires_ms', []));
+        end
+
+        function slot = findHolder(obj, holders, holder)
+            % First holders entry matching holder with a non-null fencing_token.
+            slot = [];
+            if isempty(holders)
+                return;
+            elseif iscell(holders)
+                items = holders;
+            elseif isstruct(holders)
+                items = num2cell(holders);
+            else
+                return;
+            end
+            for i = 1:numel(items)
+                if obj.holderMatches(items{i}, holder)
+                    slot = items{i};
+                    return;
+                end
+            end
+        end
+
+        function tf = holderMatches(obj, entry, holder)
+            % True when entry is a held record for holder: matching holder id and
+            % a present (non-null) fencing_token.
+            tf = false;
+            if ~(isstruct(entry) && isscalar(entry)), return; end
+            if ~isfield(entry, 'holder') || ~isfield(entry, 'fencing_token'), return; end
+            if isempty(entry.fencing_token), return; end
+            tf = strcmp(obj.asChar(entry.holder), obj.asChar(holder));
+        end
+
+        function tf = isTrue(~, v)
+            % JSON-truthy scalar: logical true or a nonzero number.
+            if isscalar(v) && islogical(v)
+                tf = v;
+            elseif isscalar(v) && isnumeric(v)
+                tf = (v ~= 0);
+            else
+                tf = false;
+            end
+        end
+
+        function v = fieldOr(~, s, name, default)
+            % s.(name) when s is a scalar struct with that field, else default.
+            if isstruct(s) && isscalar(s) && isfield(s, name)
+                v = s.(name);
+            else
+                v = default;
+            end
+        end
+
+        function s = asChar(~, v)
+            % Normalize a char/string/scalar to a char row for compare/return.
+            if ischar(v)
+                s = v;
+            else
+                s = char(string(v));
+            end
+        end
+
+        function raiseTimeout(~, identifier, key, max_wait_ms)
+            error(MException(identifier, ...
+                'fiducia: timed out after %dms waiting to acquire %s', ...
+                round(max_wait_ms), char(string(key))));
+        end
     end
 end
