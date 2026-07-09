@@ -241,6 +241,90 @@ module Fiducia
 
     # --- internals ---
 
+    # Default lease when the caller does not supply ttl_ms to a blocking helper.
+    DEFAULT_TTL_MS = 60_000_i64
+
+    # Reserve a FIFO slot (wait:true) then poll lock_get until we hold +key+, or
+    # raise Fiducia::Timeout once the wait budget / max_retries is spent.
+    private def poll_lock(key : String, holder : String?, ttl_ms : Int64?,
+                          max_wait_ms : Int32, retry_interval_ms : Int32, max_retries : Int32?) : JSON::Any
+      hold = holder || gen_holder
+      out = nav_output(lock_acquire(key, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
+      return held_grant(hold, out) if acquired?(out)
+
+      deadline = Time.monotonic + max_wait_ms.milliseconds
+      attempts = 0
+      loop do
+        break if (mr = max_retries) && attempts >= mr
+        attempts += 1
+        remaining = deadline - Time.monotonic
+        break if remaining <= Time::Span.zero
+        sleep(remaining < retry_interval_ms.milliseconds ? remaining : retry_interval_ms.milliseconds)
+
+        lk = lock_get(key)["lock"]?
+        if lk && lk["holder"]?.try(&.as_s?) == hold && present?(lk["fencing_token"]?)
+          return held_grant(hold, lk)
+        end
+      end
+      raise Timeout.new([key], max_wait_ms.to_i64)
+    end
+
+    # Reserve a permit (wait:true) then poll semaphore_get for our holder entry.
+    private def poll_semaphore(key : String, limit : Int64, holder : String?, ttl_ms : Int64?,
+                               max_wait_ms : Int32, retry_interval_ms : Int32, max_retries : Int32?) : JSON::Any
+      hold = holder || gen_holder
+      out = nav_output(semaphore_acquire(key, limit, holder: hold, ttl_ms: ttl_ms || DEFAULT_TTL_MS, wait: true))
+      return held_grant(hold, out) if acquired?(out)
+
+      deadline = Time.monotonic + max_wait_ms.milliseconds
+      attempts = 0
+      loop do
+        break if (mr = max_retries) && attempts >= mr
+        attempts += 1
+        remaining = deadline - Time.monotonic
+        break if remaining <= Time::Span.zero
+        sleep(remaining < retry_interval_ms.milliseconds ? remaining : retry_interval_ms.milliseconds)
+
+        holders = semaphore_get(key)["semaphore"]?.try(&.["holders"]?).try(&.as_a?)
+        if holders
+          slot = holders.find { |h| h["holder"]?.try(&.as_s?) == hold && present?(h["fencing_token"]?) }
+          return held_grant(hold, slot) if slot
+        end
+      end
+      raise Timeout.new([key], max_wait_ms.to_i64)
+    end
+
+    # A stable, unique holder id when the caller supplies none.
+    private def gen_holder : String
+      "fdc-#{Random::Secure.hex(16)}"
+    end
+
+    # Navigate resp["result"]["output"] safely; missing links -> null JSON::Any.
+    private def nav_output(resp : JSON::Any) : JSON::Any
+      resp["result"]?.try(&.["output"]?) || JSON::Any.new(nil)
+    end
+
+    # True only when the acquire output reports the grant is held now.
+    private def acquired?(out : JSON::Any) : Bool
+      out["acquired"]?.try(&.as_bool?) == true
+    end
+
+    # A JSON value is "present" iff it exists and is not JSON null.
+    private def present?(value : JSON::Any?) : Bool
+      !(value.nil? || value.raw.nil?)
+    end
+
+    # Normalize a held grant (from acquire output or a lock/holder entry) into a
+    # stable {holder, fencing_token, lease_expires_ms} JSON::Any the caller can
+    # release. fencing_token stays a JSON::Any so 64-bit values keep full precision.
+    private def held_grant(holder : String, src : JSON::Any) : JSON::Any
+      JSON::Any.new({
+        "holder"           => JSON::Any.new(holder),
+        "fencing_token"    => src["fencing_token"]? || JSON::Any.new(nil),
+        "lease_expires_ms" => src["lease_expires_ms"]? || JSON::Any.new(nil),
+      } of String => JSON::Any)
+    end
+
     # Percent-encode a value for use in a query string (form encoding).
     private def enc_query(value : String) : String
       URI.encode_www_form(value)
