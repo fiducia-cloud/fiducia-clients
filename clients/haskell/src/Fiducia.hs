@@ -83,13 +83,16 @@ import Network.HTTP.Client
   , Request
   , RequestBody (RequestBodyLBS)
   , httpLbs
+  , managerResponseTimeout
   , method
   , newManager
   , parseRequest
+  , redirectCount
   , requestBody
   , requestHeaders
   , responseBody
   , responseStatus
+  , responseTimeoutMicro
   )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (Method, hContentType, statusCode)
