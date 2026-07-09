@@ -24,6 +24,7 @@
 -- pass your own cafile/capath, or verify = "none" to opt out (insecure).
 
 local http = require("socket.http")
+local socket = require("socket") -- socket.sleep / socket.gettime for the blocking poll loop
 local ltn12 = require("ltn12")
 local dkjson = require("dkjson")
 local https -- luasec (ssl.https); required lazily, only when an https URL is used
