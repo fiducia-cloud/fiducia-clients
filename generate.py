@@ -300,7 +300,7 @@ RUST_WASM_PRE = BANNER_C + '''
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{AbortSignal, Request, RequestInit, Response};
+use web_sys::{AbortSignal, Request, RequestInit, RequestRedirect, Response, ResponseType};
 
 // web-sys (0.3) doesn't bind the `AbortSignal.timeout` static, so bind the
 // runtime one directly (available in browsers 2022+, Node 17.3+, and Deno).
@@ -377,6 +377,10 @@ impl FiduciaClient {
     async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
         let opts = RequestInit::new();
         opts.set_method(method);
+        // Hard-reject redirects: never auto-follow a 3xx, which would replay this
+        // (possibly mutating) request and its auth/idempotency headers to an
+        // attacker-controlled Location, including an https->http downgrade.
+        opts.set_redirect(RequestRedirect::Manual);
         if let Some(ref b) = body {
             opts.set_body(&JsValue::from_str(b));
         }
@@ -410,6 +414,12 @@ impl FiduciaClient {
             .map_err(|e| err(0, e))?;
         let resp_value = JsFuture::from(promise).await.map_err(|e| err(0, e))?;
         let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
+        // With redirect:"manual", a redirected fetch yields an opaque-redirect
+        // response (status 0) in browsers/workers, or a readable 3xx in Node/Deno.
+        // Reject either rather than following it.
+        if resp.type_() == ResponseType::Opaqueredirect || (resp.status() >= 300 && resp.status() < 400) {
+            return Err(err(resp.status(), JsValue::from_str("fiducia: refusing to follow redirect")));
+        }
         let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
         let text = text_value.as_string().unwrap_or_default();
         // Parse JSON; if the body isn't JSON, surface the raw text (not null) so
