@@ -79,6 +79,19 @@ class RustWasmEmitter(unittest.TestCase):
         # A non-JSON response body must surface as raw text, not silently null.
         self.assertIn("unwrap_or_else(|_| JsValue::from_str(&text))", self.src)
 
+    def test_integer_bodies_are_bounds_checked(self):
+        # Integer body fields go through checked_int (fail loudly on
+        # NaN/Infinity/fractional/unsafe), not a silent `as i64` cast.
+        self.assertIn("fn checked_int(v: f64, field: &str) -> Result<i64, JsValue>", self.src)
+        self.assertIn('checked_int(v, "ttl_ms")?', self.src)
+        self.assertNotIn(" as i64)", self.src)  # no raw casts left in bodies
+
+    def test_metadata_values_must_be_strings(self):
+        # Record<string,string> contract: non-string metadata values are rejected.
+        fn = _method_body(self.src, "service_instances")
+        self.assertIn("must be a string", fn)
+        self.assertNotIn("unwrap_or_else", fn)  # no silent JSON.stringify coercion
+
     def test_default_headers_support(self):
         # Auth / idempotency-key etc. via case-insensitive default headers.
         self.assertIn("headers: Vec<(String, String)>", self.src)

@@ -35,6 +35,19 @@ fn err(status: u16, body: JsValue) -> JsValue {
     o.into()
 }
 
+// Integer fields cross JS as f64. Reject values a JSON integer can't faithfully
+// represent (NaN/Infinity, fractional, or beyond 2^53) so the client fails loudly
+// instead of silently coercing (`NaN as i64` == 0, `Infinity as i64` == i64::MAX).
+const MAX_SAFE_INT: f64 = 9_007_199_254_740_991.0;
+fn checked_int(v: f64, field: &str) -> Result<i64, JsValue> {
+    if !v.is_finite() || v.fract() != 0.0 || v.abs() > MAX_SAFE_INT {
+        return Err(err(0, JsValue::from_str(&format!(
+            "field `{field}` must be a safe integer, got {v}"
+        ))));
+    }
+    Ok(v as i64)
+}
+
 #[wasm_bindgen]
 pub struct FiduciaClient {
     base: String,
@@ -161,7 +174,7 @@ impl FiduciaClient {
             _body.insert("holder".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
@@ -180,7 +193,7 @@ impl FiduciaClient {
             _body.insert("holder".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
@@ -195,7 +208,7 @@ impl FiduciaClient {
         let path = String::from("/v1/locks/release");
         let mut _body = serde_json::Map::new();
         _body.insert("holder".to_string(), serde_json::Value::String(holder));
-        _body.insert("fencing_token".to_string(), serde_json::json!(fencing_token as i64));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
     }
@@ -219,12 +232,12 @@ impl FiduciaClient {
         let path = String::from("/v1/semaphores/acquire");
         let mut _body = serde_json::Map::new();
         _body.insert("key".to_string(), serde_json::Value::String(key));
-        _body.insert("limit".to_string(), serde_json::json!(limit as i64));
+        _body.insert("limit".to_string(), serde_json::json!(checked_int(limit, "limit")?));
         if let Some(v) = holder {
             _body.insert("holder".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
@@ -240,7 +253,7 @@ impl FiduciaClient {
         let mut _body = serde_json::Map::new();
         _body.insert("key".to_string(), serde_json::Value::String(key));
         _body.insert("holder".to_string(), serde_json::Value::String(holder));
-        _body.insert("fencing_token".to_string(), serde_json::json!(fencing_token as i64));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
     }
@@ -268,7 +281,7 @@ impl FiduciaClient {
             _body.insert("owner".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = ttl {
             _body.insert("ttl".to_string(), serde_json::json!(v));
@@ -287,7 +300,7 @@ impl FiduciaClient {
         let mut _body = serde_json::Map::new();
         _body.insert("key".to_string(), serde_json::Value::String(key));
         _body.insert("owner".to_string(), serde_json::Value::String(owner));
-        _body.insert("fencing_token".to_string(), serde_json::json!(fencing_token as i64));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
         if !result.is_null() && !result.is_undefined() {
             _body.insert("result".to_string(), serde_wasm_bindgen::from_value(result).map_err(|e| err(0, e.into()))?);
         }
@@ -321,10 +334,10 @@ impl FiduciaClient {
         let mut _body = serde_json::Map::new();
         _body.insert("value".to_string(), serde_json::Value::String(value));
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = prev_revision {
-            _body.insert("prev_revision".to_string(), serde_json::json!(v as i64));
+            _body.insert("prev_revision".to_string(), serde_json::json!(checked_int(v, "prev_revision")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("PUT", path, Some(_payload)).await
@@ -356,7 +369,7 @@ impl FiduciaClient {
         let path = format!("/v1/elections/{}/campaign", enc(&name));
         let mut _body = serde_json::Map::new();
         _body.insert("candidate".to_string(), serde_json::Value::String(candidate));
-        _body.insert("ttl_ms".to_string(), serde_json::json!(ttl_ms as i64));
+        _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(ttl_ms, "ttl_ms")?));
         if !metadata.is_null() && !metadata.is_undefined() {
             _body.insert("metadata".to_string(), serde_wasm_bindgen::from_value(metadata).map_err(|e| err(0, e.into()))?);
         }
@@ -370,7 +383,7 @@ impl FiduciaClient {
         let path = format!("/v1/elections/{}/renew", enc(&name));
         let mut _body = serde_json::Map::new();
         _body.insert("candidate".to_string(), serde_json::Value::String(candidate));
-        _body.insert("fencing_token".to_string(), serde_json::json!(fencing_token as i64));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
     }
@@ -381,7 +394,7 @@ impl FiduciaClient {
         let path = format!("/v1/elections/{}/resign", enc(&name));
         let mut _body = serde_json::Map::new();
         _body.insert("candidate".to_string(), serde_json::Value::String(candidate));
-        _body.insert("fencing_token".to_string(), serde_json::json!(fencing_token as i64));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
     }
@@ -397,7 +410,10 @@ impl FiduciaClient {
                 let _k = _pair.get(0).as_string().unwrap_or_default();
                 if _k.is_empty() { continue; }
                 let _v = _pair.get(1);
-                let _vs = _v.as_string().unwrap_or_else(|| js_sys::JSON::stringify(&_v).ok().and_then(|s| s.as_string()).unwrap_or_default());
+                let _vs = match _v.as_string() {
+                    Some(_s) => _s,
+                    None => return Err(err(0, JsValue::from_str(&format!("metadata.{_k} must be a string")))),
+                };
                 _q.push(format!("metadata.{}={}", enc(&_k), enc(&_vs)));
             }
         }
@@ -414,7 +430,7 @@ impl FiduciaClient {
         let path = format!("/v1/services/{}/instances/{}", enc(&service), enc(&instance_id));
         let mut _body = serde_json::Map::new();
         _body.insert("address".to_string(), serde_json::Value::String(address));
-        _body.insert("ttl_ms".to_string(), serde_json::json!(ttl_ms as i64));
+        _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(ttl_ms, "ttl_ms")?));
         if !metadata.is_null() && !metadata.is_undefined() {
             _body.insert("metadata".to_string(), serde_wasm_bindgen::from_value(metadata).map_err(|e| err(0, e.into()))?);
         }
@@ -428,7 +444,7 @@ impl FiduciaClient {
         let path = format!("/v1/services/{}/instances/{}/heartbeat", enc(&service), enc(&instance_id));
         let mut _body = serde_json::Map::new();
         if let Some(v) = ttl_ms {
-            _body.insert("ttl_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
@@ -454,13 +470,13 @@ impl FiduciaClient {
         let path = format!("/v1/rate-limit/{}/{}/check", enc(&tenant), enc(&key));
         let mut _body = serde_json::Map::new();
         _body.insert("algorithm".to_string(), serde_json::Value::String(algorithm));
-        _body.insert("limit".to_string(), serde_json::json!(limit as i64));
-        _body.insert("window_ms".to_string(), serde_json::json!(window_ms as i64));
+        _body.insert("limit".to_string(), serde_json::json!(checked_int(limit, "limit")?));
+        _body.insert("window_ms".to_string(), serde_json::json!(checked_int(window_ms, "window_ms")?));
         if let Some(v) = refill_per_second {
             _body.insert("refill_per_second".to_string(), serde_json::json!(v));
         }
         if let Some(v) = cost {
-            _body.insert("cost".to_string(), serde_json::json!(v as i64));
+            _body.insert("cost".to_string(), serde_json::json!(checked_int(v, "cost")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
@@ -483,13 +499,13 @@ impl FiduciaClient {
             _body.insert("cron".to_string(), serde_json::json!(v));
         }
         if let Some(v) = one_shot_at_ms {
-            _body.insert("one_shot_at_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("one_shot_at_ms".to_string(), serde_json::json!(checked_int(v, "one_shot_at_ms")?));
         }
         if let Some(v) = delivery {
             _body.insert("delivery".to_string(), serde_json::json!(v));
         }
         if let Some(v) = max_retries {
-            _body.insert("max_retries".to_string(), serde_json::json!(v as i64));
+            _body.insert("max_retries".to_string(), serde_json::json!(checked_int(v, "max_retries")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("PUT", path, Some(_payload)).await
@@ -502,7 +518,7 @@ impl FiduciaClient {
         let mut _body = serde_json::Map::new();
         _body.insert("fire_id".to_string(), serde_json::Value::String(fire_id));
         if let Some(v) = fired_at_ms {
-            _body.insert("fired_at_ms".to_string(), serde_json::json!(v as i64));
+            _body.insert("fired_at_ms".to_string(), serde_json::json!(checked_int(v, "fired_at_ms")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
