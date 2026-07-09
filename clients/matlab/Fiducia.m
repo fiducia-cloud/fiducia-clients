@@ -83,25 +83,40 @@ classdef Fiducia < handle
             out = obj.lockAcquire(key, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, 'wait', false);
         end
 
-        function out = mustLock(obj, key, opts)
+        function grant = mustLock(obj, key, opts)
+            % mustLock  Blocking acquire. The server does NOT hold the connection
+            % on wait=true (it reserves a FIFO slot and returns immediately), so
+            % this acquires then POLLS lockGet until this holder holds the lock,
+            % or raises 'fiducia:lockTimeout' after max_wait_ms. Returns a held
+            % grant struct (key, holder, fencing_token, lease_expires_ms) that you
+            % can pass straight to lockRelease.
             arguments
                 obj
                 key
                 opts.holder = []
                 opts.ttl_ms = []
+                opts.max_wait_ms (1,1) double = 30000
+                opts.retry_interval_ms (1,1) double = 250
+                opts.max_retries = []
             end
-            out = obj.lockAcquire(key, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, 'wait', true);
+            grant = obj.acquireLockBlocking(key, opts.holder, opts.ttl_ms, ...
+                opts.max_wait_ms, opts.retry_interval_ms, opts.max_retries);
         end
 
-        function out = lock(obj, key, opts)
-            % lock  Alias for mustLock (blocking acquire, wait=true).
+        function grant = lock(obj, key, opts)
+            % lock  Alias for mustLock (blocking acquire that polls until held).
             arguments
                 obj
                 key
                 opts.holder = []
                 opts.ttl_ms = []
+                opts.max_wait_ms (1,1) double = 30000
+                opts.retry_interval_ms (1,1) double = 250
+                opts.max_retries = []
             end
-            out = obj.mustLock(key, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms);
+            grant = obj.mustLock(key, 'holder', opts.holder, 'ttl_ms', opts.ttl_ms, ...
+                'max_wait_ms', opts.max_wait_ms, 'retry_interval_ms', opts.retry_interval_ms, ...
+                'max_retries', opts.max_retries);
         end
 
         function out = lockRelease(obj, key, holder, fencing_token)
