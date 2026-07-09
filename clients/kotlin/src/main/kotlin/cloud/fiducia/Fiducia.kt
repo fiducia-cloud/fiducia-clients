@@ -447,6 +447,28 @@ class FiduciaClient(baseUrl: String) {
     private fun retryable(e: RuntimeException): Boolean =
         if (e is FiduciaException) e.status in RETRYABLE_STATUS else true
 
+    // --- blocking-acquire poll helpers -----------------------------------------
+
+    private fun genHolder(): String = "fdc-" + UUID.randomUUID()
+
+    // Safe navigation: the child element at [name], or null if [e] is not a JSON object.
+    private fun field(e: JsonElement?, name: String): JsonElement? = (e as? JsonObject)?.get(name)
+
+    private fun isTrue(e: JsonElement?): Boolean = (e as? JsonPrimitive)?.content == "true"
+
+    private fun holderOf(e: JsonElement?): String? = (field(e, "holder") as? JsonPrimitive)?.content
+
+    // A normalized held grant. fencing_token / lease_expires_ms are copied as their original
+    // JSON nodes so 64-bit tokens keep full precision (never coerced through a double).
+    private fun heldGrant(key: String, holder: String, fencingToken: JsonElement?, leaseExpiresMs: JsonElement?): JsonObject =
+        buildJsonObject {
+            put("acquired", true)
+            put("holder", holder)
+            put("key", key)
+            fencingToken?.let { if (it !is JsonNull) put("fencing_token", it) }
+            leaseExpiresMs?.let { if (it !is JsonNull) put("lease_expires_ms", it) }
+        }
+
     // Percent-encode for a path segment or query value; URLEncoder emits '+' for
     // spaces, so normalize to %20 which is valid in both positions.
     private fun enc(s: String): String =
