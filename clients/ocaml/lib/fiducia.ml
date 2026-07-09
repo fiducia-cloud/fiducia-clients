@@ -38,8 +38,8 @@ let create ?(timeout = 30.) base_url =
      request time; defaults to 30s and is caller-overridable — pass [~timeout:0.]
      to disable it (libcurl's own default is no timeout).
      NB redirect-following is disabled per-request via [no_follow] below, NOT
-     here: ezcurl applies its Config (which defaults FOLLOWLOCATION *on*) after
-     set_opts, so a followlocation set here would just be overridden. *)
+     here: ezcurl applies its Config (whose follow_location defaults to true)
+     after set_opts, so a followlocation set here would just be overridden. *)
   let set_opts (h : Curl.t) =
     if timeout > 0. then begin
       let ms = int_of_float (timeout *. 1000.) in
