@@ -32,7 +32,7 @@ Once the folder is on your path, `Fiducia` is available like any built-in class.
 ```matlab
 c = Fiducia('https://api.fiducia.cloud');
 
-% Optional: cap connect + response time (seconds). Default: no extra timeout.
+% Connect + response timeout in seconds. Default 30; set [] for the matlab.net.http default.
 c.RequestTimeout = 10;
 
 % Health / status
