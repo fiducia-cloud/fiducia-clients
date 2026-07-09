@@ -105,6 +105,8 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (Method, hContentType, statusCode)
 import Network.URI (escapeURIString, isUnreserved)
+import Numeric (showHex)
+import System.IO (IOMode (ReadMode), withBinaryFile)
 
 -- | A Fiducia HTTP client: a shared connection 'Manager' plus the base URL
 -- (trailing slashes trimmed). Build one with 'newClient'.
