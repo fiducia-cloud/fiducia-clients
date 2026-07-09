@@ -298,7 +298,7 @@ RUST_WASM_PRE = BANNER_C + '''
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, Response};
+use web_sys::{AbortSignal, Request, RequestInit, Response};
 
 /// URL-encode a path/query segment via the JS `encodeURIComponent`.
 fn enc(s: &str) -> String {
