@@ -58,4 +58,6 @@ let () =
      | Some (`Intlit s) -> pf "OK   %-22s -> Intlit %s\n" "bigint_precision" s
      | Some other -> pf "FAIL %-22s -> %s\n" "bigint_precision" (jstr other)
      | None -> pf "WARN no big field\n")
-   | _ -> pf "WARN health not assoc\n")
+   | _ -> pf "WARN health not assoc\n");
+  Fiducia.close c;
+  pf "OK   %-22s -> handle freed\n" "close"
