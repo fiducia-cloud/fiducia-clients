@@ -2,6 +2,7 @@
     {vsn, "3.1.0"},
     {applications, [gleam_stdlib]},
     {description, "Work with JSON in Gleam"},
-    {modules, []},
+    {modules, [gleam@json,
+               gleam_json_ffi]},
     {registered, []}
 ]}.

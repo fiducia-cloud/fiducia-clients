@@ -31,7 +31,7 @@
 
 -opaque client() :: {client, binary()}.
 
--file("src/fiducia.gleam", 683).
+-file("src/fiducia.gleam", 687).
 -spec drop_trailing_slashes(binary()) -> binary().
 drop_trailing_slashes(Value) ->
     case gleam_stdlib:string_ends_with(Value, <<"/"/utf8>>) of
@@ -52,7 +52,7 @@ drop_trailing_slashes(Value) ->
 new(Base_url) ->
     {client, drop_trailing_slashes(Base_url)}.
 
--file("src/fiducia.gleam", 672).
+-file("src/fiducia.gleam", 676).
 -spec string_dynamic(binary()) -> gleam@dynamic:dynamic_().
 string_dynamic(Raw) ->
     Value@1 = case gleam@json:parse(
@@ -66,16 +66,16 @@ string_dynamic(Raw) ->
                         file => <<?FILEPATH/utf8>>,
                         module => <<"fiducia"/utf8>>,
                         function => <<"string_dynamic"/utf8>>,
-                        line => 673,
+                        line => 677,
                         value => _assert_fail,
-                        start => 18346,
-                        'end' => 18433,
-                        pattern_start => 18357,
-                        pattern_end => 18366})
+                        start => 18359,
+                        'end' => 18446,
+                        pattern_start => 18370,
+                        pattern_end => 18379})
     end,
     Value@1.
 
--file("src/fiducia.gleam", 667).
+-file("src/fiducia.gleam", 671).
 -spec null_dynamic() -> gleam@dynamic:dynamic_().
 null_dynamic() ->
     Value@1 = case gleam@json:parse(
@@ -89,16 +89,16 @@ null_dynamic() ->
                         file => <<?FILEPATH/utf8>>,
                         module => <<"fiducia"/utf8>>,
                         function => <<"null_dynamic"/utf8>>,
-                        line => 668,
+                        line => 672,
                         value => _assert_fail,
-                        start => 18231,
-                        'end' => 18288,
-                        pattern_start => 18242,
-                        pattern_end => 18251})
+                        start => 18244,
+                        'end' => 18301,
+                        pattern_start => 18255,
+                        pattern_end => 18264})
     end,
     Value@1.
 
--file("src/fiducia.gleam", 656).
+-file("src/fiducia.gleam", 660).
 ?DOC(
     " Parse a response body into a `Dynamic`. Empty body → JSON null; non-JSON is\n"
     " wrapped as a JSON string so callers always get a value.\n"
@@ -122,7 +122,7 @@ decode_body(Body) ->
             end
     end.
 
--file("src/fiducia.gleam", 641).
+-file("src/fiducia.gleam", 645).
 -spec apply_body(
     gleam@http@request:request(binary()),
     gleam@option:option(gleam@json:json())
@@ -142,7 +142,7 @@ apply_body(Req, Body) ->
             gleam@http@request:set_body(_pipe@1, gleam@json:to_string(Payload))
     end.
 
--file("src/fiducia.gleam", 612).
+-file("src/fiducia.gleam", 615).
 -spec send(
     client(),
     gleam@http:method(),
@@ -197,7 +197,7 @@ health(Client) ->
 status(Client) ->
     send(Client, get, <<"/v1/status"/utf8>>, none).
 
--file("src/fiducia.gleam", 679).
+-file("src/fiducia.gleam", 683).
 ?DOC(" Percent-encode a path segment or query value.\n").
 -spec enc(binary()) -> binary().
 enc(Value) ->
@@ -210,7 +210,7 @@ enc(Value) ->
 lock_get(Client, Key) ->
     send(Client, get, <<"/v1/locks?key="/utf8, (enc(Key))/binary>>, none).
 
--file("src/fiducia.gleam", 690).
+-file("src/fiducia.gleam", 694).
 -spec opt(binary(), gleam@option:option(gleam@json:json())) -> list({binary(),
     gleam@json:json()}).
 opt(Name, Value) ->
@@ -222,13 +222,13 @@ opt(Name, Value) ->
             []
     end.
 
--file("src/fiducia.gleam", 701).
+-file("src/fiducia.gleam", 705).
 -spec opt_int(binary(), gleam@option:option(integer())) -> list({binary(),
     gleam@json:json()}).
 opt_int(Name, Value) ->
     opt(Name, gleam@option:map(Value, fun gleam@json:int/1)).
 
--file("src/fiducia.gleam", 697).
+-file("src/fiducia.gleam", 701).
 -spec opt_string(binary(), gleam@option:option(binary())) -> list({binary(),
     gleam@json:json()}).
 opt_string(Name, Value) ->
@@ -571,7 +571,7 @@ kv_delete(Client, Key) ->
 kv_list(Client, Prefix) ->
     send(Client, get, <<"/v1/kv?prefix="/utf8, (enc(Prefix))/binary>>, none).
 
--file("src/fiducia.gleam", 376).
+-file("src/fiducia.gleam", 379).
 ?DOC(" `GET /v1/rate-limit/<tenant>/<key>` — current limiter state.\n").
 -spec rate_limit_get(client(), binary(), binary()) -> {ok,
         gleam@dynamic:dynamic_()} |
@@ -585,13 +585,13 @@ rate_limit_get(Client, Tenant, Key) ->
         none
     ).
 
--file("src/fiducia.gleam", 705).
+-file("src/fiducia.gleam", 709).
 -spec opt_float(binary(), gleam@option:option(float())) -> list({binary(),
     gleam@json:json()}).
 opt_float(Name, Value) ->
     opt(Name, gleam@option:map(Value, fun gleam@json:float/1)).
 
--file("src/fiducia.gleam", 386).
+-file("src/fiducia.gleam", 389).
 ?DOC(
     " `POST /v1/rate-limit/<tenant>/<key>/check` — atomic check-and-decrement.\n"
     " `algorithm` is `token_bucket` or `sliding_window`.\n"
@@ -635,14 +635,14 @@ rate_limit_check(
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 419).
+-file("src/fiducia.gleam", 422).
 ?DOC(" `GET /v1/cron/schedules/<name>` — read a schedule definition.\n").
 -spec schedule_get(client(), binary()) -> {ok, gleam@dynamic:dynamic_()} |
     {error, fiducia_error()}.
 schedule_get(Client, Name) ->
     send(Client, get, <<"/v1/cron/schedules/"/utf8, (enc(Name))/binary>>, none).
 
--file("src/fiducia.gleam", 429).
+-file("src/fiducia.gleam", 432).
 ?DOC(
     " `PUT /v1/cron/schedules/<name>` — create/update a schedule. `target` is\n"
     " arbitrary JSON, e.g. `{kind: \"webhook\", url: \"…\"}`. Provide exactly one of\n"
@@ -682,7 +682,7 @@ schedule_upsert(
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 453).
+-file("src/fiducia.gleam", 456).
 ?DOC(
     " `POST /v1/cron/schedules/<name>/runs` — record a fire; duplicate `fire_id` is\n"
     " deduped (exactly-once).\n"
@@ -708,7 +708,7 @@ schedule_record_run(Client, Name, Fire_id, Fired_at_ms) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 470).
+-file("src/fiducia.gleam", 473).
 ?DOC(" `GET /v1/cron/schedules/<name>/history` — recent run history.\n").
 -spec schedule_history(client(), binary()) -> {ok, gleam@dynamic:dynamic_()} |
     {error, fiducia_error()}.
@@ -721,14 +721,14 @@ schedule_history(Client, Name) ->
         none
     ).
 
--file("src/fiducia.gleam", 480).
+-file("src/fiducia.gleam", 483).
 ?DOC(" `GET /v1/elections/<name>` — observe the current holder.\n").
 -spec election_get(client(), binary()) -> {ok, gleam@dynamic:dynamic_()} |
     {error, fiducia_error()}.
 election_get(Client, Name) ->
     send(Client, get, <<"/v1/elections/"/utf8, (enc(Name))/binary>>, none).
 
--file("src/fiducia.gleam", 489).
+-file("src/fiducia.gleam", 492).
 ?DOC(
     " `POST /v1/elections/<name>/campaign` — campaign for leadership. `metadata`\n"
     " (arbitrary JSON) is published on the leadership record.\n"
@@ -756,7 +756,7 @@ election_campaign(Client, Name, Candidate, Ttl_ms, Metadata) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 507).
+-file("src/fiducia.gleam", 510).
 ?DOC(" `POST /v1/elections/<name>/renew` — extend the lease with the held token.\n").
 -spec election_renew(client(), binary(), binary(), integer()) -> {ok,
         gleam@dynamic:dynamic_()} |
@@ -773,7 +773,7 @@ election_renew(Client, Name, Candidate, Fencing_token) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 522).
+-file("src/fiducia.gleam", 525).
 ?DOC(" `POST /v1/elections/<name>/resign` — step down with the held token.\n").
 -spec election_resign(client(), binary(), binary(), integer()) -> {ok,
         gleam@dynamic:dynamic_()} |
@@ -790,14 +790,14 @@ election_resign(Client, Name, Candidate, Fencing_token) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 539).
+-file("src/fiducia.gleam", 542).
 ?DOC(" `GET /v1/services/<service>` — list live instances of a service.\n").
 -spec service_instances(client(), binary()) -> {ok, gleam@dynamic:dynamic_()} |
     {error, fiducia_error()}.
 service_instances(Client, Service) ->
     send(Client, get, <<"/v1/services/"/utf8, (enc(Service))/binary>>, none).
 
--file("src/fiducia.gleam", 548).
+-file("src/fiducia.gleam", 551).
 ?DOC(
     " `PUT /v1/services/<service>/instances/<instance_id>` — register/refresh an\n"
     " instance with a TTL lease and optional `metadata` (arbitrary JSON).\n"
@@ -827,7 +827,7 @@ service_register(Client, Service, Instance_id, Address, Ttl_ms, Metadata) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 572).
+-file("src/fiducia.gleam", 575).
 ?DOC(" `POST /v1/services/<service>/instances/<instance_id>/heartbeat` — renew a lease.\n").
 -spec service_heartbeat(
     client(),
@@ -847,7 +847,7 @@ service_heartbeat(Client, Service, Instance_id, Ttl_ms) ->
         {some, Body}
     ).
 
--file("src/fiducia.gleam", 592).
+-file("src/fiducia.gleam", 595).
 ?DOC(" `DELETE /v1/services/<service>/instances/<instance_id>` — remove an instance.\n").
 -spec service_deregister(client(), binary(), binary()) -> {ok,
         gleam@dynamic:dynamic_()} |
@@ -862,7 +862,7 @@ service_deregister(Client, Service, Instance_id) ->
         none
     ).
 
--file("src/fiducia.gleam", 606).
+-file("src/fiducia.gleam", 609).
 ?DOC(" `GET /v1/services` — list all registered services.\n").
 -spec service_list(client()) -> {ok, gleam@dynamic:dynamic_()} |
     {error, fiducia_error()}.

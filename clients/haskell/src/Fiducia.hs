@@ -386,7 +386,7 @@ trimTrailingSlashes = reverse . dropWhile (== '/') . reverse
 request :: Client -> Method -> String -> Maybe Value -> IO Value
 request c httpMethod path mbody = do
   initReq <- parseRequest (clientBase c ++ path)
-  resp <- httpLbs (applyBody mbody initReq {method = httpMethod}) (clientManager c)
+  resp <- httpLbs (applyBody mbody (initReq {method = httpMethod})) (clientManager c)
   let code = statusCode (responseStatus resp)
       raw = responseBody resp
       val = if LBS.null raw then Null else fromMaybe Null (decode raw)
