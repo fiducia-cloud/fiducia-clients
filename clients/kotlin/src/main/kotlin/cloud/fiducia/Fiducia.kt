@@ -92,11 +92,52 @@ class FiduciaClient(baseUrl: String) {
     fun tryLock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
         lockAcquire(key, holder, ttlMs, wait = false)
 
-    fun mustLock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        lockAcquire(key, holder, ttlMs, wait = true)
+    /**
+     * Blocks until the lock is held, then returns the held grant; throws [LockTimeoutException]
+     * if [maxWaitMs] elapses first. The server does NOT hold the connection on `wait:true` (it
+     * reserves a FIFO slot and returns a queued ticket immediately), so this acquires with
+     * `wait:true` and then POLLS [lockGet] until this [holder] owns the lock. Returns a JSON
+     * object `{acquired:true, holder, key, fencing_token, lease_expires_ms}` — pass `holder` +
+     * `fencing_token` to [lockRelease]. [holder] defaults to a generated id; [ttlMs] defaults
+     * to 60000; [maxWaitMs] defaults to [lockRequestTimeout] (if set) else 30000.
+     */
+    fun mustLock(
+        key: String,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement {
+        val who = holder ?: genHolder()
+        val out = field(field(lockAcquire(key, who, ttlMs ?: DEFAULT_TTL_MS, wait = true), "result"), "output")
+        if (isTrue(field(out, "acquired"))) {
+            return heldGrant(key, who, field(out, "fencing_token"), field(out, "lease_expires_ms"))
+        }
+        val deadlineNanos = System.nanoTime() + maxWaitMs * NANOS_PER_MS
+        var attempts = 0
+        while (maxRetries == null || attempts < maxRetries) {
+            attempts++
+            val remainingMs = (deadlineNanos - System.nanoTime()) / NANOS_PER_MS
+            if (remainingMs <= 0) break
+            Thread.sleep(minOf(retryIntervalMs, remainingMs))
+            val lk = field(lockGet(key), "lock")
+            val ft = field(lk, "fencing_token")
+            if (holderOf(lk) == who && ft != null && ft !is JsonNull) {
+                return heldGrant(key, who, ft, field(lk, "lease_expires_ms"))
+            }
+        }
+        throw LockTimeoutException(listOf(key), maxWaitMs)
+    }
 
-    fun lock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        mustLock(key, holder, ttlMs)
+    fun lock(
+        key: String,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement = mustLock(key, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
     // `key` is accepted for symmetry with acquire; the release wire body only needs the token.
     fun lockRelease(key: String, holder: String, fencingToken: Long): JsonElement =
