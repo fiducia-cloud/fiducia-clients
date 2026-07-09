@@ -127,6 +127,60 @@ case "$client" in
   shell)
     run_root ': "${PACKAGE_VERSION:?set PACKAGE_VERSION}"; test -z "$(git status --porcelain)"; git tag "clients/shell/v${PACKAGE_VERSION}"; git push origin "clients/shell/v${PACKAGE_VERSION}"; gh release create "clients/shell/v${PACKAGE_VERSION}" clients/shell/fiducia.sh --title "fiducia shell ${PACKAGE_VERSION}" --notes "Shell client release for fiducia.cloud."'
     ;;
+  gleam)
+    run 'gleam publish --yes'
+    ;;
+  fsharp)
+    run 'tmp="$(mktemp -d "${TMPDIR:-/tmp}/fiducia-client-fsharp.XXXXXX")"; dotnet pack -c Release --output "$tmp"; dotnet nuget push "$tmp"/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "${NUGET_API_KEY:?set NUGET_API_KEY}"'
+    ;;
+  ocaml)
+    run 'opam lint ./fiducia-client.opam && dune build && opam publish'
+    ;;
+  clojure)
+    run 'clojure -T:build deploy'
+    ;;
+  scala)
+    run 'sbt +publish'
+    ;;
+  kotlin)
+    run 'gradle publish'
+    ;;
+  erlang)
+    run 'rebar3 hex publish --yes'
+    ;;
+  haskell)
+    run 'tmp="$(mktemp -d "${TMPDIR:-/tmp}/fiducia-client-haskell.XXXXXX")"; cabal check; cabal sdist --output-dir "$tmp"; cabal upload --publish "$tmp"/*.tar.gz'
+    ;;
+  nim)
+    run 'nimble publish'
+    ;;
+  lua)
+    run ': "${PACKAGE_VERSION:?set PACKAGE_VERSION}"; luarocks upload "fiducia-client-${PACKAGE_VERSION}-1.rockspec" --api-key="${LUAROCKS_API_KEY:?set LUAROCKS_API_KEY}"'
+    ;;
+  r)
+    run 'R CMD build .'
+    ;;
+  cpp)
+    gh_release cpp clients/cpp/fiducia.hpp
+    ;;
+  c)
+    gh_release c clients/c/fiducia.h clients/c/fiducia.c
+    ;;
+  zig)
+    gh_release zig clients/zig/build.zig.zon clients/zig/build.zig
+    ;;
+  swift)
+    gh_release swift clients/swift/Package.swift
+    ;;
+  crystal)
+    gh_release crystal clients/crystal/shard.yml
+    ;;
+  julia)
+    gh_release julia clients/julia/Project.toml
+    ;;
+  matlab)
+    gh_release matlab clients/matlab/Fiducia.m
+    ;;
   *)
     printf 'no publish command configured for client: %s\n' "$client" >&2
     exit 2
