@@ -138,14 +138,26 @@ pub fn try_lock(
   lock_acquire(client, key, holder, ttl_ms, False)
 }
 
-/// `lock_acquire` with `wait=true`: reserve a FIFO slot.
+/// Blocking acquire: acquire `key` now, or reserve a FIFO slot and POLL
+/// `lock_get` until we hold it or the `retry` budget elapses. Unlike the raw
+/// `lock_acquire(wait=true)` (which returns immediately with a queued ticket),
+/// this returns a held `Grant` or `Error(Timeout(..))`. `holder` defaults to a
+/// generated id and `ttl_ms` to 60s when `None`; use `default_retry()` for the
+/// standard 30s/250ms budget.
 pub fn must_lock(
   client: Client,
   key: String,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  lock_acquire(client, key, holder, ttl_ms, True)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  let hold = resolve_holder(holder)
+  let ttl = Some(option.unwrap(ttl_ms, 60_000))
+  use resp <- result.try(lock_acquire(client, key, Some(hold), ttl, True))
+  case output_grant(resp, key, hold) {
+    Some(grant) -> Ok(grant)
+    None -> poll_lock(client, key, hold, now_ms() + retry.max_wait_ms, retry, 0)
+  }
 }
 
 /// Alias of `must_lock`.
@@ -154,8 +166,9 @@ pub fn lock(
   key: String,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  must_lock(client, key, holder, ttl_ms)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  must_lock(client, key, holder, ttl_ms, retry)
 }
 
 /// `POST /v1/locks/release` — release the whole grant by its fencing token.
