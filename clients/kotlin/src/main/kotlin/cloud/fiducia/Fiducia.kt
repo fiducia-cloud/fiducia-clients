@@ -476,5 +476,9 @@ class FiduciaClient(baseUrl: String) {
 
     private companion object {
         private val RETRYABLE_STATUS = setOf(408, 425, 429, 500, 502, 503, 504)
+        private const val DEFAULT_TTL_MS = 60_000L        // lease TTL when caller gives none
+        private const val DEFAULT_MAX_WAIT_MS = 30_000L   // total blocking-poll budget
+        private const val DEFAULT_RETRY_INTERVAL_MS = 250L
+        private const val NANOS_PER_MS = 1_000_000L
     }
 }
