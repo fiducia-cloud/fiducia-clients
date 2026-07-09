@@ -294,11 +294,20 @@ RUST_WASM_PRE = BANNER_C + '''
 //!
 //! Every operation is an `async` method (exported to JS as camelCase) that
 //! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
-//! non-2xx response or transport failure.
+//! non-2xx response or transport failure. Pass an optional `timeout_ms` to the
+//! constructor (or `setTimeoutMs`) to bound each request.
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, Response};
+use web_sys::{AbortSignal, Request, RequestInit, Response};
+
+// web-sys (0.3) doesn't bind the `AbortSignal.timeout` static, so bind the
+// runtime one directly (available in browsers 2022+, Node 17.3+, and Deno).
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = AbortSignal, js_name = timeout)]
+    fn abort_signal_timeout(ms: f64) -> AbortSignal;
+}
 
 /// URL-encode a path/query segment via the JS `encodeURIComponent`.
 fn enc(s: &str) -> String {
@@ -316,13 +325,22 @@ fn err(status: u16, body: JsValue) -> JsValue {
 #[wasm_bindgen]
 pub struct FiduciaClient {
     base: String,
+    timeout_ms: Option<f64>,
 }
 
 #[wasm_bindgen]
 impl FiduciaClient {
+    /// `timeout_ms` is optional (pass `undefined` for none); when set, each
+    /// request aborts after that many milliseconds via `AbortSignal.timeout`.
     #[wasm_bindgen(constructor)]
-    pub fn new(base_url: &str) -> FiduciaClient {
-        FiduciaClient { base: base_url.trim_end_matches('/').to_string() }
+    pub fn new(base_url: &str, timeout_ms: Option<f64>) -> FiduciaClient {
+        FiduciaClient { base: base_url.trim_end_matches('/').to_string(), timeout_ms }
+    }
+
+    /// Set (or clear, with `undefined`) the per-request timeout in milliseconds.
+    #[wasm_bindgen(js_name = setTimeoutMs)]
+    pub fn set_timeout_ms(&mut self, timeout_ms: Option<f64>) {
+        self.timeout_ms = timeout_ms;
     }
 
     async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
@@ -330,6 +348,10 @@ impl FiduciaClient {
         opts.set_method(method);
         if let Some(ref b) = body {
             opts.set_body(&JsValue::from_str(b));
+        }
+        // Bound the request with AbortSignal.timeout (browser/worker/Node18+/Deno).
+        if let Some(ms) = self.timeout_ms {
+            opts.set_signal(Some(&abort_signal_timeout(ms)));
         }
         let url = format!("{}{}", self.base, path);
         let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
@@ -353,10 +375,12 @@ impl FiduciaClient {
         let resp: Response = resp_value.dyn_into().map_err(|e| err(0, e))?;
         let text_value = JsFuture::from(resp.text().map_err(|e| err(0, e))?).await.map_err(|e| err(0, e))?;
         let text = text_value.as_string().unwrap_or_default();
+        // Parse JSON; if the body isn't JSON, surface the raw text (not null) so
+        // non-JSON error pages (proxies, 502s) remain diagnosable.
         let parsed = if text.is_empty() {
             JsValue::NULL
         } else {
-            js_sys::JSON::parse(&text).unwrap_or(JsValue::NULL)
+            js_sys::JSON::parse(&text).unwrap_or_else(|_| JsValue::from_str(&text))
         };
         if !resp.ok() {
             return Err(err(resp.status(), parsed));

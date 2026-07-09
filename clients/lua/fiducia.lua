@@ -16,9 +16,12 @@
 -- Deps (LuaRocks): luasocket, luasec, dkjson. Optional fields are omitted from
 -- request bodies when nil (CAS-friendly); booleans such as wait are always sent.
 --
--- TLS: luasec's ssl.https convenience module does NOT verify the server
--- certificate by default. Pass Fiducia.new(url, { tls = { verify = "peer",
--- cafile = "/path/ca.pem" } }) to enable certificate verification.
+-- TLS (fail-closed): for https:// the client verifies the server certificate by
+-- default (verify = "peer"). A CA bundle is auto-detected at request time from
+-- $SSL_CERT_FILE, $SSL_CERT_DIR, then the common OS locations. If verification is
+-- on but no CA source is found the request FAILS with a clear error rather than
+-- silently connecting insecurely. Override via Fiducia.new(url, { tls = ... }):
+-- pass your own cafile/capath, or verify = "none" to opt out (insecure).
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")
@@ -53,16 +56,71 @@ local function transport_for(url)
   return http, false
 end
 
+-- True if a path exists and is openable for reading (works for files and, on
+-- Linux/macOS, directories -- fopen() succeeds on a directory there).
+local function path_exists(p)
+  if not p or p == "" then return false end
+  local f = io.open(p, "r")
+  if f then f:close(); return true end
+  return false
+end
+
+-- Auto-detect a CA source. Returns (cafile, capath) with at most one set, trying
+-- $SSL_CERT_FILE, $SSL_CERT_DIR, then the common OS bundle/dir locations in order.
+local function detect_ca()
+  local file_env = os.getenv("SSL_CERT_FILE")
+  if path_exists(file_env) then return file_env, nil end
+  local dir_env = os.getenv("SSL_CERT_DIR")
+  if path_exists(dir_env) then return nil, dir_env end
+  local files = {
+    "/etc/ssl/cert.pem",                    -- macOS / LibreSSL, some BSDs
+    "/etc/ssl/certs/ca-certificates.crt",   -- Debian / Ubuntu / Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",     -- RHEL / Fedora / CentOS
+  }
+  for _, p in ipairs(files) do
+    if path_exists(p) then return p, nil end
+  end
+  if path_exists("/etc/ssl/certs") then return nil, "/etc/ssl/certs" end
+  return nil, nil
+end
+
+-- Resolve the effective luasec TLS params for an https request. Verification is
+-- ON by default (fail-closed); caller-supplied opts.tls always wins. If verify is
+-- on and no CA (opts.tls cafile/capath or auto-detected) is available, raise.
+local function resolve_tls(user_tls)
+  local params = {}
+  if user_tls then
+    for k, v in pairs(user_tls) do params[k] = v end
+  end
+  if params.verify == nil then params.verify = "peer" end
+  if params.verify ~= "none" and params.cafile == nil and params.capath == nil then
+    local cafile, capath = detect_ca()
+    if cafile then
+      params.cafile = cafile
+    elseif capath then
+      params.capath = capath
+    else
+      error({ status = 0, body =
+        "fiducia: HTTPS certificate verification is enabled but no CA bundle was found. "
+        .. "Set $SSL_CERT_FILE (a CA bundle file) or $SSL_CERT_DIR (a CA directory), "
+        .. "or pass Fiducia.new(url, { tls = { cafile = \"/path/to/ca.pem\" } }). "
+        .. "To disable verification (insecure) pass { tls = { verify = \"none\" } }." })
+    end
+  end
+  return params
+end
+
 local Fiducia = {}
 Fiducia.__index = Fiducia
 Fiducia._VERSION = "0.1.0"
 
 -- new(base_url [, opts]) -> client. The trailing slash of base_url is trimmed.
 -- opts.tls (optional): a table of luasec TLS parameters (verify, cafile, capath,
--- protocol, options, ...) merged into every https request. luasec's ssl.https
--- convenience module defaults to verify = "none" (it does NOT authenticate the
--- server); pass e.g. opts.tls = { verify = "peer", cafile = "/path/ca.pem" } to
--- turn certificate verification ON. Ignored for http:// URLs.
+-- protocol, options, ...) merged into every https request; it always overrides
+-- the defaults. https verifies the server certificate by default (verify =
+-- "peer") against an auto-detected CA bundle -- pass opts.tls.cafile/capath to
+-- point at your own, or opts.tls = { verify = "none" } to opt out (insecure).
+-- Ignored for http:// URLs.
 function Fiducia.new(base_url, opts)
   opts = opts or {}
   return setmetatable({
@@ -87,11 +145,12 @@ function Fiducia:_request(method, path, body)
 
   local chunks = {}
   local transport, is_https = transport_for(url)
-  -- Seed the request table with caller-supplied TLS params (https only), then set
-  -- the core fields last so url/method/headers/source/sink can never be clobbered.
+  -- Seed the request table with resolved TLS params (https only; fail-closed
+  -- verification by default), then set the core fields last so
+  -- url/method/headers/source/sink can never be clobbered.
   local reqt = {}
-  if is_https and self.tls then
-    for k, v in pairs(self.tls) do reqt[k] = v end
+  if is_https then
+    for k, v in pairs(resolve_tls(self.tls)) do reqt[k] = v end
   end
   reqt.url = url
   reqt.method = method

@@ -200,10 +200,15 @@ wasm-pack build clients/rust-wasm --target web # -> pkg/ with .wasm + .d.ts
 ```js
 import init, { FiduciaClient } from "./pkg/fiducia_client_wasm.js";
 await init();
-const c = new FiduciaClient("https://api.fiducia.cloud");
+const c = new FiduciaClient("https://api.fiducia.cloud", 5000); // optional per-request timeout (ms)
 const lock = await c.lockAcquire("orders/checkout", "worker-a", 30000, false);
 await c.lockRelease("worker-a", lock.result.output.fencing_token);
+// c.setTimeoutMs(10000); // or adjust/clear later (undefined = no timeout)
 ```
+
+Each call resolves to the parsed JSON, or rejects with `{ status, body }` — `status`
+is the HTTP code (or `0` for a transport error / timeout), and `body` is the
+parsed JSON, or the raw text when the response isn't JSON.
 
 ## CLI
 

@@ -66,6 +66,19 @@ class RustWasmEmitter(unittest.TestCase):
         self.assertNotIn("web_sys::window()", self.src)
         self.assertIn('js_sys::Reflect::set(&o, &JsValue::from_str("status")', self.src)
 
+    def test_request_timeout_via_abort_signal(self):
+        # Optional per-request timeout: constructor + setter + AbortSignal wiring.
+        self.assertIn("timeout_ms: Option<f64>", self.src)
+        self.assertIn("pub fn new(base_url: &str, timeout_ms: Option<f64>)", self.src)
+        self.assertIn("js_name = setTimeoutMs", self.src)
+        # web-sys lacks AbortSignal.timeout, so it's bound directly and used.
+        self.assertIn("js_namespace = AbortSignal, js_name = timeout", self.src)
+        self.assertIn("opts.set_signal(Some(&abort_signal_timeout(ms)))", self.src)
+
+    def test_non_json_body_surfaces_raw_text(self):
+        # A non-JSON response body must surface as raw text, not silently null.
+        self.assertIn("unwrap_or_else(|_| JsValue::from_str(&text))", self.src)
+
     def test_no_op_leaks_a_body_for_get(self):
         # GET/DELETE without body params must pass None, never an empty payload.
         for op in g.OPS:
