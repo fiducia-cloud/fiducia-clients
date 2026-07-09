@@ -433,6 +433,42 @@ class FiduciaClient(
   private def putOpt(b: ujson.Obj, key: String, value: Option[ujson.Value]): Unit =
     value.foreach(v => b.obj(key) = v)
 
+  // -- blocking-acquire poll-loop helpers -----------------------------------
+  /** Stable held-by id used across the acquire and every poll comparison. */
+  private def genHolder(): String = "fdc-" + UUID.randomUUID().toString
+
+  /** Monotonic clock in ms (immune to wall-clock jumps), for the wait budget. */
+  private def nowMs(): Long = System.nanoTime() / 1000000L
+
+  /** Safe child lookup: `None` if `v` is not an object or lacks `key`. */
+  private def field(v: ujson.Value, key: String): Option[ujson.Value] =
+    v.objOpt.flatMap(_.get(key))
+
+  /** `resp.result.output`, or an empty object if the shape is missing. */
+  private def acquireOutput(resp: ujson.Value): ujson.Value =
+    field(resp, "result").flatMap(field(_, "output")).getOrElse(ujson.Obj())
+
+  private def isAcquired(out: ujson.Value): Boolean =
+    field(out, "acquired").flatMap(_.boolOpt).contains(true)
+
+  /** A `lock` snapshot is held by us iff its holder matches and it has a token. */
+  private def heldBy(lk: ujson.Value, holder: String): Boolean =
+    field(lk, "holder").flatMap(_.strOpt).contains(holder) &&
+      field(lk, "fencing_token").exists(_ != ujson.Null)
+
+  /** Our slot among `semaphore.holders` with a non-null fencing token, if any. */
+  private def findHolder(resp: ujson.Value, holder: String): Option[ujson.Value] =
+    field(resp, "semaphore").flatMap(field(_, "holders")).flatMap(_.arrOpt)
+      .flatMap(_.find(h => heldBy(h, holder)))
+
+  /** Uniform held-grant carrying the raw `fencing_token` node (no double narrowing). */
+  private def heldGrant(key: String, holder: String, src: ujson.Value): ujson.Value = {
+    val g = ujson.Obj("key" -> ujson.Str(key), "holder" -> ujson.Str(holder))
+    putOpt(g, "fencing_token", field(src, "fencing_token").filter(_ != ujson.Null))
+    putOpt(g, "lease_expires_ms", field(src, "lease_expires_ms").filter(_ != ujson.Null))
+    g
+  }
+
   private def enc(s: String): String =
     URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20")
 
