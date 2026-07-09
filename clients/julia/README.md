@@ -73,6 +73,10 @@ catch err
 end
 ```
 
+The blocking `must_lock`/`must_semaphore`/`lock`/`semaphore` helpers throw
+`LockTimeout` (carrying `keys` and `waited_ms`) when the wait budget elapses before
+the grant is held.
+
 ## Method surface
 
 - misc: `health`, `status`
