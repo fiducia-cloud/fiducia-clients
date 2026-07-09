@@ -445,11 +445,11 @@ def _rw_scalar_enc(typ, var):
     return "enc(&%s.to_string())" % var
 
 
-def _rw_json_scalar(typ, var):
-    # A scalar body value as a serde_json::Value. Integers cast back to i64 so the
-    # JSON is an integer rather than a float.
+def _rw_json_scalar(typ, var, field):
+    # A scalar body value as a serde_json::Value. Integers go through checked_int
+    # (fail loudly on NaN/Infinity/fractional/unsafe) and land as a clean integer.
     if typ == "int":
-        return "serde_json::json!(%s as i64)" % var
+        return 'serde_json::json!(checked_int(%s, "%s")?)' % (var, field)
     return "serde_json::json!(%s)" % var
 
 
