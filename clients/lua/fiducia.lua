@@ -9,6 +9,8 @@
 -- Errors: on HTTP status >= 300 (or a transport failure) each op raises a Lua
 -- error whose value is a table { status = <number>, body = <parsed JSON | string> }.
 -- status is the numeric HTTP code; transport-level failures use status = 0.
+-- Redirects are NOT followed: a 3xx surfaces as an error rather than replaying
+-- the request (and its headers) to the Location.
 -- Callers wrap ops in pcall:
 --   local ok, res = pcall(function() return c:status() end)
 --   if not ok then print("HTTP " .. tostring(res.status), res.body) else print(res) end
@@ -157,6 +159,11 @@ function Fiducia:_request(method, path, body)
   reqt.headers = headers
   reqt.source = source
   reqt.sink = ltn12.sink.table(chunks)
+  -- Hard-reject redirects: luasocket follows 3xx by default, which would replay
+  -- this (possibly mutating) request and its auth/idempotency headers to the
+  -- Location -- including an https->http downgrade. Disable following so a
+  -- redirect instead surfaces as the >=300 error raised below.
+  reqt.redirect = false
   local ok, code = transport.request(reqt)
 
   if not ok then

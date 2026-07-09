@@ -152,6 +152,21 @@ function genIdempotencyKey(): string {
   return `cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 }
 
+// A response is a redirect if it's a 3xx (Node/undici with redirect:"manual") or
+// an opaque redirect (browsers/workers with redirect:"manual" yield status 0).
+function isRedirect(res: Response): boolean {
+  return res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
+}
+
+function redirectError(res: Response, method: string, path: string): FiduciaError {
+  const location = res.headers?.get?.("location") ?? undefined;
+  return new FiduciaError(res.status, {
+    error: "redirect_not_followed",
+    message: `fiducia: refusing to follow redirect (${res.status || "opaque"}) for ${method} ${path}`,
+    location,
+  }, res.headers);
+}
+
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(metadata)) {
@@ -319,7 +334,14 @@ export class FiduciaClient {
         method,
         headers: Object.keys(headers).length ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "manual",
       });
+      // Hard-reject redirects. A coordination API should never 3xx, and following
+      // one would replay this (possibly mutating) request — plus its Authorization
+      // and Idempotency-Key headers — to an attacker-controlled Location, including
+      // an https->http downgrade. With redirect:"manual" Node exposes the 3xx
+      // status; browsers yield an opaque redirect (type "opaqueredirect", status 0).
+      if (isRedirect(res)) throw redirectError(res, method, path);
       const text = await res.text();
       const data = text ? JSON.parse(text) : null;
       if (!res.ok) throw new FiduciaError(res.status, data, res.headers);
@@ -353,7 +375,9 @@ export class FiduciaClient {
         method: "GET",
         headers: { accept: "text/event-stream" },
         signal: controller?.signal,
+        redirect: "manual",
       });
+      if (isRedirect(res)) throw redirectError(res, "GET", path);
       if (!res.ok) {
         const text = await res.text();
         const data = text ? JSON.parse(text) : null;

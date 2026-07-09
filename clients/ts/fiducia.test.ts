@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FiduciaClient } from "./fiducia.ts";
+import { FiduciaClient, FiduciaError } from "./fiducia.ts";
 
 type RecordedCall = {
   method: string;
@@ -291,6 +291,42 @@ test("retried GET gets no injected idempotency key, and single-shot POST stays k
   await postClient.tryLock("orders/42", { holder: "worker-a" });
   assert.equal(postCalls.length, 1);
   assert.equal(postCalls[0].idempotencyKey, undefined);
+});
+
+// A fetch that always answers with a redirect to an attacker-controlled host.
+function redirectFetch(calls: RecordedCall[], status = 302): typeof fetch {
+  return (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    calls.push({
+      method: init.method ?? "GET",
+      path: `${url.pathname}${url.search}`,
+      body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+    });
+    // assert the client asked fetch not to auto-follow
+    assert.equal(init.redirect, "manual");
+    return new Response(null, { status, headers: { location: "https://evil.example/steal" } });
+  }) as typeof fetch;
+}
+
+test("redirects are hard-rejected, not followed, and not retried", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", {
+    fetch: redirectFetch(calls),
+    maxRetries: 3, // even with retries on, a 3xx must not be retried
+  });
+
+  await assert.rejects(
+    () => client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 }),
+    (err: unknown) => {
+      assert.ok(err instanceof FiduciaError);
+      assert.equal(err.status, 302);
+      assert.equal((err.body as any)?.error, "redirect_not_followed");
+      assert.equal((err.body as any)?.location, "https://evil.example/steal");
+      return true;
+    },
+  );
+  // exactly one attempt — the redirect was neither followed nor retried
+  assert.equal(calls.length, 1);
 });
 
 test("request controls reject invalid timeout and retry values", () => {
