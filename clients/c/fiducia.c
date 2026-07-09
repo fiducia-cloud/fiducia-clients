@@ -321,6 +321,10 @@ static int fiducia_request(fiducia_client *c, const char *method,
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &m);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+    /* Never auto-follow 3xx: following a redirect on a mutating POST/PUT/DELETE
+     * could re-submit the operation (duplicate a lock grant / queue slot). This
+     * is libcurl's default; pinned explicitly so it can never regress. A 3xx
+     * (>= 300) then surfaces as the client's result (status + body). */
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
     if (c->timeout_ms > 0) {
         curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, c->timeout_ms);
