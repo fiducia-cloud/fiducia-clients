@@ -109,12 +109,61 @@ class FiduciaClient(
   def tryLock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
     lockAcquire(key, holder, ttlMs, wait = false)
 
-  def mustLock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    lockAcquire(key, holder, ttlMs, wait = true)
+  /** Block until the lock is actually HELD, or time out.
+    *
+    * The server does not hold the connection on `wait=true`: it reserves a FIFO
+    * slot and returns `{acquired:false, queued:true}` immediately. This helper
+    * therefore acquires with `wait=true` and then POLLS [[lockGet]] until we hold
+    * it (our `holder` with a non-null `fencing_token`) or the wait budget elapses,
+    * at which point it throws [[LockTimeoutException]].
+    *
+    * Returns a held-grant object `{key, holder, fencing_token, lease_expires_ms}`
+    * (same shape whether acquired immediately or after polling) — pass `holder`
+    * and `fencing_token` to [[lockRelease]]. `fencing_token` is kept as the raw
+    * JSON node (see the class note on ujson's `Double`-backed numbers).
+    *
+    * @param holder          held-by id; defaults to a generated `fdc-<uuid>`
+    * @param ttlMs           lease TTL; defaults to 60000
+    * @param maxWaitMs       total time to wait for the hold (default 30000)
+    * @param retryIntervalMs poll interval (default 250)
+    * @param maxRetries      optional cap on poll attempts (default: bounded only
+    *                        by `maxWaitMs`)
+    */
+  def mustLock(
+      key: String,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value = {
+    val h = holder.getOrElse(genHolder())
+    val out = acquireOutput(lockAcquire(key, Some(h), Some(ttlMs.getOrElse(60000L)), wait = true))
+    if (isAcquired(out)) return heldGrant(key, h, out)
+    // Queued: poll lock_get until we hold it or the deadline passes.
+    val deadline = nowMs() + maxWaitMs
+    var attempt = 0
+    while (maxRetries.forall(attempt < _)) {
+      val remaining = deadline - nowMs()
+      if (remaining <= 0) throw LockTimeoutException(Seq(key), maxWaitMs)
+      Thread.sleep(math.min(retryIntervalMs, remaining))
+      val lk = field(lockGet(key), "lock").getOrElse(ujson.Null)
+      if (heldBy(lk, h)) return heldGrant(key, h, lk)
+      attempt += 1
+    }
+    throw LockTimeoutException(Seq(key), maxWaitMs)
+  }
 
   /** Alias for [[mustLock]]. */
-  def lock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    mustLock(key, holder, ttlMs)
+  def lock(
+      key: String,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value =
+    mustLock(key, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
   /** `key` is accepted for symmetry but is not sent (release is by token). */
   def lockRelease(key: String, holder: String, fencingToken: Long): ujson.Value =
