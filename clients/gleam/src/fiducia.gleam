@@ -723,9 +723,9 @@ fn poll_lock(
   retry: Retry,
   attempt: Int,
 ) -> Result(Grant, FiduciaError) {
-  case retry.max_retries {
-    Some(cap) if attempt >= cap -> Error(Timeout(retry.max_wait_ms))
-    _ -> {
+  case retries_exhausted(retry.max_retries, attempt) {
+    True -> Error(Timeout(retry.max_wait_ms))
+    False -> {
       let remaining = deadline - now_ms()
       case remaining <= 0 {
         True -> Error(Timeout(retry.max_wait_ms))
@@ -752,9 +752,9 @@ fn poll_semaphore(
   retry: Retry,
   attempt: Int,
 ) -> Result(Grant, FiduciaError) {
-  case retry.max_retries {
-    Some(cap) if attempt >= cap -> Error(Timeout(retry.max_wait_ms))
-    _ -> {
+  case retries_exhausted(retry.max_retries, attempt) {
+    True -> Error(Timeout(retry.max_wait_ms))
+    False -> {
       let remaining = deadline - now_ms()
       case remaining <= 0 {
         True -> Error(Timeout(retry.max_wait_ms))
