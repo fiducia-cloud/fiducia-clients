@@ -167,10 +167,32 @@ function redirectError(res: Response, method: string, path: string): FiduciaErro
   }, res.headers);
 }
 
+// Metadata is a string->string map on the wire. Reject non-string values loudly
+// (matching the wasm client) instead of silently coercing — a nested object or
+// number would otherwise stringify to junk on one client but not another.
+function validateMetadata(metadata: Record<string, string> | undefined, where: string): void {
+  if (metadata === undefined) return;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value !== "string") {
+      const got = value === null ? "null" : typeof value;
+      throw new TypeError(`fiducia: ${where} metadata["${key}"] must be a string, got ${got}`);
+    }
+  }
+}
+
+// A CR or LF in a header value enables header/response splitting. Node/undici and
+// browsers reject these too, but with an opaque error — surface a clear one first.
+function assertHeaderValueSafe(name: string, value: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new TypeError(`fiducia: ${name} header value contains an illegal CR/LF character`);
+  }
+}
+
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
+  validateMetadata(metadata, "service filter");
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(metadata)) {
-    if (key.trim() && value !== undefined) params.set(`metadata.${key}`, String(value));
+    if (key.trim()) params.set(`metadata.${key}`, value);
   }
   const query = params.toString();
   return query ? `?${query}` : "";
@@ -328,7 +350,10 @@ export class FiduciaClient {
     try {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
-      if (opts.idempotencyKey) headers["idempotency-key"] = opts.idempotencyKey;
+      if (opts.idempotencyKey) {
+        assertHeaderValueSafe("idempotency-key", opts.idempotencyKey);
+        headers["idempotency-key"] = opts.idempotencyKey;
+      }
       const res = await this.fetchImpl(this.base + path, {
         signal: controller?.signal,
         method,
@@ -519,6 +544,7 @@ export class FiduciaClient {
     return this.request("GET", `/v1/idempotency?key=${enc(key)}`);
   }
   idempotencyClaim(key: string, opts: IdempotencyClaimOpts = {}) {
+    validateMetadata(opts.metadata, "idempotency claim");
     return this.request("POST", "/v1/idempotency/claim", {
       key,
       owner: opts.owner,
@@ -602,6 +628,7 @@ export class FiduciaClient {
 
   // --- leader election ---
   electionCampaign(name: string, candidate: string, ttlMs: number, opts: ElectionCampaignOpts = {}) {
+    validateMetadata(opts.metadata, "election campaign");
     return this.request("POST", `/v1/elections/${enc(name)}/campaign`, {
       candidate,
       ttl_ms: ttlMs,
@@ -621,6 +648,7 @@ export class FiduciaClient {
 
   // --- service discovery ---
   serviceRegister(service: string, instanceId: string, address: string, ttlMs: number, metadata: Record<string, string> = {}) {
+    validateMetadata(metadata, "service register");
     return this.request("PUT", `/v1/services/${enc(service)}/instances/${enc(instanceId)}`,
       { address, ttl_ms: ttlMs, metadata });
   }

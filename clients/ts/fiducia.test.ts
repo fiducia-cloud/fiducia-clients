@@ -329,6 +329,37 @@ test("redirects are hard-rejected, not followed, and not retried", async () => {
   assert.equal(calls.length, 1);
 });
 
+test("non-string metadata values are hard-rejected (query and body)", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+
+  // bad input fails fast (synchronous throw), before any request is built
+  assert.throws(
+    () => client.serviceInstances("api", { region: 42 as unknown as string }),
+    /metadata\["region"\] must be a string, got number/,
+  );
+  assert.throws(
+    () => client.serviceRegister("api", "i-1", "10.0.0.1:80", 10_000, { tags: {} as unknown as string }),
+    /metadata\["tags"\] must be a string, got object/,
+  );
+  // nothing left the client
+  assert.equal(calls.length, 0);
+
+  // valid string metadata still works
+  await client.serviceInstances("api", { region: "us-east-1" });
+  assert.equal(calls.pop()?.path, "/v1/services/api?metadata.region=us-east-1");
+});
+
+test("CRLF in an idempotency key is rejected before the request", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+  await assert.rejects(
+    () => client.tryLock("orders/42", { holder: "worker-a", idempotencyKey: "abc\r\nX-Injected: 1" }),
+    /idempotency-key header value contains an illegal CR\/LF/,
+  );
+  assert.equal(calls.length, 0);
+});
+
 test("request controls reject invalid timeout and retry values", () => {
   assert.throws(
     () => new FiduciaClient("https://fiducia.test", { timeoutMs: 0 }),
