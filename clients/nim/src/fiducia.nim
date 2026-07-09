@@ -34,7 +34,10 @@ proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
 
 proc enc(s: string): string =
   ## Percent-encode a string for use in a path segment or query value.
-  encodeUrl(s)
+  ## `usePlus = false` so a space is emitted as `%20` (a literal `+` would be
+  ## wrong inside a path segment) rather than `+`; `/` becomes `%2F` so a key
+  ## or name never leaks an extra path segment.
+  encodeUrl(s, usePlus = false)
 
 proc request(c: Client, meth: HttpMethod, path: string, body: JsonNode = nil): JsonNode =
   let client = newHttpClient(timeout = c.timeout)
