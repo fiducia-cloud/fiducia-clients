@@ -495,13 +495,31 @@ TARGETS = {
 
 
 def main():
-    want = sys.argv[1:] or list(TARGETS)
+    args = sys.argv[1:]
+    # --check <targets...>  verifies the named targets are up to date without
+    # writing (exit 1 on drift). Scope it to specific targets — e.g.
+    # `--check rust-wasm` — since some clients are hand-enhanced beyond the
+    # generator baseline and would otherwise report expected drift.
+    check = "--check" in args
+    want = [a for a in args if not a.startswith("--")] or list(TARGETS)
+    drift = 0
     for lang in want:
         rel, gen = TARGETS[lang]
         path = os.path.join(ROOT, rel)
+        content = gen()
+        if check:
+            current = open(path).read() if os.path.exists(path) else None
+            if current != content:
+                print("drift: %s (run: python3 generate.py %s)" % (rel, lang))
+                drift += 1
+            continue
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").write(gen())
+        open(path, "w").write(content)
         print("generated %-8s -> %s (%d ops)" % (lang, rel, len(OPS)))
+    if check:
+        if drift:
+            sys.exit(1)
+        print("up to date (%d target(s))." % len(want))
 
 
 if __name__ == "__main__":
