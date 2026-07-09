@@ -162,11 +162,54 @@ class FiduciaClient(baseUrl: String) {
     fun trySemaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
         semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
-    fun mustSemaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+    /**
+     * Blocks until a semaphore permit is held, then returns the held grant; throws
+     * [LockTimeoutException] on timeout. Like [mustLock] but polls [semaphoreGet] and matches
+     * this [holder] among `semaphore.holders`. Returns `{acquired:true, holder, key,
+     * fencing_token, lease_expires_ms}` — pass `holder` + `fencing_token` to [semaphoreRelease].
+     */
+    fun mustSemaphore(
+        key: String,
+        limit: Int,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement {
+        val who = holder ?: genHolder()
+        val out = field(field(semaphoreAcquire(key, limit, who, ttlMs ?: DEFAULT_TTL_MS, wait = true), "result"), "output")
+        if (isTrue(field(out, "acquired"))) {
+            return heldGrant(key, who, field(out, "fencing_token"), field(out, "lease_expires_ms"))
+        }
+        val deadlineNanos = System.nanoTime() + maxWaitMs * NANOS_PER_MS
+        var attempts = 0
+        while (maxRetries == null || attempts < maxRetries) {
+            attempts++
+            val remainingMs = (deadlineNanos - System.nanoTime()) / NANOS_PER_MS
+            if (remainingMs <= 0) break
+            Thread.sleep(minOf(retryIntervalMs, remainingMs))
+            val holders = field(field(semaphoreGet(key), "semaphore"), "holders") as? JsonArray
+            val slot = holders?.firstOrNull {
+                val ft = field(it, "fencing_token")
+                holderOf(it) == who && ft != null && ft !is JsonNull
+            }
+            if (slot != null) {
+                return heldGrant(key, who, field(slot, "fencing_token"), field(slot, "lease_expires_ms"))
+            }
+        }
+        throw LockTimeoutException(listOf(key), maxWaitMs)
+    }
 
-    fun semaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        mustSemaphore(key, limit, holder, ttlMs)
+    fun semaphore(
+        key: String,
+        limit: Int,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement = mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
     fun semaphoreRelease(key: String, holder: String, fencingToken: Long): JsonElement =
         request("POST", "/v1/semaphores/release", buildJsonObject {
