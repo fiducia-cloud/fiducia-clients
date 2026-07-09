@@ -403,4 +403,9 @@ request(#{base := Base}, Method, Path, Body) ->
     end.
 
 decode_body(<<>>) -> null;
-decode_body(Body) when is_binary(Body) -> json:decode(Body).
+decode_body(Body) when is_binary(Body) ->
+    %% Fall back to the raw bytes when the body is not valid JSON (e.g. a proxy
+    %% error page or plain-text error) so a non-JSON response never crashes.
+    try json:decode(Body)
+    catch _:_ -> Body
+    end.
