@@ -196,12 +196,47 @@ class FiduciaClient(
   def trySemaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
     semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
-  def mustSemaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+  /** Block until a semaphore permit is actually HELD, or time out. Like
+    * [[mustLock]] but polls [[semaphoreGet]] and matches our `holder` among
+    * `semaphore.holders`. Returns `{key, holder, fencing_token, lease_expires_ms}`;
+    * throws [[LockTimeoutException]] on timeout. See [[mustLock]] for the knobs. */
+  def mustSemaphore(
+      key: String,
+      limit: Long,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value = {
+    val h = holder.getOrElse(genHolder())
+    val out = acquireOutput(semaphoreAcquire(key, limit, Some(h), Some(ttlMs.getOrElse(60000L)), wait = true))
+    if (isAcquired(out)) return heldGrant(key, h, out)
+    val deadline = nowMs() + maxWaitMs
+    var attempt = 0
+    while (maxRetries.forall(attempt < _)) {
+      val remaining = deadline - nowMs()
+      if (remaining <= 0) throw LockTimeoutException(Seq(key), maxWaitMs)
+      Thread.sleep(math.min(retryIntervalMs, remaining))
+      findHolder(semaphoreGet(key), h) match {
+        case Some(slot) => return heldGrant(key, h, slot)
+        case None       => attempt += 1
+      }
+    }
+    throw LockTimeoutException(Seq(key), maxWaitMs)
+  }
 
   /** Alias for [[mustSemaphore]]. */
-  def semaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    mustSemaphore(key, limit, holder, ttlMs)
+  def semaphore(
+      key: String,
+      limit: Long,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value =
+    mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
   def semaphoreRelease(key: String, holder: String, fencingToken: Long): ujson.Value =
     request("POST", "/v1/semaphores/release", Some(ujson.Obj(
