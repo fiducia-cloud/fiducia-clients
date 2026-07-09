@@ -295,7 +295,8 @@ RUST_WASM_PRE = BANNER_C + '''
 //! Every operation is an `async` method (exported to JS as camelCase) that
 //! resolves to the parsed JSON response, or rejects with `{ status, body }` on a
 //! non-2xx response or transport failure. Pass an optional `timeout_ms` to the
-//! constructor (or `setTimeoutMs`) to bound each request.
+//! constructor (or `setTimeoutMs`) to bound each request, and `setHeader` to
+//! attach default headers such as `Authorization` to every request.
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
