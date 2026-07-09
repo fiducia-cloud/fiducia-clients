@@ -220,6 +220,79 @@ test("idempotency request option stays in headers for idempotency primitives", a
   });
 });
 
+// A fetch that fails `failFirst` times (network error) before recording+succeeding.
+function flakyFetch(calls: RecordedCall[], failFirst: number): typeof fetch {
+  let seen = 0;
+  return (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    const call: RecordedCall = {
+      method: init.method ?? "GET",
+      path: `${url.pathname}${url.search}`,
+      body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+    };
+    const key = new Headers(init.headers).get("idempotency-key");
+    if (key) call.idempotencyKey = key;
+    calls.push(call);
+    if (seen++ < failFirst) throw new TypeError("network down"); // retryable
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+}
+
+test("retried POST mutations pin one stable idempotency key across attempts", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", {
+    fetch: flakyFetch(calls, 1),
+    maxRetries: 2,
+  });
+
+  await client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 });
+
+  // two attempts (first failed, second succeeded), both to the mutating route
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].path, "/v1/locks/acquire");
+  // both attempts carry a key, and it is the SAME key — so the server dedups the
+  // committed-but-lost first attempt instead of granting a second acquire.
+  assert.ok(calls[0].idempotencyKey, "first attempt must carry an idempotency key");
+  assert.equal(calls[1].idempotencyKey, calls[0].idempotencyKey);
+});
+
+test("caller-supplied idempotency key is reused, not overwritten, on retry", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", {
+    fetch: flakyFetch(calls, 1),
+    maxRetries: 2,
+  });
+
+  await client.tryLock("orders/42", { holder: "worker-a", idempotencyKey: "caller_key_1" });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].idempotencyKey, "caller_key_1");
+  assert.equal(calls[1].idempotencyKey, "caller_key_1");
+});
+
+test("retried GET gets no injected idempotency key, and single-shot POST stays keyless", async () => {
+  // GET is idempotent — no key needed even when retried.
+  const getCalls: RecordedCall[] = [];
+  const getClient = new FiduciaClient("https://fiducia.test", {
+    fetch: flakyFetch(getCalls, 1),
+    maxRetries: 2,
+  });
+  await getClient.lockGet("orders/42");
+  assert.equal(getCalls.length, 2);
+  assert.equal(getCalls[0].idempotencyKey, undefined);
+  assert.equal(getCalls[1].idempotencyKey, undefined);
+
+  // Retries disabled (default) — a single POST must not have behavior changed.
+  const postCalls: RecordedCall[] = [];
+  const postClient = new FiduciaClient("https://fiducia.test", { fetch: flakyFetch(postCalls, 0) });
+  await postClient.tryLock("orders/42", { holder: "worker-a" });
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0].idempotencyKey, undefined);
+});
+
 test("request controls reject invalid timeout and retry values", () => {
   assert.throws(
     () => new FiduciaClient("https://fiducia.test", { timeoutMs: 0 }),

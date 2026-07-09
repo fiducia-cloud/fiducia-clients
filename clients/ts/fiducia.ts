@@ -130,6 +130,28 @@ export class FiduciaTimeoutError extends Error {
 
 const enc = encodeURIComponent;
 
+// Methods safe to retry without an idempotency key. Per RFC 7231 GET/HEAD/OPTIONS
+// and the idempotent-by-contract PUT/DELETE converge to the same server state when
+// replayed; only POST (lock/semaphore acquire, release) can duplicate on retry.
+function isIdempotentMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === "GET" || m === "HEAD" || m === "OPTIONS" || m === "PUT" || m === "DELETE";
+}
+
+// Collision-resistant key that lets the server dedup a retried mutation. Uses
+// Web Crypto (Node 18+, browsers, workers); falls back to a non-crypto id only
+// if unavailable — still unique enough to pin a single logical request.
+function genIdempotencyKey(): string {
+  const c: any = (globalThis as any).crypto;
+  if (typeof c?.randomUUID === "function") return `cli_${c.randomUUID()}`;
+  if (typeof c?.getRandomValues === "function") {
+    const b = new Uint8Array(16);
+    c.getRandomValues(b);
+    return "cli_" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  return `cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(metadata)) {
@@ -199,8 +221,13 @@ export class FiduciaClient {
     return this.pickRetryDelayMs({ retryDelayMs: opts.retryDelayMs ?? this.retryDelayMs });
   }
 
-  private retryable(err: unknown, signal?: AbortSignal): boolean {
+  private retryable(err: unknown, signal: AbortSignal | undefined, method: string, idempotencyKey?: string): boolean {
     if (signal?.aborted) return false;
+    // Belt-and-suspenders: never retry a non-idempotent mutation that carries no
+    // idempotency key — replaying it could duplicate a committed-but-unacked effect.
+    // request() attaches a stable key to retry-enabled POSTs, so in practice a key is
+    // always present here; this guard keeps the safety even if that ever changes.
+    if (!isIdempotentMethod(method) && !idempotencyKey) return false;
     if (err instanceof FiduciaTimeoutError) return true;
     if (err instanceof FiduciaError) return [408, 425, 429, 500, 502, 503, 504].includes(err.status);
     return ["AbortError", "TimeoutError", "TypeError"].includes(String((err as any)?.name));
@@ -235,11 +262,22 @@ export class FiduciaClient {
     const maxRetries = this.resolveRetryMax(opts);
     const retryDelayMs = this.resolveRetryDelayMs(opts);
 
+    // A retried non-idempotent (mutating) request that committed server-side but
+    // whose response was lost would otherwise be silently duplicated — e.g. a
+    // second lock/semaphore acquire, a double FIFO slot. When retries are enabled,
+    // pin one stable Idempotency-Key across every attempt so the server can dedup.
+    // A caller-supplied key wins; GET/HEAD and single-shot (maxRetries=0) calls are
+    // left untouched, so this never changes non-retrying behavior.
+    let effectiveOpts = opts;
+    if (maxRetries > 0 && !isIdempotentMethod(method) && !opts.idempotencyKey) {
+      effectiveOpts = { ...opts, idempotencyKey: genIdempotencyKey() };
+    }
+
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await this.requestOnce(method, path, body, opts, attempt + 1, lockAcquire);
+        return await this.requestOnce(method, path, body, effectiveOpts, attempt + 1, lockAcquire);
       } catch (err) {
-        if (attempt >= maxRetries || !this.retryable(err, opts.signal)) throw err;
+        if (attempt >= maxRetries || !this.retryable(err, opts.signal, method, effectiveOpts.idempotencyKey)) throw err;
         await this.sleep(retryDelayMs, opts.signal);
       }
     }
