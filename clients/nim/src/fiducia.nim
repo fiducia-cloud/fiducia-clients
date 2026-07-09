@@ -10,8 +10,16 @@
 ## HTTPS targets require compiling with `-d:ssl` (links OpenSSL), as usual for
 ## std/httpclient. Ops return the parsed JSON body as a `JsonNode` (nil for an
 ## empty body) and raise `FiduciaError` on any HTTP status >= 300.
+##
+## The blocking helpers `mustLock`/`lock` and `mustSemaphore`/`semaphore` do NOT
+## just set `wait=true` and return — the server does not hold the connection, it
+## returns a queued ticket immediately. They acquire-then-poll (`lockGet` /
+## `semaphoreGet`) until the grant is actually held, and raise `LockTimeout` if
+## the wait budget (`maxWaitMs`, default 30s) elapses first. They return a held
+## grant object `{key, holder, fencing_token, lease_expires_ms}` you can release.
 
-import std/[httpclient, json, uri, strutils, options]
+import std/[httpclient, json, uri, strutils, options, os, monotimes, times,
+            sysrand]
 
 export json, options
 
