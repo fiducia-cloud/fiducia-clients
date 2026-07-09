@@ -70,14 +70,22 @@ module Fiducia
   , serviceList
   ) where
 
-import Control.Exception (Exception, throwIO)
-import Data.Aeson (ToJSON, Value (Null), decode, encode, object, (.=))
+import Control.Concurrent (threadDelay)
+import Control.Exception (Exception, SomeException, throwIO, try)
+import Data.Aeson (ToJSON, Value (..), decode, encode, object, (.=))
 import Data.Aeson.Key (Key)
+import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Pair)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Maybe (fromMaybe)
+import Data.Foldable (toList)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Unique (hashUnique, newUnique)
+import Data.Word (Word8)
+import GHC.Clock (getMonotonicTimeNSec)
 import Network.HTTP.Client
   ( Manager
   , Request
