@@ -13,6 +13,14 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AbortSignal, Request, RequestInit, Response};
 
+// web-sys (0.3) doesn't bind the `AbortSignal.timeout` static, so bind the
+// runtime one directly (available in browsers 2022+, Node 17.3+, and Deno).
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = AbortSignal, js_name = timeout)]
+    fn abort_signal_timeout(ms: f64) -> AbortSignal;
+}
+
 /// URL-encode a path/query segment via the JS `encodeURIComponent`.
 fn enc(s: &str) -> String {
     String::from(js_sys::encode_uri_component(s))
@@ -55,7 +63,7 @@ impl FiduciaClient {
         }
         // Bound the request with AbortSignal.timeout (browser/worker/Node18+/Deno).
         if let Some(ms) = self.timeout_ms {
-            opts.set_signal(Some(&AbortSignal::timeout(ms)));
+            opts.set_signal(Some(&abort_signal_timeout(ms)));
         }
         let url = format!("{}{}", self.base, path);
         let request = Request::new_with_str_and_init(&url, &opts).map_err(|e| err(0, e))?;
