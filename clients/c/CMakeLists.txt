@@ -13,12 +13,6 @@ find_package(CURL REQUIRED)
 add_library(fiducia STATIC fiducia.c)
 add_library(fiducia::fiducia ALIAS fiducia)
 
-target_sources(fiducia
-  PUBLIC
-    FILE_SET HEADERS
-    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES fiducia.h)
-
 target_include_directories(fiducia
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -30,10 +24,10 @@ target_compile_features(fiducia PUBLIC c_std_11)
 set_target_properties(fiducia PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
-  C_EXTENSIONS OFF)
+  C_EXTENSIONS OFF
+  PUBLIC_HEADER fiducia.h)
 
 include(GNUInstallDirs)
 install(TARGETS fiducia
-  EXPORT fiduciaTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
