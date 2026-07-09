@@ -70,8 +70,8 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 - `c:lock_get(key)`
 - `c:lock_acquire(key, { holder, ttl_ms, wait = true })`
 - `c:lock_acquire_many(keys, { holder, ttl_ms, wait = true })` — `keys` is a string array (union lock)
-- `c:try_lock(key, { holder, ttl_ms })` — `wait = false`
-- `c:must_lock(key, { holder, ttl_ms })` / `c:lock(...)` — `wait = true`
+- `c:try_lock(key, { holder, ttl_ms })` — `wait = false`, single shot; returns the raw response
+- `c:must_lock(key, { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries })` / `c:lock(...)` — **blocks** (polls) until held; returns a grant (see [Blocking helpers](#blocking-helpers))
 - `c:lock_release(key, holder, fencing_token)` — `key` is accepted for symmetry but not sent
 
 **semaphores**
