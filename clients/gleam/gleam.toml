@@ -1,0 +1,11 @@
+name = "fiducia_client"
+version = "0.1.0"
+licences = ["LicenseRef-Proprietary"]
+description = "Thin HTTP client for fiducia.cloud (distributed locks, semaphores, KV, cron, elections, service discovery)."
+repository = { type = "github", user = "fiducia-cloud", repo = "fiducia-clients" }
+
+gleam = ">= 1.0.0"
+
+[dependencies]
+
+[dev-dependencies]
