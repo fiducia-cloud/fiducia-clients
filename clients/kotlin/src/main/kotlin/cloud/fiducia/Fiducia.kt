@@ -32,6 +32,14 @@ class FiduciaException(val status: Int, val body: JsonElement?) :
     RuntimeException("fiducia: HTTP $status")
 
 /**
+ * Thrown by the blocking [FiduciaClient.mustLock] / [FiduciaClient.mustSemaphore] helpers
+ * when the poll budget elapses before this holder is observed holding the grant.
+ * Carries the key(s) it was waiting on and the elapsed budget in milliseconds.
+ */
+class LockTimeoutException(val keys: List<String>, val waitedMs: Long) :
+    RuntimeException("fiducia: timed out after ${waitedMs}ms waiting for ${keys.joinToString(", ")}")
+
+/**
  * Thin HTTP wrapper over the fiducia.cloud contract. Every method returns the parsed
  * JSON response as a [JsonElement] (an empty body becomes [JsonNull]) and throws a
  * [FiduciaException] on HTTP status >= 300.
