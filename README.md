@@ -181,14 +181,16 @@ an exact-match string map, so leader-aware clients can filter on fields such as
 `leader=true`, `region=us-east-1`, or `version=blue` while SSE watches track
 election and service changes.
 
-## WebAssembly (browser)
+## WebAssembly
 
 [`clients/rust-wasm`](clients/rust-wasm) is the Rust client compiled to
 WebAssembly. It cannot open sockets like the blocking `clients/rust` build, so
-its transport is the browser `fetch` API via `wasm-bindgen` + `web-sys`. Its
-`src/lib.rs` is generated from `operations.json` — every operation is an `async`
-method, exported to JS as camelCase, that resolves to the parsed JSON response
-(or rejects with `{ status, body }`):
+its transport is the global `fetch` (resolved from the global scope via
+`wasm-bindgen` + `js-sys`, so it works on the browser main thread, in Web
+Workers, and in Node 18+/Deno). Its `src/lib.rs` is generated from
+`operations.json` — every operation is an `async` method, exported to JS as
+camelCase, that resolves to the parsed JSON response (or rejects with
+`{ status, body }`):
 
 ```sh
 python3 generate.py rust-wasm                 # (re)generate clients/rust-wasm/src/lib.rs
