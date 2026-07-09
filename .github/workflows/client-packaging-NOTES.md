@@ -47,11 +47,14 @@ requirements (below), not packaging drift.
 - **lua** — `fiducia.lua` `require`s `socket.http`/`ltn12`/`dkjson` at load time, so the
   `require` smoke needs those deps installed; the job installs them + `libssl-dev` (luasec).
 - **haskell** — `cabal check` emits only PVP version-bound warnings (`|| true`), non-fatal.
+- **clojure** — a plain jar on the classpath via `:local/root` does not resolve the jar's
+  pom deps, so the `require` smoke adds `org.clojure/data.json` alongside the artifact
+  (a real Clojars/Maven consumer gets it transitively from the published pom).
 
 ## Toolchains used for local grounding
 dotnet 10.0.108 · zig 0.16.0 · julia 1.12.6 · R 4.6.0 · gleam 1.16.0 · crystal 1.20.3 ·
 ocaml 5.4.1 (+opam/dune, all client deps installed) · lua 5.5.0 + luarocks 3.13.0 ·
 erlang OTP 28 + rebar3 3.27.0 · swift 6.1.2 · clang/gcc + libcurl + nlohmann/json ·
 nim 2.2.10 + nimble 0.22.2 (side toolchain) · GHC 9.10.3 + cabal (via nix) ·
-sbt (via coursier) + Temurin 17. Not present as system tools: gradle (downloaded 8.10.2
-for the local kotlin attempt), a JDK 11.
+sbt (via coursier) + Temurin 17 · Clojure CLI 1.12.5 + Temurin 17. Not present as system
+tools: gradle (downloaded 8.10.2 for the local kotlin attempt), a JDK 11.
