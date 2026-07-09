@@ -409,15 +409,24 @@ request(#{base := Base} = C, Method, Path, Body) ->
             {error, Reason}
     end.
 
+%% Per-request HTTP options. autoredirect=false so a 3xx on a mutating POST/PUT
+%% is never re-followed/re-sent (it surfaces as {error,{3xx,Body}}); a bounded
+%% connect+read timeout instead of httpc's infinity default; TLS verify on HTTPS.
+http_opts(Base, TimeoutMs) ->
+    [{autoredirect, false},
+     {timeout, TimeoutMs},
+     {connect_timeout, TimeoutMs}
+     | tls_opts(Base)].
+
 %% Verify the server certificate on HTTPS. httpc only enables verification by
 %% default from OTP 28 on; set it explicitly so the client is also safe on the
 %% OTP 27 it supports. Plain HTTP needs no TLS options.
-http_opts(<<"https:", _/binary>>) ->
+tls_opts(<<"https:", _/binary>>) ->
     [{ssl, [{verify, verify_peer},
             {cacerts, public_key:cacerts_get()},
             {customize_hostname_check,
              [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}]}];
-http_opts(_) ->
+tls_opts(_) ->
     [].
 
 decode_body(<<>>) -> null;
