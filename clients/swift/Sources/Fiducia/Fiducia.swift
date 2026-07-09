@@ -12,7 +12,8 @@ import FoundationNetworking
 #endif
 
 /// A non-2xx response. Carries the numeric HTTP status and the parsed JSON body
-/// (the natural `Any` produced by `JSONSerialization`, or `nil` for an empty body).
+/// (the natural `Any` produced by `JSONSerialization`, the raw text `String` when
+/// the body is not JSON, or `nil` for an empty body).
 public struct FiduciaError: Error, CustomStringConvertible {
     public let status: Int
     public let body: Any?
