@@ -250,10 +250,21 @@ module Fiducia
         client.close
       end
 
-      text = response.body
-      data = text.empty? ? JSON::Any.new(nil) : JSON.parse(text)
+      data = parse_body(response.body)
       raise Error.new(response.status_code, data) if response.status_code >= 300
       data
+    end
+
+    # Decode a response body into JSON::Any. An empty body (e.g. 204) becomes a
+    # null JSON::Any; a body that is not valid JSON (e.g. a plain-text proxy
+    # error accompanying a 5xx) falls back to the raw text rather than raising a
+    # JSON::ParseException, so the caller always sees a Fiducia::Error carrying
+    # the status and whatever the server sent.
+    private def parse_body(text : String) : JSON::Any
+      return JSON::Any.new(nil) if text.empty?
+      JSON.parse(text)
+    rescue JSON::ParseException
+      JSON::Any.new(text)
     end
   end
 end
