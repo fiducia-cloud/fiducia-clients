@@ -193,6 +193,10 @@ static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     struct membuf *m = (struct membuf *)userdata;
     size_t add = size * nmemb;
     if (nmemb != 0 && add / nmemb != size) { m->oom = 1; return 0; } /* overflow */
+    if (add > SIZE_MAX - 1 || m->len > SIZE_MAX - 1 - add) { /* len+add+1 wrap */
+        m->oom = 1;
+        return 0;
+    }
     if (m->len + add + 1 > m->cap) {
         size_t ncap = m->cap ? m->cap : 256;
         while (ncap < m->len + add + 1) {
