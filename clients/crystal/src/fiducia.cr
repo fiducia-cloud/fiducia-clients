@@ -72,12 +72,22 @@ module Fiducia
       lock_acquire(key, holder: holder, ttl_ms: ttl_ms, wait: false)
     end
 
-    def must_lock(key : String, holder : String? = nil, ttl_ms : Int64? = nil) : JSON::Any
-      lock_acquire(key, holder: holder, ttl_ms: ttl_ms, wait: true)
+    # Block until the lock is actually HELD, or raise Fiducia::Timeout. The
+    # server does not hold the connection on wait:true — it reserves a FIFO slot
+    # and returns immediately — so we poll lock_get until we own the grant. On
+    # success returns a normalized held-grant JSON::Any
+    # ({holder, fencing_token, lease_expires_ms}); release it via lock_release.
+    def must_lock(key : String, holder : String? = nil, ttl_ms : Int64? = nil,
+                  max_wait_ms : Int32 = 30_000, retry_interval_ms : Int32 = 250,
+                  max_retries : Int32? = nil) : JSON::Any
+      poll_lock(key, holder, ttl_ms, max_wait_ms, retry_interval_ms, max_retries)
     end
 
-    def lock(key : String, holder : String? = nil, ttl_ms : Int64? = nil) : JSON::Any
-      must_lock(key, holder: holder, ttl_ms: ttl_ms)
+    def lock(key : String, holder : String? = nil, ttl_ms : Int64? = nil,
+             max_wait_ms : Int32 = 30_000, retry_interval_ms : Int32 = 250,
+             max_retries : Int32? = nil) : JSON::Any
+      must_lock(key, holder: holder, ttl_ms: ttl_ms, max_wait_ms: max_wait_ms,
+        retry_interval_ms: retry_interval_ms, max_retries: max_retries)
     end
 
     # +key+ is accepted for call-site symmetry; the grant is released by token.
