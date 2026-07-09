@@ -8,6 +8,12 @@
 --
 -- Every operation returns the parsed JSON response as an aeson 'Value' (an empty
 -- body decodes to 'Null'). On HTTP status >= 300 a 'FiduciaError' is thrown.
+--
+-- The blocking helpers 'mustLock' \/ 'lock' \/ 'mustSemaphore' \/ 'semaphore'
+-- actually block: the server queues a FIFO slot and returns immediately, so they
+-- poll 'lockGet' \/ 'semaphoreGet' until the grant is held, throwing 'LockTimeout'
+-- when the poll budget ('PollOpts') runs out. 'tryLock' \/ 'trySemaphore' stay a
+-- single non-blocking shot.
 
 {-# LANGUAGE OverloadedStrings #-}
 
