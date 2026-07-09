@@ -65,8 +65,17 @@ do {
 `serviceRegister` · `serviceHeartbeat` · `serviceDeregister`
 
 Optional parameters (`holder`, `ttlMs`, `metadata`, …) are omitted from the
-request body when `nil`, which preserves compare-and-set semantics. The
-`try*` / `must*` helpers just flip the `wait` flag on the matching acquire call.
+request body when `nil`, which preserves compare-and-set semantics.
+
+`tryLock` / `trySemaphore` are single-shot (`wait:false`) and return the raw
+acquire response. `mustLock` / `mustSemaphore` (and the `lock` / `semaphore`
+aliases) actually **block until held**: the server reserves a FIFO slot and
+returns a queued ticket immediately, so these poll `lockGet` / `semaphoreGet`
+every `retryIntervalMs` (default 250) until the caller holds it — returning a
+held-grant dict (`key`, `holder`, `fencing_token`, `lease_expires_ms`) ready for
+`lockRelease` / `semaphoreRelease` — or throwing `FiduciaTimeout` once `maxWaitMs`
+(default 30000, or an optional `maxRetries`) is exhausted. A `holder` is
+generated (`fdc-<uuid>`) and `ttlMs` defaults to 60000 when you omit them.
 
 Constructor options: `FiduciaClient(baseURL:session:requestTimeout:)` — pass a
 custom `URLSession` or a per-request `requestTimeout` (seconds) if you need them.
