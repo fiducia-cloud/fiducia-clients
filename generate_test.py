@@ -81,11 +81,12 @@ class QueryAndPathEncoding(unittest.TestCase):
         line = g._rw_scalar_enc("int", "limit")
         self.assertEqual(line, "enc(&(limit as i64).to_string())")
 
-    def test_object_query_is_json_stringified(self):
+    def test_object_query_expands_dotted(self):
         lines = g._rw_query_lines({"name": "metadata", "type": "object", "optional": True})
         joined = "\n".join(lines)
-        self.assertIn("JSON::stringify", joined)
-        self.assertTrue(joined.strip().startswith("if !metadata.is_null()"))
+        self.assertIn("dyn_ref::<js_sys::Object>()", joined)
+        self.assertIn('format!("metadata.{}={}"', joined)
+        self.assertNotIn('format!("metadata={}"', joined)
 
     def test_required_scalar_query_is_unconditional(self):
         lines = g._rw_query_lines({"name": "key", "type": "string"})
