@@ -44,8 +44,13 @@ lk = c.lockAcquire('orders/checkout', 'holder', 'worker-a', 'ttl_ms', 30000);
 token = lk.result.output.fencing_token;
 c.lockRelease('orders/checkout', 'worker-a', token);
 
-% Non-blocking try. tryLock/mustLock/lock just flip the wait flag.
+% Non-blocking try (single shot, wait=false): returns the raw acquire response.
 r = c.tryLock('orders/checkout', 'ttl_ms', 5000);
+
+% Blocking acquire: polls lockGet until held, then returns a held grant you can
+% release; raises 'fiducia:lockTimeout' if not held within max_wait_ms.
+g = c.mustLock('orders/checkout', 'ttl_ms', 30000, 'max_wait_ms', 10000);
+c.lockRelease(g.key, g.holder, g.fencing_token);
 
 % A union lock over several keys at once.
 c.lockAcquireMany({'a', 'b', 'c'}, 'ttl_ms', 30000);
