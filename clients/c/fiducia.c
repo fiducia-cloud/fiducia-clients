@@ -260,6 +260,19 @@ void fiducia_response_free(fiducia_response *out) {
     out->status = 0;
 }
 
+/*
+ * Reset *out to {0, NULL} and report a bad argument. Every negative return must
+ * leave *out zeroed so a caller's fiducia_response_free(out) is always safe,
+ * even when out was never initialized (the documented contract).
+ */
+static int fail_arg(fiducia_response *out) {
+    if (out) {
+        out->status = 0;
+        out->body = NULL;
+    }
+    return FIDUCIA_ERR_ARG;
+}
+
 static int fiducia_request(fiducia_client *c, const char *method,
                            const char *path, const char *body,
                            fiducia_response *out) {
