@@ -1,6 +1,7 @@
 name = "fiducia_client"
 version = "0.1.0"
-licences = ["LicenseRef-Proprietary"]
+# No open-source licence granted; see LICENSE.txt. Gleam's manifest rejects
+# non-SPDX ids (UNLICENSED / LicenseRef-Proprietary), so `licences` is omitted.
 description = "Thin HTTP client for fiducia.cloud (distributed locks, semaphores, KV, cron, elections, service discovery)."
 repository = { type = "github", user = "fiducia-cloud", repo = "fiducia-clients" }
 
