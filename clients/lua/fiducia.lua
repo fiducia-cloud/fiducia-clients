@@ -145,11 +145,12 @@ function Fiducia:_request(method, path, body)
 
   local chunks = {}
   local transport, is_https = transport_for(url)
-  -- Seed the request table with caller-supplied TLS params (https only), then set
-  -- the core fields last so url/method/headers/source/sink can never be clobbered.
+  -- Seed the request table with resolved TLS params (https only; fail-closed
+  -- verification by default), then set the core fields last so
+  -- url/method/headers/source/sink can never be clobbered.
   local reqt = {}
-  if is_https and self.tls then
-    for k, v in pairs(self.tls) do reqt[k] = v end
+  if is_https then
+    for k, v in pairs(resolve_tls(self.tls)) do reqt[k] = v end
   end
   reqt.url = url
   reqt.method = method
