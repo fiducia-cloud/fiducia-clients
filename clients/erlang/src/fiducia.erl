@@ -390,14 +390,15 @@ to_bin(F) when is_float(F) -> float_to_binary(F, [short]).
 
 request(C, Method, Path) -> request(C, Method, Path, undefined).
 
-request(#{base := Base}, Method, Path, Body) ->
+request(#{base := Base} = C, Method, Path, Body) ->
     Url = unicode:characters_to_list(<<Base/binary, Path/binary>>),
     Request =
         case Body of
             undefined -> {Url, []};
             _ -> {Url, [], "application/json", iolist_to_binary(json:encode(Body))}
         end,
-    case httpc:request(Method, Request, http_opts(Base), [{body_format, binary}]) of
+    Timeout = maps:get(timeout, C, ?DEFAULT_TIMEOUT_MS),
+    case httpc:request(Method, Request, http_opts(Base, Timeout), [{body_format, binary}]) of
         {ok, {{_Version, Status, _Reason}, _Headers, RespBody}} ->
             Data = decode_body(RespBody),
             case Status >= 300 of
