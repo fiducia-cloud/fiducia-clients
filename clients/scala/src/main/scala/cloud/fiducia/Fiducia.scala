@@ -14,6 +14,7 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import scala.language.implicitConversions
+import scala.util.control.NonFatal
 
 /** Raised on any HTTP response with status >= 300. `body` is the parsed JSON
   * response (`ujson.Null` when the response body was empty). */
