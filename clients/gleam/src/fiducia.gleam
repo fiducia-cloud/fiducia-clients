@@ -25,7 +25,7 @@ import gleam/uri
 /// A failed call: a non-2xx HTTP response (`Http`, carrying the numeric status
 /// and the parsed JSON body as a `Dynamic`), a transport/network failure
 /// (`Transport`), or a blocking acquire that never became held within its wait
-/// budget (`Timeout`, carrying the elapsed budget in milliseconds).
+/// budget (`Timeout`, carrying the configured `max_wait_ms` in milliseconds).
 pub type FiduciaError {
   Http(status: Int, body: Dynamic)
   Transport(message: String)
