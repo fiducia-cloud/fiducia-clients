@@ -391,7 +391,7 @@ request(#{base := Base}, Method, Path, Body) ->
             undefined -> {Url, []};
             _ -> {Url, [], "application/json", iolist_to_binary(json:encode(Body))}
         end,
-    case httpc:request(Method, Request, [], [{body_format, binary}]) of
+    case httpc:request(Method, Request, http_opts(Base), [{body_format, binary}]) of
         {ok, {{_Version, Status, _Reason}, _Headers, RespBody}} ->
             Data = decode_body(RespBody),
             case Status >= 300 of
