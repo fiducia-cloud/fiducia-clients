@@ -90,9 +90,11 @@ private:
 // empty body decodes to null). See PROTOCOL.md for the full method surface.
 class Client {
 public:
-    // base_url has any trailing slashes trimmed. request_timeout_ms == 0 means
-    // no client-side timeout (libcurl default).
-    explicit Client(std::string base_url, long request_timeout_ms = 0)
+    // base_url has any trailing slashes trimmed. request_timeout_ms is the total
+    // per-request deadline (connect + transfer); it defaults to 30s and can be
+    // overridden. Pass 0 to disable the client-side timeout (libcurl default).
+    // These calls are single-shot (no long-poll), so a finite default is safe.
+    explicit Client(std::string base_url, long request_timeout_ms = 30000)
         : base_(trim_trailing_slash(std::move(base_url))),
           request_timeout_ms_(request_timeout_ms) {
         detail::global_init();
