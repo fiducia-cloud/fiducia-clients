@@ -557,14 +557,7 @@ pub const Client = struct {
             .headers = headers,
         }) catch return error.Transport;
 
-        const bytes = sink.written();
-        const parsed = std.json.parseFromSlice(
-            Value,
-            self.allocator,
-            if (bytes.len == 0) "null" else bytes,
-            .{},
-        ) catch return error.Transport;
-
+        const parsed = try parseBody(self.allocator, sink.written());
         return .{ .status = @intFromEnum(result.status), .json = parsed };
     }
 
