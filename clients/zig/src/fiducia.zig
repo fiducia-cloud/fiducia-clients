@@ -555,6 +555,13 @@ pub const Client = struct {
             .payload = body,
             .response_writer = &sink.writer,
             .headers = headers,
+            // Never auto-follow 3xx. std.http.Client otherwise follows up to
+            // three redirects for bodyless (GET/DELETE) requests, which could
+            // silently re-submit a mutating DELETE or race a moved leader. The
+            // edge/LB already resolves leader redirects, so a 3xx is a real
+            // signal: `.unhandled` returns it verbatim (status + body) instead
+            // of following it, and status >= 300 becomes the client's error.
+            .redirect_behavior = .unhandled,
         }) catch return error.Transport;
 
         const parsed = try parseBody(self.allocator, sink.written());
