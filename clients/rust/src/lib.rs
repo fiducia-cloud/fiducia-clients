@@ -1548,6 +1548,62 @@ mod tests {
     }
 
     #[test]
+    fn decision_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .decision_propose(
+                "deploy/safe",
+                "Is this deploy safe?",
+                &["approve", "reject"],
+                json!({ "kind": "plurality", "min_votes": 3 }),
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/decisions/propose",
+            json!({
+                "name": "deploy/safe",
+                "question": "Is this deploy safe?",
+                "options": ["approve", "reject"],
+                "policy": { "kind": "plurality", "min_votes": 3 },
+                "deadline_ms": null
+            }),
+        );
+
+        client
+            .decision_vote(
+                "deploy/safe",
+                DecisionVote {
+                    voter: "agent-a",
+                    option: Some("approve"),
+                    confidence: 0.9,
+                    weight: 5,
+                    veto: false,
+                    evidence: &["log:123"],
+                },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/decisions/vote",
+            json!({
+                "name": "deploy/safe",
+                "voter": "agent-a",
+                "option": "approve",
+                "confidence": 0.9,
+                "weight": 5,
+                "veto": false,
+                "evidence": ["log:123"]
+            }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
