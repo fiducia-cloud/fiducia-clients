@@ -679,6 +679,61 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a decision's options, tallies, votes, and resolution; absent reads as found=false.
+    #[wasm_bindgen(js_name = decisionGet)]
+    pub async fn decision_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/decisions");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous).
+    #[wasm_bindgen(js_name = decisionPropose)]
+    pub async fn decision_propose(&self, name: String, question: String, options: JsValue, policy: JsValue, deadline_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/decisions/propose");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("question".to_string(), serde_json::Value::String(question));
+        _body.insert("options".to_string(), serde_wasm_bindgen::from_value(options).map_err(|e| err(0, e.into()))?);
+        _body.insert("policy".to_string(), serde_wasm_bindgen::from_value(policy).map_err(|e| err(0, e.into()))?);
+        if let Some(v) = deadline_ms {
+            _body.insert("deadline_ms".to_string(), serde_json::json!(checked_int(v, "deadline_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution.
+    #[wasm_bindgen(js_name = decisionVote)]
+    pub async fn decision_vote(&self, name: String, voter: String, option: Option<String>, confidence: Option<f64>, weight: Option<f64>, veto: Option<bool>, evidence: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/decisions/vote");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("voter".to_string(), serde_json::Value::String(voter));
+        if let Some(v) = option {
+            _body.insert("option".to_string(), serde_json::json!(v));
+        }
+        if let Some(v) = confidence {
+            _body.insert("confidence".to_string(), serde_json::json!(v));
+        }
+        if let Some(v) = weight {
+            _body.insert("weight".to_string(), serde_json::json!(checked_int(v, "weight")?));
+        }
+        if let Some(v) = veto {
+            _body.insert("veto".to_string(), serde_json::json!(v));
+        }
+        if !evidence.is_null() && !evidence.is_undefined() {
+            _body.insert("evidence".to_string(), serde_wasm_bindgen::from_value(evidence).map_err(|e| err(0, e.into()))?);
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

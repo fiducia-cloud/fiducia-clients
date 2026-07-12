@@ -36,6 +36,18 @@ pub struct RequestControl {
     pub idempotency_key: Option<String>,
 }
 
+/// Parameters for casting a decision vote.
+#[derive(Clone, Copy, Debug)]
+pub struct DecisionVote<'a> {
+    pub voter: &'a str,
+    /// The chosen option, or `None` to abstain.
+    pub option: Option<&'a str>,
+    pub confidence: f64,
+    pub weight: u64,
+    pub veto: bool,
+    pub evidence: &'a [&'a str],
+}
+
 /// Parameters for a rate-limit check.
 #[derive(Clone, Copy, Debug)]
 pub struct RateLimitCheckRequest<'a> {
@@ -781,6 +793,52 @@ impl FiduciaClient {
         )
     }
 
+    // --- decisions (typed weighted voting) ---
+    /// Read a decision's options, tallies, votes, and resolution. Absent reports
+    /// `found: false`.
+    pub fn decision_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/decisions?name={}", enc(name)), None)
+    }
+    /// Propose a decision with typed options and a resolution policy (a JSON
+    /// object like `{"kind":"plurality","min_votes":3}`). Idempotent.
+    pub fn decision_propose(
+        &self,
+        name: &str,
+        question: &str,
+        options: &[&str],
+        policy: Value,
+        deadline_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/decisions/propose",
+            Some(json!({
+                "name": name,
+                "question": question,
+                "options": options,
+                "policy": policy,
+                "deadline_ms": deadline_ms,
+            })),
+        )
+    }
+    /// Cast (or replace) a vote. `option` of `None` abstains; `veto` aborts the
+    /// decision; `weight` drives resolution.
+    pub fn decision_vote(&self, name: &str, vote: DecisionVote<'_>) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/decisions/vote",
+            Some(json!({
+                "name": name,
+                "voter": vote.voter,
+                "option": vote.option,
+                "confidence": vote.confidence,
+                "weight": vote.weight,
+                "veto": vote.veto,
+                "evidence": vote.evidence,
+            })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1486,6 +1544,62 @@ mod tests {
             "POST",
             "/v1/handoffs/accept",
             json!({ "name": "ticket-482/handoff", "to": "legal-agent" }),
+        );
+    }
+
+    #[test]
+    fn decision_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .decision_propose(
+                "deploy/safe",
+                "Is this deploy safe?",
+                &["approve", "reject"],
+                json!({ "kind": "plurality", "min_votes": 3 }),
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/decisions/propose",
+            json!({
+                "name": "deploy/safe",
+                "question": "Is this deploy safe?",
+                "options": ["approve", "reject"],
+                "policy": { "kind": "plurality", "min_votes": 3 },
+                "deadline_ms": null
+            }),
+        );
+
+        client
+            .decision_vote(
+                "deploy/safe",
+                DecisionVote {
+                    voter: "agent-a",
+                    option: Some("approve"),
+                    confidence: 0.9,
+                    weight: 5,
+                    veto: false,
+                    evidence: &["log:123"],
+                },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/decisions/vote",
+            json!({
+                "name": "deploy/safe",
+                "voter": "agent-a",
+                "option": "approve",
+                "confidence": 0.9,
+                "weight": 5,
+                "veto": false,
+                "evidence": ["log:123"]
+            }),
         );
     }
 
