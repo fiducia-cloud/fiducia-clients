@@ -110,6 +110,18 @@ class FiduciaClient:
         """Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set."""
         return self._request("POST", "/v1/counters/set", {"key": key, "value": value, "prev_revision": prev_revision})
 
+    def barrier_get(self, name):
+        """Read a barrier's arrivals and resolution status; absent reads as found=false."""
+        return self._request("GET", "/v1/barriers?name=%s" % _enc(name))
+
+    def barrier_create(self, name, policy, expected=None, deadline_ms=None):
+        """Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum)."""
+        return self._request("POST", "/v1/barriers/create", {"name": name, "policy": policy, "expected": expected, "deadline_ms": deadline_ms})
+
+    def barrier_arrive(self, name, participant, weight=None, veto=None):
+        """Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent."""
+        return self._request("POST", "/v1/barriers/arrive", {"name": name, "participant": participant, "weight": weight, "veto": veto})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))
