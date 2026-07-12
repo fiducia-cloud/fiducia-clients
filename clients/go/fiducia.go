@@ -322,6 +322,36 @@ func (c *Client) DecisionVote(name string, voter string, opts map[string]any) (m
 	return c.request("POST", "/v1/decisions/vote", body)
 }
 
+// BudgetGet Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false.
+func (c *Client) BudgetGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/budgets?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// BudgetSet Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited.
+func (c *Client) BudgetSet(name string, limit map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "limit": limit}
+	return c.request("POST", "/v1/budgets/set", body)
+}
+
+// BudgetReserve Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription).
+func (c *Client) BudgetReserve(name string, reservationId string, holder string, amount map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "reservation_id": reservationId, "holder": holder, "amount": amount}
+	return c.request("POST", "/v1/budgets/reserve", body)
+}
+
+// BudgetCommit Commit a reservation with the actual spend (capped at reserved); frees the difference.
+func (c *Client) BudgetCommit(name string, reservationId string, actual map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "reservation_id": reservationId, "actual": actual}
+	return c.request("POST", "/v1/budgets/commit", body)
+}
+
+// BudgetRelease Release a still-held reservation, returning its full headroom.
+func (c *Client) BudgetRelease(name string, reservationId string) (map[string]any, error) {
+	body := map[string]any{"name": name, "reservation_id": reservationId}
+	return c.request("POST", "/v1/budgets/release", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))

@@ -46,6 +46,11 @@ too. `?param` marks an optional argument.
 | `GET` | `/v1/decisions` | `name` | Read a decision's options, tallies, votes, and resolution; absent reads as found=false. |
 | `POST` | `/v1/decisions/propose` | `name`, `question`, `options`, `policy`, `deadline_ms`? | Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous). |
 | `POST` | `/v1/decisions/vote` | `name`, `voter`, `option`?, `confidence`?, `weight`?, `veto`?, `evidence`? | Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution. |
+| `GET` | `/v1/budgets` | `name` | Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false. |
+| `POST` | `/v1/budgets/set` | `name`, `limit` | Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited. |
+| `POST` | `/v1/budgets/reserve` | `name`, `reservation_id`, `holder`, `amount` | Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription). |
+| `POST` | `/v1/budgets/commit` | `name`, `reservation_id`, `actual` | Commit a reservation with the actual spend (capped at reserved); frees the difference. |
+| `POST` | `/v1/budgets/release` | `name`, `reservation_id` | Release a still-held reservation, returning its full headroom. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |

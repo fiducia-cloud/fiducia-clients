@@ -198,6 +198,26 @@ class FiduciaClient:
         """Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution."""
         return self._request("POST", "/v1/decisions/vote", {"name": name, "voter": voter, "option": option, "confidence": confidence, "weight": weight, "veto": veto, "evidence": evidence})
 
+    def budget_get(self, name):
+        """Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false."""
+        return self._request("GET", "/v1/budgets?name=%s" % _enc(name))
+
+    def budget_set(self, name, limit):
+        """Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited."""
+        return self._request("POST", "/v1/budgets/set", {"name": name, "limit": limit})
+
+    def budget_reserve(self, name, reservation_id, holder, amount):
+        """Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription)."""
+        return self._request("POST", "/v1/budgets/reserve", {"name": name, "reservation_id": reservation_id, "holder": holder, "amount": amount})
+
+    def budget_commit(self, name, reservation_id, actual):
+        """Commit a reservation with the actual spend (capped at reserved); frees the difference."""
+        return self._request("POST", "/v1/budgets/commit", {"name": name, "reservation_id": reservation_id, "actual": actual})
+
+    def budget_release(self, name, reservation_id):
+        """Release a still-held reservation, returning its full headroom."""
+        return self._request("POST", "/v1/budgets/release", {"name": name, "reservation_id": reservation_id})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))
