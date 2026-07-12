@@ -264,6 +264,28 @@ a still-held reservation's full headroom. `result.output.budget` reports `limit`
 (`org/acme`, `org/acme/workflow/42`). Use to bound swarm spend across
 organization → customer → workflow → agent → tool-call.
 
+### Claims — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `claimGet(name)` | `GET /v1/claims?name=...` | — | `{name, found, claim}` |
+| `claimAssert(name, {subject, predicate, value, confidence, author, evidence, validUntilMs})` | `POST /v1/claims/assert` | `{name, subject, predicate, value, confidence, author, evidence, valid_until_ms}` | `{committed, result}` |
+| `claimSupport(name, {agent})` | `POST /v1/claims/support` | `{name, agent}` | `{committed, result}` |
+| `claimContest(name, {agent, reason})` | `POST /v1/claims/contest` | `{name, agent, reason}` | `{committed, result}` |
+| `claimResolve(name, {accepted})` | `POST /v1/claims/resolve` | `{name, accepted}` | `{committed, result}` |
+| `claimSupersede(name, {supersededBy})` | `POST /v1/claims/supersede` | `{name, superseded_by}` | `{committed, result}` |
+
+A claim is a versioned `subject`/`predicate`/`value` an agent believes, with a
+`confidence` and `evidence`. Others `support` or `contest` it (a contest moves it
+to `contested`); an authorized process `resolve`s it (`accepted`/`rejected`,
+terminal), or a newer claim `supersede`s it. Re-`assert`ing a new value **bumps
+the version** and resets support/contests. `result.output.claim` carries
+`status` (`asserted`/`contested`/`accepted`/`rejected`/`superseded`),
+`supporters`, `contests`, and `version`. This is a blackboard of immutable,
+versioned beliefs — the coordination-grade counterpart to dumping every agent's
+prose into a shared vector store. The rule: semantic similarity may *surface* a
+claim, but only an authorized resolution makes it authoritative. Use for shared
+agent memory where two agents disagree about a fact.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
