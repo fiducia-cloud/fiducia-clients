@@ -22,7 +22,9 @@
 //! `/v1/locks/release`) directly, so they're correct regardless of the older
 //! path-style low-level helpers in [`crate`].
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
