@@ -34,6 +34,11 @@ too. `?param` marks an optional argument.
 | `POST` | `/v1/tasks/complete` | `name`, `worker`, `fencing_token`, `result`? | Complete a task with a durable result under the current fencing token. |
 | `POST` | `/v1/tasks/fail` | `name`, `worker`, `fencing_token`, `retryable`? | Fail a task; retryable requeues it for another worker. |
 | `POST` | `/v1/tasks/cancel` | `name` | Cancel a task (terminal), regardless of owner. |
+| `GET` | `/v1/effects` | `name` | Read an effect's status, approvals, and result; absent reads as found=false. |
+| `POST` | `/v1/effects/prepare` | `name`, `effect_type`, `payload`?, `risk`?, `idempotency_key`, `required_approvals`? | Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved. |
+| `POST` | `/v1/effects/approve` | `name`, `principal` | Record one principal's approval; duplicate approvals count once. |
+| `POST` | `/v1/effects/commit` | `name`, `result`? | Commit an approved effect exactly once, recording the result; a repeat commit replays. |
+| `POST` | `/v1/effects/abort` | `name` | Abort a prepared/approved effect (terminal). |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |

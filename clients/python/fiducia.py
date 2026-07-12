@@ -150,6 +150,26 @@ class FiduciaClient:
         """Cancel a task (terminal), regardless of owner."""
         return self._request("POST", "/v1/tasks/cancel", {"name": name})
 
+    def effect_get(self, name):
+        """Read an effect's status, approvals, and result; absent reads as found=false."""
+        return self._request("GET", "/v1/effects?name=%s" % _enc(name))
+
+    def effect_prepare(self, name, effect_type, idempotency_key, payload=None, risk=None, required_approvals=None):
+        """Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved."""
+        return self._request("POST", "/v1/effects/prepare", {"name": name, "effect_type": effect_type, "payload": payload, "risk": risk, "idempotency_key": idempotency_key, "required_approvals": required_approvals})
+
+    def effect_approve(self, name, principal):
+        """Record one principal's approval; duplicate approvals count once."""
+        return self._request("POST", "/v1/effects/approve", {"name": name, "principal": principal})
+
+    def effect_commit(self, name, result=None):
+        """Commit an approved effect exactly once, recording the result; a repeat commit replays."""
+        return self._request("POST", "/v1/effects/commit", {"name": name, "result": result})
+
+    def effect_abort(self, name):
+        """Abort a prepared/approved effect (terminal)."""
+        return self._request("POST", "/v1/effects/abort", {"name": name})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))

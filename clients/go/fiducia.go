@@ -245,6 +245,38 @@ func (c *Client) TaskCancel(name string) (map[string]any, error) {
 	return c.request("POST", "/v1/tasks/cancel", body)
 }
 
+// EffectGet Read an effect's status, approvals, and result; absent reads as found=false.
+func (c *Client) EffectGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/effects?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// EffectPrepare Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved.
+func (c *Client) EffectPrepare(name string, effectType string, idempotencyKey string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "effect_type": effectType, "idempotency_key": idempotencyKey}
+	merge(body, opts)
+	return c.request("POST", "/v1/effects/prepare", body)
+}
+
+// EffectApprove Record one principal's approval; duplicate approvals count once.
+func (c *Client) EffectApprove(name string, principal string) (map[string]any, error) {
+	body := map[string]any{"name": name, "principal": principal}
+	return c.request("POST", "/v1/effects/approve", body)
+}
+
+// EffectCommit Commit an approved effect exactly once, recording the result; a repeat commit replays.
+func (c *Client) EffectCommit(name string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name}
+	merge(body, opts)
+	return c.request("POST", "/v1/effects/commit", body)
+}
+
+// EffectAbort Abort a prepared/approved effect (terminal).
+func (c *Client) EffectAbort(name string) (map[string]any, error) {
+	body := map[string]any{"name": name}
+	return c.request("POST", "/v1/effects/abort", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))
