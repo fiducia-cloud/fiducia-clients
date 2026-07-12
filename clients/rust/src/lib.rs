@@ -551,6 +551,54 @@ impl FiduciaClient {
         )
     }
 
+    // --- barriers ---
+    /// Read a barrier's arrivals and resolution status. Absent reports
+    /// `found: false`.
+    pub fn barrier_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/barriers?name={}", enc(name)), None)
+    }
+    /// Create (or reconfigure, if still pending) a barrier. `policy` is a JSON
+    /// object like `{"kind":"quorum","required":3}`; `expected` is the
+    /// participant count for `all`/`any_veto` (defaults to 1).
+    pub fn barrier_create(
+        &self,
+        name: &str,
+        policy: Value,
+        expected: Option<u32>,
+        deadline_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/barriers/create",
+            Some(json!({
+                "name": name,
+                "policy": policy,
+                "expected": expected.unwrap_or(1),
+                "deadline_ms": deadline_ms,
+            })),
+        )
+    }
+    /// Record a participant's arrival (or veto). Repeat arrivals by the same
+    /// participant are idempotent.
+    pub fn barrier_arrive(
+        &self,
+        name: &str,
+        participant: &str,
+        weight: Option<u64>,
+        veto: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/barriers/arrive",
+            Some(json!({
+                "name": name,
+                "participant": participant,
+                "weight": weight.unwrap_or(1),
+                "veto": veto,
+            })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
