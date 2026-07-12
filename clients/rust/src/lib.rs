@@ -1686,6 +1686,46 @@ mod tests {
     }
 
     #[test]
+    fn budget_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .budget_reserve(
+                "org/acme/wf/42",
+                "res-1",
+                "research-agent",
+                BudgetAmount { usd_micros: Some(500_000), tokens: Some(100_000), tool_calls: None },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/budgets/reserve",
+            json!({
+                "name": "org/acme/wf/42",
+                "reservation_id": "res-1",
+                "holder": "research-agent",
+                "amount": { "usd_micros": 500_000, "tokens": 100_000 }
+            }),
+        );
+
+        client
+            .budget_commit(
+                "org/acme/wf/42",
+                "res-1",
+                BudgetAmount { usd_micros: Some(200_000), ..Default::default() },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/budgets/commit",
+            json!({ "name": "org/acme/wf/42", "reservation_id": "res-1", "actual": { "usd_micros": 200_000 } }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
