@@ -47,6 +47,25 @@ Every operation takes the `Client` first and returns the parsed JSON body as a
 compare-and-swap semantics). Arbitrary-JSON arguments (`value`, `target`,
 `metadata`, `result`) and fencing tokens are passed as `JsonNode`.
 
+### Blocking acquire
+
+`tryLock` / `trySemaphore` are single-shot (`wait:false`) and return the raw
+acquire response. The blocking helpers `mustLock` / `lock` and `mustSemaphore` /
+`semaphore` actually **block until the grant is held**: the server does not hold
+the connection on `wait:true` (it returns a queued ticket immediately), so they
+acquire and then poll `lockGet` / `semaphoreGet` until this holder is granted, or
+raise `LockTimeout` when the wait budget elapses. They return a held grant you
+can release: `{key, holder, fencing_token, lease_expires_ms}`.
+
+```nim
+let g = c.mustLock("orders/checkout", ttlMs = some(30000),
+                   maxWaitMs = 30000, retryIntervalMs = 250)
+discard c.lockRelease(g["key"].getStr, g["holder"].getStr, g["fencing_token"])
+```
+
+Knobs (with defaults): `holder` (generated `fdc-…` when omitted), `ttlMs`,
+`maxWaitMs = 30000`, `retryIntervalMs = 250`, `maxRetries` (unbounded by default).
+
 ## Errors
 
 Any HTTP status `>= 300` raises a `FiduciaError`:
@@ -58,6 +77,10 @@ except FiduciaError as e:
   echo e.status   # numeric HTTP status
   echo e.body     # parsed JSON error body (or nil)
 ```
+
+The blocking `mustLock` / `lock` / `mustSemaphore` / `semaphore` raise
+`LockTimeout` (fields `keys`, `waitedMs`) if the grant is not held within
+`maxWaitMs`.
 
 ## Method surface
 

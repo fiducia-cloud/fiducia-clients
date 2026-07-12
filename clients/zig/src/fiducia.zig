@@ -16,12 +16,15 @@ const Allocator = std.mem.Allocator;
 const Stringify = std.json.Stringify;
 const Value = std.json.Value;
 
-/// Errors surfaced by the request-issuing methods.
+/// Errors surfaced by the client's methods.
 ///   * `Transport` — the request could not be completed (DNS, connect, TLS, or a
 ///     malformed/undecodable response). A non-2xx *remote* status is NOT reported
 ///     this way; it is surfaced on `Response.status`.
 ///   * `Http`      — returned only by `Response.check`, when status >= 300.
-pub const FiduciaError = error{ Http, Transport };
+///   * `Timeout`   — returned only by the blocking acquire helpers
+///     (`mustLock`/`lock`, `mustSemaphore`/`semaphore`) when `max_wait_ms`
+///     elapses before the caller's `holder` actually holds the lock/permit.
+pub const FiduciaError = error{ Http, Transport, Timeout };
 
 /// Full error set of the request-issuing methods:
 /// `FiduciaError` plus allocation / serialization failures.

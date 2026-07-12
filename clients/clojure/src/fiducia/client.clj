@@ -94,6 +94,50 @@
        data))))
 
 ;; ---------------------------------------------------------------------------
+;; blocking-acquire (poll) helpers
+;; ---------------------------------------------------------------------------
+;;
+;; The server does NOT hold the connection on wait=true: it reserves a FIFO slot
+;; and returns {acquired:false, queued:true} immediately. So the blocking helpers
+;; (`must-lock`/`lock`, `must-semaphore`/`semaphore`) must POLL the matching
+;; `*-get` until this holder actually holds the resource, or a wait budget runs
+;; out. Mirrors the Ruby/Elixir reference clients.
+
+(def ^:private default-acquire-ttl-ms    60000) ; lease TTL for a held grant
+(def ^:private default-max-wait-ms        30000) ; total time to wait to acquire
+(def ^:private default-retry-interval-ms    250) ; poll interval
+
+(defn- gen-holder
+  "Stable, unique holder id used to reserve and then recognise our own slot."
+  []
+  (str "fdc-" (java.util.UUID/randomUUID)))
+
+(defn- now-ms
+  "Monotonic clock in ms (immune to wall-clock adjustments)."
+  []
+  (quot (System/nanoTime) 1000000))
+
+(defn- acquire-output
+  "The map at result.output of an acquire response (or nil)."
+  [resp]
+  (get-in resp [:result :output]))
+
+(defn- grant
+  "A held-grant map the caller releases with its :holder + :fencing_token.
+   `m` is either an acquire `output` or a `*-get` holder entry."
+  [key holder m]
+  {:key key :holder holder
+   :fencing_token    (:fencing_token m)
+   :lease_expires_ms (:lease_expires_ms m)})
+
+(defn- acquire-timeout!
+  [kind key holder max-wait-ms attempts]
+  (throw (ex-info (str "fiducia: timed out acquiring " kind " " (pr-str key)
+                       " after " max-wait-ms "ms (" attempts " polls)")
+                  {:timeout true :kind kind :key key :holder holder
+                   :max_wait_ms max-wait-ms :attempts attempts})))
+
+;; ---------------------------------------------------------------------------
 ;; misc
 ;; ---------------------------------------------------------------------------
 
@@ -129,9 +173,46 @@
   ([c key opts] (lock-acquire c key (assoc opts :wait false))))
 
 (defn must-lock
-  "Blocking acquire (wait=true)."
+  "Blocking acquire: reserve a FIFO slot (wait=true) then POLL `lock-get` until
+   this holder actually holds `key`, or the wait budget is exhausted. (A single
+   wait=true acquire only queues a ticket; it does not hold the lock.)
+
+   Returns a held-grant map — {:key :holder :fencing_token :lease_expires_ms} —
+   which you release with:
+     (lock-release c (:key g) (:holder g) (:fencing_token g))
+
+   opts:
+     :holder            stable holder id      (default: generated \"fdc-<uuid>\")
+     :ttl_ms            lease TTL of the grant (default 60000)
+     :max_wait_ms       total time to wait to acquire (default 30000)
+     :retry_interval_ms poll interval          (default 250)
+     :max_retries       optional cap on poll attempts (default: unlimited)
+
+   Throws `ex-info` with ex-data {:timeout true :key ... :holder ...} if the lock
+   is not acquired within :max_wait_ms (or :max_retries polls)."
   ([c key] (must-lock c key nil))
-  ([c key opts] (lock-acquire c key (assoc opts :wait true))))
+  ([c key opts]
+   (let [holder      (or (:holder opts) (gen-holder))
+         ttl-ms      (get opts :ttl_ms default-acquire-ttl-ms)
+         max-wait-ms (get opts :max_wait_ms default-max-wait-ms)
+         interval    (get opts :retry_interval_ms default-retry-interval-ms)
+         max-retries (:max_retries opts)
+         out         (acquire-output
+                      (lock-acquire c key {:holder holder :ttl_ms ttl-ms :wait true}))]
+     (if (:acquired out)
+       (grant key holder out)
+       (let [deadline (+ (now-ms) (long max-wait-ms))]
+         (loop [attempts 0]
+           (when (and max-retries (>= attempts max-retries))
+             (acquire-timeout! "lock" key holder max-wait-ms attempts))
+           (let [remaining (- deadline (now-ms))]
+             (when (<= remaining 0)
+               (acquire-timeout! "lock" key holder max-wait-ms attempts))
+             (Thread/sleep (long (min (long interval) remaining)))
+             (let [lk (:lock (lock-get c key))]
+               (if (and lk (= (:holder lk) holder) (some? (:fencing_token lk)))
+                 (grant key holder lk)
+                 (recur (inc attempts)))))))))))
 
 (def ^{:doc "Alias for `must-lock` (blocking acquire)."} lock must-lock)
 
@@ -161,8 +242,39 @@
   ([c key limit opts] (semaphore-acquire c key limit (assoc opts :wait false))))
 
 (defn must-semaphore
+  "Blocking acquire: reserve a permit (wait=true) then POLL `semaphore-get` until
+   this holder holds a permit on `key`, or the wait budget is exhausted.
+
+   Returns a held-grant map {:key :holder :fencing_token :lease_expires_ms};
+   release with (semaphore-release c (:key g) (:holder g) (:fencing_token g)).
+   opts are the same as `must-lock`. Throws `ex-info` with ex-data
+   {:timeout true ...} if no permit is acquired within :max_wait_ms."
   ([c key limit] (must-semaphore c key limit nil))
-  ([c key limit opts] (semaphore-acquire c key limit (assoc opts :wait true))))
+  ([c key limit opts]
+   (let [holder      (or (:holder opts) (gen-holder))
+         ttl-ms      (get opts :ttl_ms default-acquire-ttl-ms)
+         max-wait-ms (get opts :max_wait_ms default-max-wait-ms)
+         interval    (get opts :retry_interval_ms default-retry-interval-ms)
+         max-retries (:max_retries opts)
+         out         (acquire-output
+                      (semaphore-acquire c key limit
+                                         {:holder holder :ttl_ms ttl-ms :wait true}))]
+     (if (:acquired out)
+       (grant key holder out)
+       (let [deadline (+ (now-ms) (long max-wait-ms))]
+         (loop [attempts 0]
+           (when (and max-retries (>= attempts max-retries))
+             (acquire-timeout! "semaphore" key holder max-wait-ms attempts))
+           (let [remaining (- deadline (now-ms))]
+             (when (<= remaining 0)
+               (acquire-timeout! "semaphore" key holder max-wait-ms attempts))
+             (Thread/sleep (long (min (long interval) remaining)))
+             (let [slot (->> (get-in (semaphore-get c key) [:semaphore :holders])
+                             (filter #(= (:holder %) holder))
+                             first)]
+               (if (and slot (some? (:fencing_token slot)))
+                 (grant key holder slot)
+                 (recur (inc attempts)))))))))))
 
 (def ^{:doc "Alias for `must-semaphore` (blocking acquire)."} semaphore must-semaphore)
 

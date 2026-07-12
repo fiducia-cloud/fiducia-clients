@@ -27,10 +27,13 @@ using Fiducia
 
 c = Client("https://api.fiducia.cloud")
 
-# Acquire a lock, then release it with the fencing token.
+# Block until the lock is actually HELD (polls; generates a holder), then release.
+held = must_lock(c, "orders/checkout"; ttl_ms = 30000, max_wait_ms = 5000)
+lock_release(c, "orders/checkout", held["holder"], held["fencing_token"])
+
+# Low-level, single request: returns the raw response (may be a queued ticket).
 grant = lock_acquire(c, "orders/checkout"; ttl_ms = 30000)
 out = grant["result"]["output"]
-lock_release(c, "orders/checkout", "worker-a", out["fencing_token"])
 
 # Config KV with a compare-and-swap guard.
 kv_put(c, "flags/rollout", "on"; ttl_ms = 60000, prev_revision = 0)
@@ -48,8 +51,14 @@ disable). Requests are issued exactly once — they never auto-follow redirects 
 are never auto-retried — so a mutating call is never silently duplicated and a
 3xx from the edge surfaces as a `FiduciaError`.
 
-`lock(c, key; ...)` is the blocking alias of `must_lock`; because Julia already
-exports `lock`, it is added as a method on `Base.lock` and is callable as
+`must_lock`/`lock` and `must_semaphore`/`semaphore` BLOCK until the lock or permit
+is actually held. Because the server only reserves a FIFO slot on `wait = true`,
+they poll `lock_get`/`semaphore_get` until this client's holder owns it, then return
+a held-grant `Dict` (`"holder"`, `"fencing_token"`, `"lease_expires_ms"`). A
+`holder` is generated when not supplied, and they throw `LockTimeout` if the grant
+does not arrive within `max_wait_ms` (default 30000; tune `retry_interval_ms`,
+`max_retries`). `try_lock`/`try_semaphore` stay single-shot (`wait = false`) and
+return the raw response. `lock` is a method on `Base.lock`, callable as
 `lock(c, key)` without importing anything extra.
 
 ## Errors
@@ -63,6 +72,10 @@ catch err
     err isa FiduciaError && @warn "fiducia failed" err.status err.body
 end
 ```
+
+The blocking `must_lock`/`must_semaphore`/`lock`/`semaphore` helpers throw
+`LockTimeout` (carrying `keys` and `waited_ms`) when the wait budget elapses before
+the grant is held.
 
 ## Method surface
 

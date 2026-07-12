@@ -18,15 +18,43 @@ import gleam/httpc
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import gleam/uri
 
-/// A failed call: either a non-2xx HTTP response (`Http`, carrying the numeric
-/// status and the parsed JSON body as a `Dynamic`) or a transport/network
-/// failure (`Transport`).
+/// A failed call: a non-2xx HTTP response (`Http`, carrying the numeric status
+/// and the parsed JSON body as a `Dynamic`), a transport/network failure
+/// (`Transport`), or a blocking acquire that never became held within its wait
+/// budget (`Timeout`, carrying the configured `max_wait_ms` in milliseconds).
 pub type FiduciaError {
   Http(status: Int, body: Dynamic)
   Transport(message: String)
+  Timeout(waited_ms: Int)
+}
+
+/// A held lock or semaphore grant returned by the blocking `must_*` / `lock` /
+/// `semaphore` helpers. It proves you hold `key` as `holder`; pass `holder` and
+/// `fencing_token` to the matching `*_release` to give it back.
+pub type Grant {
+  Grant(
+    key: String,
+    holder: String,
+    fencing_token: Int,
+    lease_expires_ms: Option(Int),
+  )
+}
+
+/// Retry budget for the blocking `must_*` / `lock` / `semaphore` helpers:
+/// `max_wait_ms` is the total time to keep polling, `retry_interval_ms` the gap
+/// between polls, and `max_retries` an optional hard cap on poll attempts.
+pub type Retry {
+  Retry(max_wait_ms: Int, retry_interval_ms: Int, max_retries: Option(Int))
+}
+
+/// Default retry budget, matching the reference clients: wait up to 30s, poll
+/// every 250ms, with no fixed attempt cap.
+pub fn default_retry() -> Retry {
+  Retry(max_wait_ms: 30_000, retry_interval_ms: 250, max_retries: None)
 }
 
 /// An opaque handle to a Fiducia endpoint. Build it with `new`.
@@ -110,14 +138,26 @@ pub fn try_lock(
   lock_acquire(client, key, holder, ttl_ms, False)
 }
 
-/// `lock_acquire` with `wait=true`: reserve a FIFO slot.
+/// Blocking acquire: acquire `key` now, or reserve a FIFO slot and POLL
+/// `lock_get` until we hold it or the `retry` budget elapses. Unlike the raw
+/// `lock_acquire(wait=true)` (which returns immediately with a queued ticket),
+/// this returns a held `Grant` or `Error(Timeout(..))`. `holder` defaults to a
+/// generated id and `ttl_ms` to 60s when `None`; use `default_retry()` for the
+/// standard 30s/250ms budget.
 pub fn must_lock(
   client: Client,
   key: String,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  lock_acquire(client, key, holder, ttl_ms, True)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  let hold = resolve_holder(holder)
+  let ttl = Some(option.unwrap(ttl_ms, 60_000))
+  use resp <- result.try(lock_acquire(client, key, Some(hold), ttl, True))
+  case output_grant(resp, key, hold) {
+    Some(grant) -> Ok(grant)
+    None -> poll_lock(client, key, hold, now_ms() + retry.max_wait_ms, retry, 0)
+  }
 }
 
 /// Alias of `must_lock`.
@@ -126,8 +166,9 @@ pub fn lock(
   key: String,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  must_lock(client, key, holder, ttl_ms)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  must_lock(client, key, holder, ttl_ms, retry)
 }
 
 /// `POST /v1/locks/release` — release the whole grant by its fencing token.
@@ -189,15 +230,34 @@ pub fn try_semaphore(
   semaphore_acquire(client, key, limit, holder, ttl_ms, False)
 }
 
-/// `semaphore_acquire` with `wait=true`.
+/// Blocking acquire: take a permit now, or POLL `semaphore_get` until we hold
+/// one or the `retry` budget elapses. Returns a held `Grant` or
+/// `Error(Timeout(..))` (contrast the raw `semaphore_acquire(wait=true)`, which
+/// returns a queued ticket immediately). `holder` defaults to a generated id and
+/// `ttl_ms` to 60s when `None`.
 pub fn must_semaphore(
   client: Client,
   key: String,
   limit: Int,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  semaphore_acquire(client, key, limit, holder, ttl_ms, True)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  let hold = resolve_holder(holder)
+  let ttl = Some(option.unwrap(ttl_ms, 60_000))
+  use resp <- result.try(semaphore_acquire(
+    client,
+    key,
+    limit,
+    Some(hold),
+    ttl,
+    True,
+  ))
+  case output_grant(resp, key, hold) {
+    Some(grant) -> Ok(grant)
+    None ->
+      poll_semaphore(client, key, hold, now_ms() + retry.max_wait_ms, retry, 0)
+  }
 }
 
 /// Alias of `must_semaphore`.
@@ -207,8 +267,9 @@ pub fn semaphore(
   limit: Int,
   holder: Option(String),
   ttl_ms: Option(Int),
-) -> Result(Dynamic, FiduciaError) {
-  must_semaphore(client, key, limit, holder, ttl_ms)
+  retry: Retry,
+) -> Result(Grant, FiduciaError) {
+  must_semaphore(client, key, limit, holder, ttl_ms, retry)
 }
 
 /// `POST /v1/semaphores/release` — return one permit.
@@ -611,6 +672,200 @@ pub fn service_list(client: Client) -> Result(Dynamic, FiduciaError) {
 }
 
 // --- internals ---
+
+// -- blocking acquire: poll loops behind must_lock / must_semaphore --
+
+/// Resolve the holder id: caller-supplied, else a generated stable id.
+fn resolve_holder(holder: Option(String)) -> String {
+  case holder {
+    Some(h) -> h
+    None -> gen_holder()
+  }
+}
+
+/// Pull a held grant out of an acquire response's `result.output`. `Some` only
+/// when `acquired == true` with a fencing token; `None` means queued → poll.
+fn output_grant(resp: Dynamic, key: String, holder: String) -> Option(Grant) {
+  let decoder = {
+    use acquired <- decode.optional_field("acquired", False, decode.bool)
+    use token <- decode.optional_field(
+      "fencing_token",
+      None,
+      decode.optional(decode.int),
+    )
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(acquired, token, lease))
+  }
+  case decode.run(resp, decode.at(["result", "output"], decoder)) {
+    Ok(#(True, Some(token), lease)) ->
+      Some(Grant(
+        key: key,
+        holder: holder,
+        fencing_token: token,
+        lease_expires_ms: lease,
+      ))
+    _ -> None
+  }
+}
+
+/// True once an optional `max_retries` cap has been reached. Kept out of the
+/// `case` guard so the client still compiles on Gleam 1.0 (ordering comparisons
+/// in guards need 1.3+).
+fn retries_exhausted(max_retries: Option(Int), attempt: Int) -> Bool {
+  case max_retries {
+    Some(cap) -> attempt >= cap
+    None -> False
+  }
+}
+
+/// Poll `lock_get(key)` until we hold the lock or the deadline / attempt cap is
+/// hit. A union lock is held iff we hold its first member, so single-key polling
+/// is correct here.
+fn poll_lock(
+  client: Client,
+  key: String,
+  holder: String,
+  deadline: Int,
+  retry: Retry,
+  attempt: Int,
+) -> Result(Grant, FiduciaError) {
+  case retries_exhausted(retry.max_retries, attempt) {
+    True -> Error(Timeout(retry.max_wait_ms))
+    False -> {
+      let remaining = deadline - now_ms()
+      case remaining <= 0 {
+        True -> Error(Timeout(retry.max_wait_ms))
+        False -> {
+          nap(retry.retry_interval_ms, remaining)
+          use resp <- result.try(lock_get(client, key))
+          case lock_held_by(resp, key, holder) {
+            Some(grant) -> Ok(grant)
+            None -> poll_lock(client, key, holder, deadline, retry, attempt + 1)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Poll `semaphore_get(key)` until our holder holds a permit or the budget is
+/// exhausted.
+fn poll_semaphore(
+  client: Client,
+  key: String,
+  holder: String,
+  deadline: Int,
+  retry: Retry,
+  attempt: Int,
+) -> Result(Grant, FiduciaError) {
+  case retries_exhausted(retry.max_retries, attempt) {
+    True -> Error(Timeout(retry.max_wait_ms))
+    False -> {
+      let remaining = deadline - now_ms()
+      case remaining <= 0 {
+        True -> Error(Timeout(retry.max_wait_ms))
+        False -> {
+          nap(retry.retry_interval_ms, remaining)
+          use resp <- result.try(semaphore_get(client, key))
+          case semaphore_held_by(resp, key, holder) {
+            Some(grant) -> Ok(grant)
+            None ->
+              poll_semaphore(client, key, holder, deadline, retry, attempt + 1)
+          }
+        }
+      }
+    }
+  }
+}
+
+/// `lock_get` response → `Some(Grant)` iff `resp.lock.holder == holder` with a
+/// non-null fencing token.
+fn lock_held_by(resp: Dynamic, key: String, holder: String) -> Option(Grant) {
+  let decoder = {
+    use who <- decode.field("holder", decode.string)
+    use token <- decode.field("fencing_token", decode.int)
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(who, token, lease))
+  }
+  case decode.run(resp, decode.at(["lock"], decoder)) {
+    Ok(#(who, token, lease)) if who == holder ->
+      Some(Grant(
+        key: key,
+        holder: holder,
+        fencing_token: token,
+        lease_expires_ms: lease,
+      ))
+    _ -> None
+  }
+}
+
+/// `semaphore_get` response → `Some(Grant)` for the `semaphore.holders` entry
+/// matching our holder with a non-null fencing token.
+fn semaphore_held_by(
+  resp: Dynamic,
+  key: String,
+  holder: String,
+) -> Option(Grant) {
+  let entry = {
+    use who <- decode.field("holder", decode.string)
+    use token <- decode.optional_field(
+      "fencing_token",
+      None,
+      decode.optional(decode.int),
+    )
+    use lease <- decode.optional_field(
+      "lease_expires_ms",
+      None,
+      decode.optional(decode.int),
+    )
+    decode.success(#(who, token, lease))
+  }
+  case
+    decode.run(resp, decode.at(["semaphore", "holders"], decode.list(entry)))
+  {
+    Ok(holders) ->
+      holders
+      |> list.find_map(fn(h) {
+        case h {
+          #(who, Some(token), lease) if who == holder ->
+            Ok(Grant(
+              key: key,
+              holder: holder,
+              fencing_token: token,
+              lease_expires_ms: lease,
+            ))
+          _ -> Error(Nil)
+        }
+      })
+      |> option.from_result
+    Error(_) -> None
+  }
+}
+
+/// Sleep for `min(interval, remaining)` ms (both are > 0 at the call site).
+fn nap(interval: Int, remaining: Int) -> Nil {
+  case interval < remaining {
+    True -> sleep(interval)
+    False -> sleep(remaining)
+  }
+}
+
+@external(erlang, "fiducia_ffi", "monotonic_ms")
+fn now_ms() -> Int
+
+@external(erlang, "fiducia_ffi", "sleep")
+fn sleep(ms: Int) -> Nil
+
+@external(erlang, "fiducia_ffi", "gen_holder")
+fn gen_holder() -> String
 
 /// Default per-request timeout (connect + response) in milliseconds. This equals
 /// gleam_httpc's own default; it is pinned here so the value is explicit and does

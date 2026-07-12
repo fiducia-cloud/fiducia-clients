@@ -26,6 +26,23 @@ public struct FiduciaError: Error, CustomStringConvertible {
     public var description: String { "fiducia: HTTP \(status)" }
 }
 
+/// Thrown by the blocking `mustLock`/`lock`/`mustSemaphore`/`semaphore` helpers
+/// when the lock or permit is not held within the wait budget. Carries the key(s)
+/// waited on and the elapsed budget in milliseconds.
+public struct FiduciaTimeout: Error, CustomStringConvertible {
+    public let keys: [String]
+    public let waitedMs: Int
+
+    public init(keys: [String], waitedMs: Int) {
+        self.keys = keys
+        self.waitedMs = waitedMs
+    }
+
+    public var description: String {
+        "fiducia: timed out after \(waitedMs)ms waiting for \(keys.joined(separator: ", "))"
+    }
+}
+
 /// Thin async HTTP wrapper over the fiducia.cloud contract.
 ///
 /// Every method returns the parsed JSON response as `Any` (a `[String: Any]`,
@@ -100,13 +117,28 @@ public final class FiduciaClient {
         try await lockAcquire(key, holder: holder, ttlMs: ttlMs, wait: false)
     }
 
-    public func mustLock(_ key: String, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await lockAcquire(key, holder: holder, ttlMs: ttlMs, wait: true)
+    /// Blocks until the lock is actually HELD, then returns a held-grant dictionary
+    /// (`["key", "holder", "fencing_token", "lease_expires_ms"]`) — everything a
+    /// caller needs to `lockRelease`. The server does not hold the connection on
+    /// `wait:true`; it reserves a FIFO slot and returns a queued ticket
+    /// immediately. So this issues the acquire and then POLLS `lockGet` every
+    /// `retryIntervalMs` until `holder` holds the lock, or the `maxWaitMs` budget
+    /// (or optional `maxRetries`) is exhausted — in which case it throws
+    /// `FiduciaTimeout`. Unlike `tryLock`, it never returns a not-yet-held result.
+    public func mustLock(_ key: String, holder: String? = nil, ttlMs: Int? = nil,
+                         maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        let who = holder ?? Self.genHolder()
+        let out = Self.output(try await lockAcquire(key, holder: who, ttlMs: ttlMs ?? 60000, wait: true))
+        if out["acquired"] as? Bool == true {
+            return Self.heldGrant(key: key, holder: who, fencingToken: out["fencing_token"], leaseExpiresMs: out["lease_expires_ms"])
+        }
+        return try await pollLockUntilHeld(key: key, holder: who, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
-    /// Alias for `mustLock`.
-    public func lock(_ key: String, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await mustLock(key, holder: holder, ttlMs: ttlMs)
+    /// Alias for `mustLock` — blocks by polling until held or `FiduciaTimeout`.
+    public func lock(_ key: String, holder: String? = nil, ttlMs: Int? = nil,
+                     maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        try await mustLock(key, holder: holder, ttlMs: ttlMs, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
     /// `key` is accepted for call-site symmetry but is intentionally omitted from the body.
@@ -131,13 +163,26 @@ public final class FiduciaClient {
         try await semaphoreAcquire(key, limit: limit, holder: holder, ttlMs: ttlMs, wait: false)
     }
 
-    public func mustSemaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await semaphoreAcquire(key, limit: limit, holder: holder, ttlMs: ttlMs, wait: true)
+    /// Blocks until a semaphore permit is actually HELD, then returns a held-grant
+    /// dictionary (`["key", "holder", "fencing_token", "lease_expires_ms"]`). Like
+    /// `mustLock`, the acquire returns a queued ticket immediately, so this POLLS
+    /// `semaphoreGet` until `holder` appears among the permit holders with a
+    /// fencing token, or the `maxWaitMs` budget (or optional `maxRetries`) is
+    /// exhausted — then it throws `FiduciaTimeout`.
+    public func mustSemaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil,
+                              maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        let who = holder ?? Self.genHolder()
+        let out = Self.output(try await semaphoreAcquire(key, limit: limit, holder: who, ttlMs: ttlMs ?? 60000, wait: true))
+        if out["acquired"] as? Bool == true {
+            return Self.heldGrant(key: key, holder: who, fencingToken: out["fencing_token"], leaseExpiresMs: out["lease_expires_ms"])
+        }
+        return try await pollSemaphoreUntilHeld(key: key, holder: who, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
-    /// Alias for `mustSemaphore`.
-    public func semaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil) async throws -> Any {
-        try await mustSemaphore(key, limit: limit, holder: holder, ttlMs: ttlMs)
+    /// Alias for `mustSemaphore` — blocks by polling until held or `FiduciaTimeout`.
+    public func semaphore(_ key: String, limit: Int, holder: String? = nil, ttlMs: Int? = nil,
+                          maxWaitMs: Int = 30000, retryIntervalMs: Int = 250, maxRetries: Int? = nil) async throws -> Any {
+        try await mustSemaphore(key, limit: limit, holder: holder, ttlMs: ttlMs, maxWaitMs: maxWaitMs, retryIntervalMs: retryIntervalMs, maxRetries: maxRetries)
     }
 
     public func semaphoreRelease(_ key: String, holder: String, fencingToken: Any) async throws -> Any {
@@ -290,6 +335,68 @@ public final class FiduciaClient {
 
     public func serviceDeregister(_ service: String, instanceId: String) async throws -> Any {
         try await request("DELETE", "/v1/services/\(Self.enc(service))/instances/\(Self.enc(instanceId))")
+    }
+
+    // MARK: - blocking acquire (client-side poll loop)
+
+    // A stable holder id, generated when the caller supplies none, so a held grant
+    // stays attributable across the acquire + poll round-trips.
+    private static func genHolder() -> String { "fdc-" + UUID().uuidString.lowercased() }
+
+    // `resp.result.output`, or an empty dict for any shape that doesn't match.
+    private static func output(_ resp: Any) -> [String: Any] {
+        ((resp as? [String: Any])?["result"] as? [String: Any])?["output"] as? [String: Any] ?? [:]
+    }
+
+    // Normalized "you hold it" grant — the fields a caller needs to release.
+    private static func heldGrant(key: String, holder: String, fencingToken: Any?, leaseExpiresMs: Any?) -> [String: Any] {
+        var grant: [String: Any] = ["key": key, "holder": holder, "fencing_token": fencingToken ?? NSNull()]
+        if let lease = leaseExpiresMs, !(lease is NSNull) { grant["lease_expires_ms"] = lease }
+        return grant
+    }
+
+    /// Polls `lockGet(key)` on a monotonic (`DispatchTime`) deadline until `holder`
+    /// holds it (a union lock is held iff you hold the first member), sleeping
+    /// `min(retryIntervalMs, remaining)` between checks. Throws `FiduciaTimeout`
+    /// once the budget or `maxRetries` is spent.
+    private func pollLockUntilHeld(key: String, holder: String, maxWaitMs: Int,
+                                   retryIntervalMs: Int, maxRetries: Int?) async throws -> Any {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ UInt64(max(0, maxWaitMs)) &* 1_000_000
+        var attempts = 0
+        while maxRetries == nil || attempts < maxRetries! {
+            attempts += 1
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now >= deadline { break }
+            try await Task.sleep(nanoseconds: min(UInt64(max(0, retryIntervalMs)) &* 1_000_000, deadline &- now))
+            if let lock = (try await lockGet(key) as? [String: Any])?["lock"] as? [String: Any],
+               lock["holder"] as? String == holder,
+               let token = lock["fencing_token"], !(token is NSNull) {
+                return Self.heldGrant(key: key, holder: holder, fencingToken: token, leaseExpiresMs: lock["lease_expires_ms"])
+            }
+        }
+        throw FiduciaTimeout(keys: [key], waitedMs: maxWaitMs)
+    }
+
+    /// Polls `semaphoreGet(key)` until `holder` appears among `semaphore.holders`
+    /// with a non-null fencing token, else throws `FiduciaTimeout`.
+    private func pollSemaphoreUntilHeld(key: String, holder: String, maxWaitMs: Int,
+                                        retryIntervalMs: Int, maxRetries: Int?) async throws -> Any {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ UInt64(max(0, maxWaitMs)) &* 1_000_000
+        var attempts = 0
+        while maxRetries == nil || attempts < maxRetries! {
+            attempts += 1
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now >= deadline { break }
+            try await Task.sleep(nanoseconds: min(UInt64(max(0, retryIntervalMs)) &* 1_000_000, deadline &- now))
+            let semaphore = (try await semaphoreGet(key) as? [String: Any])?["semaphore"] as? [String: Any]
+            if let holders = semaphore?["holders"] as? [Any] {
+                for case let entry as [String: Any] in holders
+                where entry["holder"] as? String == holder && !((entry["fencing_token"] ?? NSNull()) is NSNull) {
+                    return Self.heldGrant(key: key, holder: holder, fencingToken: entry["fencing_token"], leaseExpiresMs: entry["lease_expires_ms"])
+                }
+            }
+        }
+        throw FiduciaTimeout(keys: [key], waitedMs: maxWaitMs)
     }
 
     // MARK: - request core

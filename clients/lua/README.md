@@ -24,15 +24,17 @@ This pulls in `luasocket`, `luasec`, and `dkjson`. Requires Lua >= 5.1.
 local Fiducia = require("fiducia")
 local c = Fiducia.new("https://api.fiducia.cloud")
 
--- Acquire, use, release a lock.
-local grant = c:lock_acquire("orders/checkout", { holder = "worker-a", ttl_ms = 30000 })
-local token = grant.result.output.fencing_token
--- ... do work guarded by the fencing token ...
-c:lock_release("orders/checkout", "worker-a", token)
+-- Block until the lock is held, use it, release it.
+local grant = c:must_lock("orders/checkout", { holder = "worker-a", ttl_ms = 30000 })
+-- ... do work guarded by grant.fencing_token ...
+grant.release()   -- or: c:lock_release(grant.key, grant.holder, grant.fencing_token)
 ```
 
-Each operation returns the decoded JSON response as a Lua table (or `nil` for an
-empty body). Methods are called with `:` so they receive the client as `self`.
+`must_lock`/`lock` and `must_semaphore`/`semaphore` **block**: they poll until the
+lock/permit is held or the wait budget elapses (see [Blocking helpers](#blocking-helpers)).
+They return a **grant** table `{ key, holder, fencing_token, lease_expires_ms, release() }`.
+Every other operation returns the decoded JSON response as a Lua table (or `nil`
+for an empty body). Methods are called with `:` so they receive the client as `self`.
 
 Optional named parameters are passed as a trailing `opts` table; only the fields
 you set are sent (nil fields are omitted from the request body, which matters for
@@ -68,15 +70,15 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 - `c:lock_get(key)`
 - `c:lock_acquire(key, { holder, ttl_ms, wait = true })`
 - `c:lock_acquire_many(keys, { holder, ttl_ms, wait = true })` — `keys` is a string array (union lock)
-- `c:try_lock(key, { holder, ttl_ms })` — `wait = false`
-- `c:must_lock(key, { holder, ttl_ms })` / `c:lock(...)` — `wait = true`
+- `c:try_lock(key, { holder, ttl_ms })` — `wait = false`, single shot; returns the raw response
+- `c:must_lock(key, { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries })` / `c:lock(...)` — **blocks** (polls) until held; returns a grant (see [Blocking helpers](#blocking-helpers))
 - `c:lock_release(key, holder, fencing_token)` — `key` is accepted for symmetry but not sent
 
 **semaphores**
 - `c:semaphore_get(key)`
 - `c:semaphore_acquire(key, limit, { holder, ttl_ms, wait = true })`
-- `c:try_semaphore(key, limit, { holder, ttl_ms })` — `wait = false`
-- `c:must_semaphore(key, limit, { holder, ttl_ms })` / `c:semaphore(...)` — `wait = true`
+- `c:try_semaphore(key, limit, { holder, ttl_ms })` — `wait = false`, single shot; returns the raw response
+- `c:must_semaphore(key, limit, { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries })` / `c:semaphore(...)` — **blocks** (polls) until held; returns a grant (see [Blocking helpers](#blocking-helpers))
 - `c:semaphore_release(key, holder, fencing_token)`
 
 **idempotency**
@@ -121,9 +123,42 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 
 ## Notes
 
-- **Thin by design.** The `try_*` / `must_*` / `lock` / `semaphore` helpers only
-  flip the `wait` flag on the corresponding acquire call — there is no
-  client-side wait/poll loop.
+### Blocking helpers
+
+`try_lock`/`try_semaphore` set `wait = false` and return the raw acquire response
+in one shot (a grant if free right now, otherwise the queued/not-acquired response) —
+no polling.
+
+`must_lock`/`lock` and `must_semaphore`/`semaphore` **block until held**. The server
+does not hold the connection on `wait = true`; it reserves a FIFO slot and returns
+immediately, so these helpers poll:
+
+1. acquire with `wait = true` (using a caller-supplied `holder` or a generated
+   `fdc-…` id, and `ttl_ms` defaulting to `60000`);
+2. if the acquire already reports `acquired`, return the grant;
+3. otherwise poll `lock_get` / `semaphore_get` every `retry_interval_ms` (default
+   `250`) until our `holder` appears **with a `fencing_token`**, or `max_wait_ms`
+   (default `30000`, or an optional `max_retries`) elapses.
+
+On success they return a grant table `{ key, holder, fencing_token,
+lease_expires_ms, release() }` — call `grant.release()` (or pass the fields to
+`c:lock_release` / `c:semaphore_release`) when done. On timeout they **raise** (so
+wrap blocking calls in `pcall`) a timeout table
+`{ status = 0, timeout = true, keys, waited_ms, body }`:
+
+```lua
+local ok, res = pcall(function()
+  return c:must_lock("orders/checkout", { max_wait_ms = 5000, retry_interval_ms = 200 })
+end)
+if ok then
+  -- res is the held grant
+  res.release()
+elseif res.timeout then
+  print("gave up after " .. res.waited_ms .. "ms")
+else
+  print("error: HTTP " .. tostring(res.status), res.body)
+end
+```
 - **TLS (fail-closed).** For `https://` URLs the client verifies the server
   certificate by default (`verify = "peer"`) — luasec's insecure `verify = "none"`
   default is **not** used. A CA bundle is auto-detected at request time from, in
