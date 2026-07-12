@@ -251,11 +251,16 @@ impl FiduciaClient {
             let got = self.request("GET", &format!("/v1/locks?key={}", enc(probe)), None)?;
             let lock = &got["lock"];
             if lock["holder"].as_str() == Some(holder.as_str()) {
-                if let Some(token) = lock["fencing_token"].as_u64() {
+                let fencing_tokens = extract_fencing_tokens(lock);
+                if let Some(token) = lock["fencing_token"]
+                    .as_u64()
+                    .or_else(|| fencing_tokens.values().copied().next())
+                {
                     return Ok(Some(LockHandle {
                         keys: keys.iter().map(|k| k.to_string()).collect(),
                         holder,
                         fencing_token: token,
+                        fencing_tokens,
                         lease_expires_ms: lock["lease_expires_ms"].as_u64(),
                     }));
                 }
