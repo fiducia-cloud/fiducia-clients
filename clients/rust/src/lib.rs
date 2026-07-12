@@ -1160,6 +1160,50 @@ mod tests {
     }
 
     #[test]
+    fn barrier_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client.barrier_get("release/reviewers").unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/barriers?name=release%2Freviewers",
+            Value::Null,
+        );
+
+        client
+            .barrier_create(
+                "release/reviewers",
+                json!({ "kind": "quorum", "required": 2 }),
+                Some(3),
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/barriers/create",
+            json!({
+                "name": "release/reviewers",
+                "policy": { "kind": "quorum", "required": 2 },
+                "expected": 3,
+                "deadline_ms": null
+            }),
+        );
+
+        client
+            .barrier_arrive("release/reviewers", "reviewer-a", None, false)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/barriers/arrive",
+            json!({ "name": "release/reviewers", "participant": "reviewer-a", "weight": 1, "veto": false }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
