@@ -223,6 +223,26 @@ Only the offered recipient may accept/reject (`{ ok: false, reason:
 ownership with `from` (`status` `rejected`/`expired`). Use for triage→specialist
 delegation and research→legal ticket transfer across agent runtimes.
 
+### Decisions — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `decisionGet(name)` | `GET /v1/decisions?name=...` | — | `{name, found, decision}` |
+| `decisionPropose(name, {question, options, policy, deadlineMs})` | `POST /v1/decisions/propose` | `{name, question, options, policy, deadline_ms}` | `{committed, result}` |
+| `decisionVote(name, {voter, option, confidence, weight, veto, evidence})` | `POST /v1/decisions/vote` | `{name, voter, option, confidence, weight, veto, evidence}` | `{committed, result}` |
+
+A decision is richer than a raw vote: it declares typed `options` and a
+resolution `policy.kind` — `plurality` (most total weight once `min_votes` cast),
+`threshold` (first option to reach `required_weight`), or `unanimous`. Each vote
+carries a chosen `option` (omit to abstain), a `confidence`, a `weight`
+(specialists count more), an optional `veto`, and `evidence` references.
+Re-voting **replaces** a voter's prior vote; a vote for an option outside the
+declared set is rejected. A veto aborts (`status: vetoed`); ties break to the
+lexicographically smallest option; a passed `deadline_ms` forces a plurality
+outcome (`timed_out` if there's nothing to decide). `result.output.decision`
+carries `status` (`open`/`resolved`/`vetoed`/`timed_out`), `winner`, and per-option
+`tallies`. Don't let agents vote from copied conclusions — record independent
+`evidence`. Use for deployment-safety votes, evaluator panels, and debate systems.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
