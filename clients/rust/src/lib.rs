@@ -1290,7 +1290,8 @@ mod tests {
             &rx,
             "POST",
             "/v1/semaphores/acquire",
-            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 2 }),
+            // max=0 is invalid and clamped to 1 (a mutex); higher values pass through.
+            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 1 }),
         );
 
         client
