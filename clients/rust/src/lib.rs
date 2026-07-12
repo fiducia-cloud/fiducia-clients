@@ -216,7 +216,10 @@ impl FiduciaClient {
         self.request_with_control(
             "POST",
             "/v1/semaphores/acquire",
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(2) })),
+            // Send the requested limit verbatim. `max=1` is a mutex (per the
+            // shared LockAcquireRequest contract); clamping it up to 2 would let
+            // two holders enter a critical section that must admit exactly one.
+            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max })),
             control,
             true,
         )
