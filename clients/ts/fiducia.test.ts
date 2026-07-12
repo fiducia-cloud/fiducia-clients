@@ -1,3 +1,4 @@
+// Unit tests for the generated Fiducia TypeScript client.
 import assert from "node:assert/strict";
 import test from "node:test";
 
