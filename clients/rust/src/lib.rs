@@ -1450,6 +1450,46 @@ mod tests {
     }
 
     #[test]
+    fn handoff_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .handoff_offer(
+                "ticket-482/handoff",
+                "task:ticket-482",
+                "research-agent",
+                "legal-agent",
+                7,
+                json!({ "summary": "needs legal review" }),
+                Some(30_000),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/handoffs/offer",
+            json!({
+                "name": "ticket-482/handoff",
+                "resource": "task:ticket-482",
+                "from": "research-agent",
+                "to": "legal-agent",
+                "from_token": 7,
+                "context": { "summary": "needs legal review" },
+                "ttl_ms": 30_000
+            }),
+        );
+
+        client.handoff_accept("ticket-482/handoff", "legal-agent").unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/handoffs/accept",
+            json!({ "name": "ticket-482/handoff", "to": "legal-agent" }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
