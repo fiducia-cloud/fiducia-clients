@@ -556,6 +556,74 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read an effect's status, approvals, and result; absent reads as found=false.
+    #[wasm_bindgen(js_name = effectGet)]
+    pub async fn effect_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/effects");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved.
+    #[wasm_bindgen(js_name = effectPrepare)]
+    pub async fn effect_prepare(&self, name: String, effect_type: String, idempotency_key: String, payload: JsValue, risk: Option<String>, required_approvals: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/effects/prepare");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("effect_type".to_string(), serde_json::Value::String(effect_type));
+        if !payload.is_null() && !payload.is_undefined() {
+            _body.insert("payload".to_string(), serde_wasm_bindgen::from_value(payload).map_err(|e| err(0, e.into()))?);
+        }
+        if let Some(v) = risk {
+            _body.insert("risk".to_string(), serde_json::json!(v));
+        }
+        _body.insert("idempotency_key".to_string(), serde_json::Value::String(idempotency_key));
+        if let Some(v) = required_approvals {
+            _body.insert("required_approvals".to_string(), serde_json::json!(checked_int(v, "required_approvals")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Record one principal's approval; duplicate approvals count once.
+    #[wasm_bindgen(js_name = effectApprove)]
+    pub async fn effect_approve(&self, name: String, principal: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/effects/approve");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("principal".to_string(), serde_json::Value::String(principal));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Commit an approved effect exactly once, recording the result; a repeat commit replays.
+    #[wasm_bindgen(js_name = effectCommit)]
+    pub async fn effect_commit(&self, name: String, result: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/effects/commit");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        if !result.is_null() && !result.is_undefined() {
+            _body.insert("result".to_string(), serde_wasm_bindgen::from_value(result).map_err(|e| err(0, e.into()))?);
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Abort a prepared/approved effect (terminal).
+    #[wasm_bindgen(js_name = effectAbort)]
+    pub async fn effect_abort(&self, name: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/effects/abort");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

@@ -185,6 +185,26 @@ ends `failed`. `cancel` is terminal. `result.output.task.status` is `pending`,
 This is the coordination backbone under agent work-items: the node owns *who may
 act*; the application database owns the rich task detail (keep `payload` small).
 
+### Effects (approval escrow) — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `effectGet(name)` | `GET /v1/effects?name=...` | — | `{name, found, effect}` |
+| `effectPrepare(name, {effectType, payload, risk, idempotencyKey, requiredApprovals})` | `POST /v1/effects/prepare` | `{name, effect_type, payload, risk, idempotency_key, required_approvals}` | `{committed, result}` |
+| `effectApprove(name, {principal})` | `POST /v1/effects/approve` | `{name, principal}` | `{committed, result}` |
+| `effectCommit(name, {result})` | `POST /v1/effects/commit` | `{name, result}` | `{committed, result}` |
+| `effectAbort(name)` | `POST /v1/effects/abort` | `{name}` | `{committed, result}` |
+
+Separate *preparing* a dangerous action from *authorizing* and *executing* it.
+`prepare` is idempotent (`required_approvals: 0` is pre-approved). `approve`
+records distinct principals (duplicates count once); reaching `required_approvals`
+moves the effect to `approved`. `commit` executes exactly once — a repeat commit
+replays the recorded result (`result.output.committed` is `true` the first time,
+`false` on replay) and never re-runs; committing an unapproved effect returns
+`{ ok: false, reason: "not_approved" }`. `abort` is terminal. The
+`idempotency_key` binds the effect to the external operation so the executor
+stays effectively-once even under redelivery. Use for payments, deploys,
+deletes, public posts, and sensitive-data access.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

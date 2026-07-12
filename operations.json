@@ -112,6 +112,24 @@
     { "name": "task_cancel", "group": "tasks", "method": "POST", "path": "/v1/tasks/cancel", "params": [
       { "name": "name", "in": "body", "type": "string" } ], "doc": "Cancel a task (terminal), regardless of owner." },
 
+    { "name": "effect_get", "group": "effects", "method": "GET", "path": "/v1/effects", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read an effect's status, approvals, and result; absent reads as found=false." },
+    { "name": "effect_prepare", "group": "effects", "method": "POST", "path": "/v1/effects/prepare", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "effect_type", "in": "body", "type": "string" },
+      { "name": "payload", "in": "body", "type": "object", "optional": true },
+      { "name": "risk", "in": "body", "type": "string", "optional": true },
+      { "name": "idempotency_key", "in": "body", "type": "string" },
+      { "name": "required_approvals", "in": "body", "type": "int", "optional": true } ], "doc": "Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved." },
+    { "name": "effect_approve", "group": "effects", "method": "POST", "path": "/v1/effects/approve", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "principal", "in": "body", "type": "string" } ], "doc": "Record one principal's approval; duplicate approvals count once." },
+    { "name": "effect_commit", "group": "effects", "method": "POST", "path": "/v1/effects/commit", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "result", "in": "body", "type": "object", "optional": true } ], "doc": "Commit an approved effect exactly once, recording the result; a repeat commit replays." },
+    { "name": "effect_abort", "group": "effects", "method": "POST", "path": "/v1/effects/abort", "params": [
+      { "name": "name", "in": "body", "type": "string" } ], "doc": "Abort a prepared/approved effect (terminal)." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [

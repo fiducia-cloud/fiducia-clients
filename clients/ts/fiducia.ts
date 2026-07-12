@@ -134,6 +134,26 @@ export class FiduciaClient {
     return this.request("POST", `/v1/tasks/cancel`, { name: name });
   }
 
+  async effectGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/effects?name=${enc(name)}`);
+  }
+
+  async effectPrepare(name: string, effectType: string, idempotencyKey: string, opts: { payload?: Record<string, any>; risk?: string; required_approvals?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/effects/prepare`, { name: name, effect_type: effectType, payload: opts.payload, risk: opts.risk, idempotency_key: idempotencyKey, required_approvals: opts.required_approvals });
+  }
+
+  async effectApprove(name: string, principal: string): Promise<any> {
+    return this.request("POST", `/v1/effects/approve`, { name: name, principal: principal });
+  }
+
+  async effectCommit(name: string, opts: { result?: Record<string, any> } = {}): Promise<any> {
+    return this.request("POST", `/v1/effects/commit`, { name: name, result: opts.result });
+  }
+
+  async effectAbort(name: string): Promise<any> {
+    return this.request("POST", `/v1/effects/abort`, { name: name });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

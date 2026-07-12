@@ -680,6 +680,57 @@ impl FiduciaClient {
         self.request("POST", "/v1/tasks/cancel", Some(json!({ "name": name })))
     }
 
+    // --- approval-escrow effects ---
+    /// Read an effect's status, approvals, and result. Absent reports
+    /// `found: false`.
+    pub fn effect_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/effects?name={}", enc(name)), None)
+    }
+    /// Prepare a side effect for later authorization (idempotent).
+    /// `required_approvals` of 0 is pre-approved and may be committed immediately.
+    pub fn effect_prepare(
+        &self,
+        name: &str,
+        effect_type: &str,
+        payload: Value,
+        risk: &str,
+        idempotency_key: &str,
+        required_approvals: u32,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/prepare",
+            Some(json!({
+                "name": name,
+                "effect_type": effect_type,
+                "payload": payload,
+                "risk": risk,
+                "idempotency_key": idempotency_key,
+                "required_approvals": required_approvals,
+            })),
+        )
+    }
+    /// Record one principal's approval.
+    pub fn effect_approve(&self, name: &str, principal: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/approve",
+            Some(json!({ "name": name, "principal": principal })),
+        )
+    }
+    /// Commit an approved effect exactly once, recording `result`.
+    pub fn effect_commit(&self, name: &str, result: Value) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/commit",
+            Some(json!({ "name": name, "result": result })),
+        )
+    }
+    /// Abort a prepared/approved effect (terminal).
+    pub fn effect_abort(&self, name: &str) -> Result<Value, Error> {
+        self.request("POST", "/v1/effects/abort", Some(json!({ "name": name })))
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1307,6 +1358,44 @@ mod tests {
             "POST",
             "/v1/tasks/complete",
             json!({ "name": "repo/acme/api/issue/482", "worker": "agent-a", "fencing_token": 42, "result": { "pr": 991 } }),
+        );
+    }
+
+    #[test]
+    fn effect_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .effect_prepare(
+                "invoice-882/payment",
+                "send_payment",
+                json!({ "amount_usd": 500 }),
+                "high",
+                "invoice-882:payment",
+                2,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/effects/prepare",
+            json!({
+                "name": "invoice-882/payment",
+                "effect_type": "send_payment",
+                "payload": { "amount_usd": 500 },
+                "risk": "high",
+                "idempotency_key": "invoice-882:payment",
+                "required_approvals": 2
+            }),
+        );
+
+        client.effect_commit("invoice-882/payment", json!({ "confirmation": "pay_123" })).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/effects/commit",
+            json!({ "name": "invoice-882/payment", "result": { "confirmation": "pay_123" } }),
         );
     }
 
