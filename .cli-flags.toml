@@ -1,3 +1,4 @@
+# flags-2-env config for the Python CLI: maps command-line flags to FIDUCIA_* env vars (audited in CI).
 [help]
 url = "https://github.com/fiducia-cloud/fiducia-clients"
 columns = ["options", "env", "type", "description"]
