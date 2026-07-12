@@ -39,6 +39,10 @@ too. `?param` marks an optional argument.
 | `POST` | `/v1/effects/approve` | `name`, `principal` | Record one principal's approval; duplicate approvals count once. |
 | `POST` | `/v1/effects/commit` | `name`, `result`? | Commit an approved effect exactly once, recording the result; a repeat commit replays. |
 | `POST` | `/v1/effects/abort` | `name` | Abort a prepared/approved effect (terminal). |
+| `GET` | `/v1/handoffs` | `name` | Read a handoff's status, counterparties, and tokens; absent reads as found=false. |
+| `POST` | `/v1/handoffs/offer` | `name`, `resource`, `from`, `to`, `from_token`, `context`?, `ttl_ms`? | Offer to transfer ownership of a resource; the original owner keeps authority until accepted. |
+| `POST` | `/v1/handoffs/accept` | `name`, `to` | Accept an offered handoff; the new owner receives a strictly higher fencing token. |
+| `POST` | `/v1/handoffs/reject` | `name`, `to` | Reject an offered handoff; ownership stays with the original owner. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |

@@ -731,6 +731,56 @@ impl FiduciaClient {
         self.request("POST", "/v1/effects/abort", Some(json!({ "name": name })))
     }
 
+    // --- atomic ownership handoffs ---
+    /// Read a handoff's status, counterparties, and tokens. Absent reports
+    /// `found: false`.
+    pub fn handoff_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/handoffs?name={}", enc(name)), None)
+    }
+    /// Offer to transfer ownership of `resource` from `from` (presenting its
+    /// current `from_token`) to `to`, with a context manifest and accept deadline.
+    pub fn handoff_offer(
+        &self,
+        name: &str,
+        resource: &str,
+        from: &str,
+        to: &str,
+        from_token: u64,
+        context: Value,
+        ttl_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/handoffs/offer",
+            Some(json!({
+                "name": name,
+                "resource": resource,
+                "from": from,
+                "to": to,
+                "from_token": from_token,
+                "context": context,
+                "ttl_ms": ttl_ms,
+            })),
+        )
+    }
+    /// Accept an offered handoff; the grant carries a strictly higher fencing
+    /// token for the new owner.
+    pub fn handoff_accept(&self, name: &str, to: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/handoffs/accept",
+            Some(json!({ "name": name, "to": to })),
+        )
+    }
+    /// Reject an offered handoff; ownership stays with the original owner.
+    pub fn handoff_reject(&self, name: &str, to: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/handoffs/reject",
+            Some(json!({ "name": name, "to": to })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1396,6 +1446,46 @@ mod tests {
             "POST",
             "/v1/effects/commit",
             json!({ "name": "invoice-882/payment", "result": { "confirmation": "pay_123" } }),
+        );
+    }
+
+    #[test]
+    fn handoff_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .handoff_offer(
+                "ticket-482/handoff",
+                "task:ticket-482",
+                "research-agent",
+                "legal-agent",
+                7,
+                json!({ "summary": "needs legal review" }),
+                Some(30_000),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/handoffs/offer",
+            json!({
+                "name": "ticket-482/handoff",
+                "resource": "task:ticket-482",
+                "from": "research-agent",
+                "to": "legal-agent",
+                "from_token": 7,
+                "context": { "summary": "needs legal review" },
+                "ttl_ms": 30_000
+            }),
+        );
+
+        client.handoff_accept("ticket-482/handoff", "legal-agent").unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/handoffs/accept",
+            json!({ "name": "ticket-482/handoff", "to": "legal-agent" }),
         );
     }
 

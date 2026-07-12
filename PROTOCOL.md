@@ -205,6 +205,24 @@ replays the recorded result (`result.output.committed` is `true` the first time,
 stays effectively-once even under redelivery. Use for payments, deploys,
 deletes, public posts, and sensitive-data access.
 
+### Handoffs — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `handoffGet(name)` | `GET /v1/handoffs?name=...` | — | `{name, found, handoff}` |
+| `handoffOffer(name, {resource, from, to, fromToken, context, ttlMs})` | `POST /v1/handoffs/offer` | `{name, resource, from, to, from_token, context, ttl_ms}` | `{committed, result}` |
+| `handoffAccept(name, {to})` | `POST /v1/handoffs/accept` | `{name, to}` | `{committed, result}` |
+| `handoffReject(name, {to})` | `POST /v1/handoffs/reject` | `{name, to}` | `{committed, result}` |
+
+Transfer responsibility for a resource from one holder to another with no moment
+of dual or zero ownership. `from` (presenting its current `from_token`) offers
+the `resource` to `to`; while `offered`, `from` keeps authority. On `accept`, the
+node mints a strictly higher `to_token` for the new owner (`result.output.to_token`),
+so the guarded resource's fencing rejects the old owner — an atomic transfer.
+Only the offered recipient may accept/reject (`{ ok: false, reason:
+"not_recipient" }` otherwise). `reject` or a passed `ttl_ms` deadline leaves
+ownership with `from` (`status` `rejected`/`expired`). Use for triage→specialist
+delegation and research→legal ticket transfer across agent runtimes.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
