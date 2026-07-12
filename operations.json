@@ -147,6 +147,23 @@
       { "name": "name", "in": "body", "type": "string" },
       { "name": "to", "in": "body", "type": "string" } ], "doc": "Reject an offered handoff; ownership stays with the original owner." },
 
+    { "name": "decision_get", "group": "decisions", "method": "GET", "path": "/v1/decisions", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a decision's options, tallies, votes, and resolution; absent reads as found=false." },
+    { "name": "decision_propose", "group": "decisions", "method": "POST", "path": "/v1/decisions/propose", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "question", "in": "body", "type": "string" },
+      { "name": "options", "in": "body", "type": "object" },
+      { "name": "policy", "in": "body", "type": "object" },
+      { "name": "deadline_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous)." },
+    { "name": "decision_vote", "group": "decisions", "method": "POST", "path": "/v1/decisions/vote", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "voter", "in": "body", "type": "string" },
+      { "name": "option", "in": "body", "type": "string", "optional": true },
+      { "name": "confidence", "in": "body", "type": "number", "optional": true },
+      { "name": "weight", "in": "body", "type": "int", "optional": true },
+      { "name": "veto", "in": "body", "type": "bool", "optional": true },
+      { "name": "evidence", "in": "body", "type": "object", "optional": true } ], "doc": "Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
