@@ -196,13 +196,16 @@ impl FiduciaClient {
         self.acquire_lock_handle(keys, opts)
     }
 
-    /// Release a held lock grant (every member key) by its fencing token.
+    /// Release a held lock grant by its fencing token(s). A single-key grant is
+    /// released by its scalar token; a multi-key (union) grant is released once
+    /// per member key, each with that key's own token, so no key is left held
+    /// with a mismatched (or zero) token until its lease TTL expires.
     pub fn release_lock(&self, handle: &LockHandle) -> Result<Value, Error> {
-        self.request(
-            "POST",
-            "/v1/locks/release",
-            Some(json!({ "holder": handle.holder, "fencing_token": handle.fencing_token })),
-        )
+        let mut last = Value::Null;
+        for payload in release_payloads(handle) {
+            last = self.request("POST", "/v1/locks/release", Some(payload))?;
+        }
+        Ok(last)
     }
 
     /// Acquire the union of `keys`, run `f`, then always release.
