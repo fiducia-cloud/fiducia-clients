@@ -69,6 +69,19 @@
       { "name": "value", "in": "body", "type": "int" },
       { "name": "prev_revision", "in": "body", "type": "int", "optional": true } ], "doc": "Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set." },
 
+    { "name": "barrier_get", "group": "barriers", "method": "GET", "path": "/v1/barriers", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a barrier's arrivals and resolution status; absent reads as found=false." },
+    { "name": "barrier_create", "group": "barriers", "method": "POST", "path": "/v1/barriers/create", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "policy", "in": "body", "type": "object" },
+      { "name": "expected", "in": "body", "type": "int", "optional": true },
+      { "name": "deadline_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum)." },
+    { "name": "barrier_arrive", "group": "barriers", "method": "POST", "path": "/v1/barriers/arrive", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "participant", "in": "body", "type": "string" },
+      { "name": "weight", "in": "body", "type": "int", "optional": true },
+      { "name": "veto", "in": "body", "type": "bool", "optional": true } ], "doc": "Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
