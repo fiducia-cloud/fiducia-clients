@@ -1,3 +1,4 @@
+# Gleam package manifest for the Gleam Fiducia client.
 name = "fiducia_client"
 version = "0.1.0"
 # No open-source licence granted; see LICENSE.txt. Gleam's manifest rejects
