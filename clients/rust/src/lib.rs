@@ -599,6 +599,87 @@ impl FiduciaClient {
         )
     }
 
+    // --- durable tasks ---
+    /// Read a task's status, owner, and fencing token. Absent reports
+    /// `found: false`.
+    pub fn task_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/tasks?name={}", enc(name)), None)
+    }
+    /// Create a durable task if it does not exist (idempotent).
+    pub fn task_create(
+        &self,
+        name: &str,
+        task_type: &str,
+        payload: Value,
+        deadline_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/tasks/create",
+            Some(json!({ "name": name, "task_type": task_type, "payload": payload, "deadline_ms": deadline_ms })),
+        )
+    }
+    /// Claim a pending or lease-expired task; the grant carries a fencing token.
+    pub fn task_claim(
+        &self,
+        name: &str,
+        worker: &str,
+        ttl_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/tasks/claim",
+            Some(json!({ "name": name, "worker": worker, "ttl_ms": ttl_ms })),
+        )
+    }
+    /// Report progress and a checkpoint under the current fencing token.
+    pub fn task_progress(
+        &self,
+        name: &str,
+        worker: &str,
+        fencing_token: u64,
+        percent: u32,
+        checkpoint: Value,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/tasks/progress",
+            Some(json!({ "name": name, "worker": worker, "fencing_token": fencing_token, "percent": percent, "checkpoint": checkpoint })),
+        )
+    }
+    /// Complete a task with a durable result under the current fencing token.
+    pub fn task_complete(
+        &self,
+        name: &str,
+        worker: &str,
+        fencing_token: u64,
+        result: Value,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/tasks/complete",
+            Some(json!({ "name": name, "worker": worker, "fencing_token": fencing_token, "result": result })),
+        )
+    }
+    /// Fail a task; `retryable` requeues it for another worker.
+    pub fn task_fail(
+        &self,
+        name: &str,
+        worker: &str,
+        fencing_token: u64,
+        retryable: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/tasks/fail",
+            Some(json!({ "name": name, "worker": worker, "fencing_token": fencing_token, "retryable": retryable })),
+        )
+    }
+    /// Cancel a task (terminal), regardless of owner.
+    pub fn task_cancel(&self, name: &str) -> Result<Value, Error> {
+        self.request("POST", "/v1/tasks/cancel", Some(json!({ "name": name })))
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1200,6 +1281,32 @@ mod tests {
             "POST",
             "/v1/barriers/arrive",
             json!({ "name": "release/reviewers", "participant": "reviewer-a", "weight": 1, "veto": false }),
+        );
+    }
+
+    #[test]
+    fn task_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .task_claim("repo/acme/api/issue/482", "agent-a", Some(60_000))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/tasks/claim",
+            json!({ "name": "repo/acme/api/issue/482", "worker": "agent-a", "ttl_ms": 60_000 }),
+        );
+
+        client
+            .task_complete("repo/acme/api/issue/482", "agent-a", 42, json!({ "pr": 991 }))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/tasks/complete",
+            json!({ "name": "repo/acme/api/issue/482", "worker": "agent-a", "fencing_token": 42, "result": { "pr": 991 } }),
         );
     }
 

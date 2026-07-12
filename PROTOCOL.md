@@ -162,6 +162,29 @@ barrier. `result.output.barrier.status` is `pending`, `satisfied`, `vetoed`, or
 are slash-safe. Use barriers for research-swarm fan-in, evaluator panels,
 multi-model verification, and rollout stage gates.
 
+### Tasks — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `taskGet(name)` | `GET /v1/tasks?name=...` | — | `{name, found, task}` |
+| `taskCreate(name, {taskType, payload, deadlineMs})` | `POST /v1/tasks/create` | `{name, task_type, payload, deadline_ms}` | `{committed, result}` |
+| `taskClaim(name, {worker, ttlMs})` | `POST /v1/tasks/claim` | `{name, worker, ttl_ms}` | `{committed, result}` |
+| `taskProgress(name, {worker, fencingToken, percent, checkpoint})` | `POST /v1/tasks/progress` | `{name, worker, fencing_token, percent, checkpoint}` | `{committed, result}` |
+| `taskComplete(name, {worker, fencingToken, result})` | `POST /v1/tasks/complete` | `{name, worker, fencing_token, result}` | `{committed, result}` |
+| `taskFail(name, {worker, fencingToken, retryable})` | `POST /v1/tasks/fail` | `{name, worker, fencing_token, retryable}` | `{committed, result}` |
+| `taskCancel(name)` | `POST /v1/tasks/cancel` | `{name}` | `{committed, result}` |
+
+A durable task is a claimable unit of work. `create` is idempotent. `claim`
+grants a fresh **fencing token** and an ownership lease when the task is pending
+or its prior lease expired — an actively owned task is not re-granted
+(`result.output` is `{ ok: false, reason: "already_claimed", owner }`).
+`progress`/`complete`/`fail` require the current owner + fencing token, so a stale
+worker that lost the claim is rejected (`{ ok: false, reason: "fenced" }`).
+A retryable `fail` returns the task to `pending` for reassignment; otherwise it
+ends `failed`. `cancel` is terminal. `result.output.task.status` is `pending`,
+`claimed`, `running`, `completed`, `failed`, or `cancelled`. Names are slash-safe.
+This is the coordination backbone under agent work-items: the node owns *who may
+act*; the application database owns the rich task detail (keep `payload` small).
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

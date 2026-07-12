@@ -82,6 +82,36 @@
       { "name": "weight", "in": "body", "type": "int", "optional": true },
       { "name": "veto", "in": "body", "type": "bool", "optional": true } ], "doc": "Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent." },
 
+    { "name": "task_get", "group": "tasks", "method": "GET", "path": "/v1/tasks", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a task's status, owner, and fencing token; absent reads as found=false." },
+    { "name": "task_create", "group": "tasks", "method": "POST", "path": "/v1/tasks/create", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "task_type", "in": "body", "type": "string" },
+      { "name": "payload", "in": "body", "type": "object", "optional": true },
+      { "name": "deadline_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Create a durable task if it does not exist (idempotent)." },
+    { "name": "task_claim", "group": "tasks", "method": "POST", "path": "/v1/tasks/claim", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "worker", "in": "body", "type": "string" },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Claim a pending or lease-expired task; the grant carries a fencing token." },
+    { "name": "task_progress", "group": "tasks", "method": "POST", "path": "/v1/tasks/progress", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "worker", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "percent", "in": "body", "type": "int", "optional": true },
+      { "name": "checkpoint", "in": "body", "type": "object", "optional": true } ], "doc": "Report progress and a checkpoint under the current fencing token." },
+    { "name": "task_complete", "group": "tasks", "method": "POST", "path": "/v1/tasks/complete", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "worker", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "result", "in": "body", "type": "object", "optional": true } ], "doc": "Complete a task with a durable result under the current fencing token." },
+    { "name": "task_fail", "group": "tasks", "method": "POST", "path": "/v1/tasks/fail", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "worker", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "retryable", "in": "body", "type": "bool", "optional": true } ], "doc": "Fail a task; retryable requeues it for another worker." },
+    { "name": "task_cancel", "group": "tasks", "method": "POST", "path": "/v1/tasks/cancel", "params": [
+      { "name": "name", "in": "body", "type": "string" } ], "doc": "Cancel a task (terminal), regardless of owner." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
