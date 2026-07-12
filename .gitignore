@@ -7,6 +7,7 @@ pkg/
 
 # Node / TypeScript
 node_modules/
+clients/*/.gradle/
 dist/
 *.tsbuildinfo
 
