@@ -68,8 +68,18 @@ end
 `service_heartbeat` · `service_deregister`
 
 Optional parameters (`holder`, `ttl_ms`, `metadata`, …) are omitted from the
-request body when `nil`, which preserves compare-and-set semantics. The `try_*`
-/ `must_*` helpers just flip the `wait` flag on the matching acquire call.
+request body when `nil`, which preserves compare-and-set semantics.
+
+`try_lock` / `try_semaphore` are single-shot (`wait: false`) and return the raw
+acquire result. `must_lock` / `lock` and `must_semaphore` / `semaphore` **block
+until the grant is actually held**: the server reserves a FIFO slot and returns
+immediately rather than holding the connection, so these helpers poll
+`lock_get` / `semaphore_get` until you own it, then return a normalized held
+grant — a `JSON::Any` of `{holder, fencing_token, lease_expires_ms}` you can pass
+to `lock_release` / `semaphore_release`. They accept `max_wait_ms` (default
+`30_000`), `retry_interval_ms` (default `250`), and an optional `max_retries`,
+and raise `Fiducia::Timeout` if the wait budget elapses before the grant is held
+(a stable `"fdc-…"` holder is generated when you don't supply one).
 
 Constructor options: `Fiducia::Client.new(base_url, request_timeout : Time::Span? = nil)`
 — pass a per-request `request_timeout` (e.g. `5.seconds`) if you need one.

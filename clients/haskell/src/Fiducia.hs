@@ -8,6 +8,12 @@
 --
 -- Every operation returns the parsed JSON response as an aeson 'Value' (an empty
 -- body decodes to 'Null'). On HTTP status >= 300 a 'FiduciaError' is thrown.
+--
+-- The blocking helpers 'mustLock' \/ 'lock' \/ 'mustSemaphore' \/ 'semaphore'
+-- actually block: the server queues a FIFO slot and returns immediately, so they
+-- poll 'lockGet' \/ 'semaphoreGet' until the grant is held, throwing 'LockTimeout'
+-- when the poll budget ('PollOpts') runs out. 'tryLock' \/ 'trySemaphore' stay a
+-- single non-blocking shot.
 
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -17,6 +23,10 @@ module Fiducia
   , newClient
     -- * Errors
   , FiduciaError(..)
+  , LockTimeout(..)
+    -- * blocking-acquire poll options
+  , PollOpts(..)
+  , defaultPollOpts
     -- * misc
   , health
   , status
@@ -26,6 +36,7 @@ module Fiducia
   , lockAcquireMany
   , tryLock
   , mustLock
+  , mustLockWith
   , lock
   , lockRelease
     -- * semaphores
@@ -33,6 +44,7 @@ module Fiducia
   , semaphoreAcquire
   , trySemaphore
   , mustSemaphore
+  , mustSemaphoreWith
   , semaphore
   , semaphoreRelease
     -- * idempotency
@@ -70,14 +82,22 @@ module Fiducia
   , serviceList
   ) where
 
-import Control.Exception (Exception, throwIO)
-import Data.Aeson (ToJSON, Value (Null), decode, encode, object, (.=))
+import Control.Concurrent (threadDelay)
+import Control.Exception (Exception, SomeException, throwIO, try)
+import Data.Aeson (ToJSON, Value (..), decode, encode, object, (.=))
 import Data.Aeson.Key (Key)
+import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Pair)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Maybe (fromMaybe)
+import Data.Foldable (toList)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Unique (hashUnique, newUnique)
+import Data.Word (Word8)
+import GHC.Clock (getMonotonicTimeNSec)
 import Network.HTTP.Client
   ( Manager
   , Request
@@ -97,6 +117,8 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (Method, hContentType, statusCode)
 import Network.URI (escapeURIString, isUnreserved)
+import Numeric (showHex)
+import System.IO (IOMode (ReadMode), withBinaryFile)
 
 -- | A Fiducia HTTP client: a shared connection 'Manager' plus the base URL
 -- (trailing slashes trimmed). Build one with 'newClient'.
@@ -123,6 +145,33 @@ data FiduciaError = FiduciaError
   deriving (Show)
 
 instance Exception FiduciaError
+
+-- | Thrown by the blocking helpers ('mustLock', 'lock', 'mustSemaphore',
+-- 'semaphore') when the grant is not held before the poll budget ('maxWaitMs'
+-- or 'maxRetries') is exhausted. Carries the key and the holder id that was
+-- waited on (the holder is generated when the caller passes 'Nothing').
+data LockTimeout = LockTimeout
+  { timeoutKey :: Text
+  , timeoutHolder :: Text
+  , timeoutWaitedMs :: Int
+  }
+  deriving (Show)
+
+instance Exception LockTimeout
+
+-- | Poll budget for the blocking acquire helpers. Build from 'defaultPollOpts'
+-- and override fields as needed, e.g. @defaultPollOpts {maxWaitMs = 5000}@.
+data PollOpts = PollOpts
+  { maxWaitMs :: Int -- ^ total wall-clock budget to keep polling, in ms
+  , retryIntervalMs :: Int -- ^ delay between polls, in ms
+  , maxRetries :: Maybe Int -- ^ optional cap on the number of polls
+  }
+  deriving (Show)
+
+-- | Reference defaults: @maxWaitMs = 30000@, @retryIntervalMs = 250@,
+-- @maxRetries = Nothing@ (matches the other Fiducia clients).
+defaultPollOpts :: PollOpts
+defaultPollOpts = PollOpts {maxWaitMs = 30000, retryIntervalMs = 250, maxRetries = Nothing}
 
 -- --- misc ---
 
@@ -156,9 +205,28 @@ lockAcquireMany c keys holder ttlMs wait =
 tryLock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
 tryLock c key holder ttlMs = lockAcquire c key holder ttlMs False
 
--- | Blocking acquire ('lockAcquire' with @wait = True@).
+-- | Blocking acquire: acquire with @wait = True@, then POLL 'lockGet' until the
+-- lock is actually held. The server does not hold the connection on @wait@ — it
+-- reserves a FIFO slot and returns immediately — so a client-side poll is what
+-- makes this block. Uses 'defaultPollOpts'; throws 'LockTimeout' if the grant is
+-- not obtained within the budget. When @holder@ is 'Nothing' a stable id is
+-- generated (and @ttl_ms@ defaults to 60000). Returns a held-grant object
+-- carrying @holder@, @fencing_token@ (+ @lease_expires_ms@) so the caller can
+-- 'lockRelease' it — note the @holder@ may have been generated for you.
 mustLock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
-mustLock c key holder ttlMs = lockAcquire c key holder ttlMs True
+mustLock c = mustLockWith c defaultPollOpts
+
+-- | 'mustLock' with an explicit poll budget.
+mustLockWith :: Client -> PollOpts -> Text -> Maybe Text -> Maybe Int -> IO Value
+mustLockWith c opts key mHolder ttlMs = do
+  holder <- maybe genHolder pure mHolder
+  resp <- lockAcquire c key (Just holder) (Just (fromMaybe defaultLeaseMs ttlMs)) True
+  let out = output resp
+  if field "acquired" out == Just (Bool True)
+    then pure (grantFromOutput holder out)
+    else pollUntilHeld opts key holder $ do
+      lk <- lockGet c key
+      pure (heldGrant holder (fromMaybe Null (field "lock" lk)))
 
 -- | Alias for 'mustLock'.
 lock :: Client -> Text -> Maybe Text -> Maybe Int -> IO Value
@@ -187,9 +255,25 @@ semaphoreAcquire c key limit holder ttlMs wait =
 trySemaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
 trySemaphore c key limit holder ttlMs = semaphoreAcquire c key limit holder ttlMs False
 
--- | Blocking permit acquire ('semaphoreAcquire' with @wait = True@).
+-- | Blocking permit acquire: acquire with @wait = True@, then POLL 'semaphoreGet'
+-- until this holder appears among the permit holders with a fencing token. Uses
+-- 'defaultPollOpts' and throws 'LockTimeout' on exhaustion; the holder\/ttl and
+-- return-shape contract is the same as 'mustLock'.
 mustSemaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
-mustSemaphore c key limit holder ttlMs = semaphoreAcquire c key limit holder ttlMs True
+mustSemaphore c = mustSemaphoreWith c defaultPollOpts
+
+-- | 'mustSemaphore' with an explicit poll budget.
+mustSemaphoreWith :: Client -> PollOpts -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
+mustSemaphoreWith c opts key limit mHolder ttlMs = do
+  holder <- maybe genHolder pure mHolder
+  resp <- semaphoreAcquire c key limit (Just holder) (Just (fromMaybe defaultLeaseMs ttlMs)) True
+  let out = output resp
+  if field "acquired" out == Just (Bool True)
+    then pure (grantFromOutput holder out)
+    else pollUntilHeld opts key holder $ do
+      sem <- semaphoreGet c key
+      let holders = asArray (fromMaybe Null (field "semaphore" sem >>= field "holders"))
+      pure (listToMaybe (mapMaybe (heldGrant holder) holders))
 
 -- | Alias for 'mustSemaphore'.
 semaphore :: Client -> Text -> Int -> Maybe Text -> Maybe Int -> IO Value
@@ -412,3 +496,92 @@ applyBody (Just v) req =
     { requestHeaders = (hContentType, "application/json") : requestHeaders req
     , requestBody = RequestBodyLBS (encode v)
     }
+
+-- --- blocking-acquire internals (poll loop; ports ruby/elixir reference) ---
+
+-- | Default lease when the caller passes 'Nothing' as @ttl_ms@ to a blocking
+-- helper (a blocking acquire wants a lease long enough to outlast the poll).
+defaultLeaseMs :: Int
+defaultLeaseMs = 60000
+
+-- | Monotonic clock in milliseconds (immune to wall-clock jumps).
+nowMs :: IO Int
+nowMs = fmap (fromIntegral . (`div` 1000000)) getMonotonicTimeNSec
+
+-- | A stable holder id (@fdc-@ + 16 random bytes as hex). Falls back to a
+-- monotonic-clock + process-unique token if the OS entropy source is missing.
+genHolder :: IO Text
+genHolder = do
+  ent <-
+    try (withBinaryFile "/dev/urandom" ReadMode (\h -> BS.hGet h 16)) ::
+      IO (Either SomeException BS.ByteString)
+  case ent of
+    Right bs | BS.length bs == 16 -> pure (T.pack ("fdc-" ++ concatMap hex2 (BS.unpack bs)))
+    _ -> do
+      t <- getMonotonicTimeNSec
+      u <- newUnique
+      pure (T.pack ("fdc-" ++ showHex t "-" ++ show (hashUnique u)))
+  where
+    hex2 :: Word8 -> String
+    hex2 w = let s = showHex w "" in if length s < 2 then '0' : s else s
+
+-- | Look up one field of a JSON object ('Nothing' for non-objects/absent keys).
+field :: Text -> Value -> Maybe Value
+field k (Object o) = KM.lookup (K.fromText k) o
+field _ _ = Nothing
+
+-- | The @result.output@ sub-object of an acquire response envelope.
+output :: Value -> Value
+output v = fromMaybe Null (field "result" v >>= field "output")
+
+-- | 'Nothing' for an absent or JSON-@null@ field (the refs' @!= nil@ check).
+nonNull :: Maybe Value -> Maybe Value
+nonNull (Just Null) = Nothing
+nonNull m = m
+
+-- | A JSON array as a plain list (empty for anything that is not an array).
+asArray :: Value -> [Value]
+asArray (Array a) = toList a
+asArray _ = []
+
+-- | Normalized held-grant object. @fencing_token@ is passed through as its
+-- native JSON node so 64-bit tokens keep full precision.
+grantValue :: Text -> Value -> Maybe Value -> Value
+grantValue holder ft mLease =
+  object (["holder" .= holder, "fencing_token" .= ft] ++ opt "lease_expires_ms" mLease)
+
+-- | Grant built from an acquire @output@ that already reported @acquired:true@
+-- (the holder is the one we sent).
+grantFromOutput :: Text -> Value -> Value
+grantFromOutput holder out =
+  grantValue holder (fromMaybe Null (field "fencing_token" out)) (nonNull (field "lease_expires_ms" out))
+
+-- | 'Just' the grant when @obj@ shows @holder@ holding with a non-null token.
+heldGrant :: Text -> Value -> Maybe Value
+heldGrant holder obj =
+  case (field "holder" obj, nonNull (field "fencing_token" obj)) of
+    (Just (String h), Just ft)
+      | h == holder -> Just (grantValue holder ft (nonNull (field "lease_expires_ms" obj)))
+    _ -> Nothing
+
+-- | Poll @probe@ (which returns 'Just' the grant once held) until it succeeds or
+-- the budget in @opts@ is exhausted, then throw 'LockTimeout'. Mirrors the loop
+-- in the Ruby\/Elixir reference clients: check the attempt cap, then the deadline,
+-- then sleep @min interval remaining@, then probe once.
+pollUntilHeld :: PollOpts -> Text -> Text -> IO (Maybe Value) -> IO Value
+pollUntilHeld opts key holder probe = do
+  start <- nowMs
+  let deadline = start + maxWaitMs opts
+      timeout = throwIO (LockTimeout key holder (maxWaitMs opts))
+      go attempt
+        | maybe False (attempt >=) (maxRetries opts) = timeout
+        | otherwise = do
+            now <- nowMs
+            let remaining = deadline - now
+            if remaining <= 0
+              then timeout
+              else do
+                threadDelay (max 1 (min (retryIntervalMs opts) remaining) * 1000)
+                held <- probe
+                maybe (go (attempt + 1)) pure held
+  go 0

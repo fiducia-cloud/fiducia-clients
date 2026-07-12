@@ -13,6 +13,7 @@ import java.net.URLEncoder
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.UUID
 import scala.language.implicitConversions
 import scala.util.control.NonFatal
 
@@ -20,6 +21,13 @@ import scala.util.control.NonFatal
   * response (`ujson.Null` when the response body was empty). */
 final case class FiduciaException(status: Int, body: ujson.Value)
     extends RuntimeException(s"fiducia: HTTP $status")
+
+/** Raised by the blocking [[FiduciaClient.mustLock]] / [[FiduciaClient.lock]] /
+  * [[FiduciaClient.mustSemaphore]] / [[FiduciaClient.semaphore]] helpers when the
+  * wait budget elapses before the lock/permit is actually held. */
+final case class LockTimeoutException(keys: Seq[String], waitedMs: Long)
+    extends RuntimeException(
+      s"fiducia: timed out after ${waitedMs}ms waiting for ${keys.mkString(", ")}")
 
 /** A thin, dependency-light HTTP wrapper over the fiducia.cloud contract. Every
   * method returns the parsed JSON response as a [[ujson.Value]] and throws a
@@ -101,12 +109,61 @@ class FiduciaClient(
   def tryLock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
     lockAcquire(key, holder, ttlMs, wait = false)
 
-  def mustLock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    lockAcquire(key, holder, ttlMs, wait = true)
+  /** Block until the lock is actually HELD, or time out.
+    *
+    * The server does not hold the connection on `wait=true`: it reserves a FIFO
+    * slot and returns `{acquired:false, queued:true}` immediately. This helper
+    * therefore acquires with `wait=true` and then POLLS [[lockGet]] until we hold
+    * it (our `holder` with a non-null `fencing_token`) or the wait budget elapses,
+    * at which point it throws [[LockTimeoutException]].
+    *
+    * Returns a held-grant object `{key, holder, fencing_token, lease_expires_ms}`
+    * (same shape whether acquired immediately or after polling) — pass `holder`
+    * and `fencing_token` to [[lockRelease]]. `fencing_token` is kept as the raw
+    * JSON node (see the class note on ujson's `Double`-backed numbers).
+    *
+    * @param holder          held-by id; defaults to a generated `fdc-<uuid>`
+    * @param ttlMs           lease TTL; defaults to 60000
+    * @param maxWaitMs       total time to wait for the hold (default 30000)
+    * @param retryIntervalMs poll interval (default 250)
+    * @param maxRetries      optional cap on poll attempts (default: bounded only
+    *                        by `maxWaitMs`)
+    */
+  def mustLock(
+      key: String,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value = {
+    val h = holder.getOrElse(genHolder())
+    val out = acquireOutput(lockAcquire(key, Some(h), Some(ttlMs.getOrElse(60000L)), wait = true))
+    if (isAcquired(out)) return heldGrant(key, h, out)
+    // Queued: poll lock_get until we hold it or the deadline passes.
+    val deadline = nowMs() + maxWaitMs
+    var attempt = 0
+    while (maxRetries.forall(attempt < _)) {
+      val remaining = deadline - nowMs()
+      if (remaining <= 0) throw LockTimeoutException(Seq(key), maxWaitMs)
+      Thread.sleep(math.min(retryIntervalMs, remaining))
+      val lk = field(lockGet(key), "lock").getOrElse(ujson.Null)
+      if (heldBy(lk, h)) return heldGrant(key, h, lk)
+      attempt += 1
+    }
+    throw LockTimeoutException(Seq(key), maxWaitMs)
+  }
 
   /** Alias for [[mustLock]]. */
-  def lock(key: String, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    mustLock(key, holder, ttlMs)
+  def lock(
+      key: String,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value =
+    mustLock(key, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
   /** `key` is accepted for symmetry but is not sent (release is by token). */
   def lockRelease(key: String, holder: String, fencingToken: Long): ujson.Value =
@@ -139,12 +196,47 @@ class FiduciaClient(
   def trySemaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
     semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
-  def mustSemaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+  /** Block until a semaphore permit is actually HELD, or time out. Like
+    * [[mustLock]] but polls [[semaphoreGet]] and matches our `holder` among
+    * `semaphore.holders`. Returns `{key, holder, fencing_token, lease_expires_ms}`;
+    * throws [[LockTimeoutException]] on timeout. See [[mustLock]] for the knobs. */
+  def mustSemaphore(
+      key: String,
+      limit: Long,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value = {
+    val h = holder.getOrElse(genHolder())
+    val out = acquireOutput(semaphoreAcquire(key, limit, Some(h), Some(ttlMs.getOrElse(60000L)), wait = true))
+    if (isAcquired(out)) return heldGrant(key, h, out)
+    val deadline = nowMs() + maxWaitMs
+    var attempt = 0
+    while (maxRetries.forall(attempt < _)) {
+      val remaining = deadline - nowMs()
+      if (remaining <= 0) throw LockTimeoutException(Seq(key), maxWaitMs)
+      Thread.sleep(math.min(retryIntervalMs, remaining))
+      findHolder(semaphoreGet(key), h) match {
+        case Some(slot) => return heldGrant(key, h, slot)
+        case None       => attempt += 1
+      }
+    }
+    throw LockTimeoutException(Seq(key), maxWaitMs)
+  }
 
   /** Alias for [[mustSemaphore]]. */
-  def semaphore(key: String, limit: Long, holder: Option[String] = None, ttlMs: Option[Long] = None): ujson.Value =
-    mustSemaphore(key, limit, holder, ttlMs)
+  def semaphore(
+      key: String,
+      limit: Long,
+      holder: Option[String] = None,
+      ttlMs: Option[Long] = None,
+      maxWaitMs: Long = 30000L,
+      retryIntervalMs: Long = 250L,
+      maxRetries: Option[Int] = None
+  ): ujson.Value =
+    mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
   def semaphoreRelease(key: String, holder: String, fencingToken: Long): ujson.Value =
     request("POST", "/v1/semaphores/release", Some(ujson.Obj(
@@ -340,6 +432,42 @@ class FiduciaClient(
   // --- internals -----------------------------------------------------------
   private def putOpt(b: ujson.Obj, key: String, value: Option[ujson.Value]): Unit =
     value.foreach(v => b.obj(key) = v)
+
+  // -- blocking-acquire poll-loop helpers -----------------------------------
+  /** Stable held-by id used across the acquire and every poll comparison. */
+  private def genHolder(): String = "fdc-" + UUID.randomUUID().toString
+
+  /** Monotonic clock in ms (immune to wall-clock jumps), for the wait budget. */
+  private def nowMs(): Long = System.nanoTime() / 1000000L
+
+  /** Safe child lookup: `None` if `v` is not an object or lacks `key`. */
+  private def field(v: ujson.Value, key: String): Option[ujson.Value] =
+    v.objOpt.flatMap(_.get(key))
+
+  /** `resp.result.output`, or an empty object if the shape is missing. */
+  private def acquireOutput(resp: ujson.Value): ujson.Value =
+    field(resp, "result").flatMap(field(_, "output")).getOrElse(ujson.Obj())
+
+  private def isAcquired(out: ujson.Value): Boolean =
+    field(out, "acquired").flatMap(_.boolOpt).contains(true)
+
+  /** A `lock` snapshot is held by us iff its holder matches and it has a token. */
+  private def heldBy(lk: ujson.Value, holder: String): Boolean =
+    field(lk, "holder").flatMap(_.strOpt).contains(holder) &&
+      field(lk, "fencing_token").exists(_ != ujson.Null)
+
+  /** Our slot among `semaphore.holders` with a non-null fencing token, if any. */
+  private def findHolder(resp: ujson.Value, holder: String): Option[ujson.Value] =
+    field(resp, "semaphore").flatMap(field(_, "holders")).flatMap(_.arrOpt)
+      .flatMap(_.find(h => heldBy(h, holder)))
+
+  /** Uniform held-grant carrying the raw `fencing_token` node (no double narrowing). */
+  private def heldGrant(key: String, holder: String, src: ujson.Value): ujson.Value = {
+    val g = ujson.Obj("key" -> ujson.Str(key), "holder" -> ujson.Str(holder))
+    putOpt(g, "fencing_token", field(src, "fencing_token").filter(_ != ujson.Null))
+    putOpt(g, "lease_expires_ms", field(src, "lease_expires_ms").filter(_ != ujson.Null))
+    g
+  }
 
   private def enc(s: String): String =
     URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20")
