@@ -1794,6 +1794,48 @@ mod tests {
     }
 
     #[test]
+    fn claim_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .claim_assert(
+                "customer/219/refund_eligible",
+                "customer:219",
+                "eligible_for_refund",
+                json!(true),
+                0.91,
+                "billing-agent",
+                &["ticket:88"],
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/claims/assert",
+            json!({
+                "name": "customer/219/refund_eligible",
+                "subject": "customer:219",
+                "predicate": "eligible_for_refund",
+                "value": true,
+                "confidence": 0.91,
+                "author": "billing-agent",
+                "evidence": ["ticket:88"],
+                "valid_until_ms": null
+            }),
+        );
+
+        client.claim_resolve("customer/219/refund_eligible", true).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/claims/resolve",
+            json!({ "name": "customer/219/refund_eligible", "accepted": true }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
