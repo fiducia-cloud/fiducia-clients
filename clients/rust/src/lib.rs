@@ -1993,4 +1993,37 @@ mod tests {
         assert_eq!(got.idempotency_key.as_deref(), Some("req_order_42"));
         assert!(got.body.get("idempotency_key").is_none());
     }
+
+    #[test]
+    fn non_idempotent_mutation_is_only_retried_when_safe() {
+        // A keyless mutation that fails with 500 must NOT be retried: the server
+        // may already have applied it, and a re-send would double-apply.
+        let (base, hits) = erroring_server(500);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        assert!(client.counter_add("counters/add", 1, None).is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "500 keyless must not retry");
+
+        // The same keyless mutation IS retried on 503: the server provably did
+        // not apply it, so re-sending is safe.
+        let (base, hits) = erroring_server(503);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        assert!(client.counter_add("counters/add", 1, None).is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "503 keyless must retry");
+
+        // With an idempotency key the server can dedup a re-send, so even 500 is
+        // retried.
+        let (base, hits) = erroring_server(500);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        let control = RequestControl {
+            idempotency_key: Some("req-1".to_string()),
+            ..RequestControl::default()
+        };
+        assert!(client
+            .try_lock_with_options("orders/42", Some("worker-a"), None, None, control)
+            .is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "500 keyed must retry");
+    }
 }
