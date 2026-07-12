@@ -363,12 +363,62 @@ impl FiduciaClient {
     }
 }
 
-fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> LockHandle {
-    LockHandle {
+/// Read per-key fencing tokens from a grant/lock object's `fencing_tokens` map.
+/// Absent (single-key grant) yields an empty map.
+fn extract_fencing_tokens(value: &Value) -> BTreeMap<String, u64> {
+    let mut tokens = BTreeMap::new();
+    if let Some(map) = value["fencing_tokens"].as_object() {
+        for (key, token) in map {
+            if let Some(t) = token.as_u64() {
+                tokens.insert(key.clone(), t);
+            }
+        }
+    }
+    tokens
+}
+
+/// Build a [`LockHandle`] from a successful acquire's `output`. Reads the scalar
+/// `fencing_token` (single-key) and/or the per-key `fencing_tokens` map
+/// (multi-key union). Errors if a granted lock carries no resolvable token at
+/// all — silently defaulting to `0` would make release fail and leak the lock
+/// until its lease TTL expires.
+fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> Result<LockHandle, LockError> {
+    let scalar = output["fencing_token"].as_u64();
+    let fencing_tokens = extract_fencing_tokens(output);
+    if scalar.is_none() && fencing_tokens.is_empty() {
+        return Err(LockError::Client(Error::Transport(format!(
+            "fiducia lock: acquired {keys:?} but response carried no fencing token"
+        ))));
+    }
+    // Keep the scalar for single-key; for a multi-key grant with only per-key
+    // tokens, expose the first as the representative scalar (release uses the map).
+    let fencing_token = scalar
+        .or_else(|| fencing_tokens.values().copied().next())
+        .unwrap_or(0);
+    Ok(LockHandle {
         keys: keys.iter().map(|k| k.to_string()).collect(),
         holder: holder.to_string(),
-        fencing_token: output["fencing_token"].as_u64().unwrap_or(0),
+        fencing_token,
+        fencing_tokens,
         lease_expires_ms: output["lease_expires_ms"].as_u64(),
+    })
+}
+
+/// The release request body/bodies for a handle: one `{ holder, fencing_token }`
+/// for a single-key grant (unchanged), or one `{ key, holder, fencing_token }`
+/// per member key for a multi-key grant so each key is released with its own
+/// token.
+fn release_payloads(handle: &LockHandle) -> Vec<Value> {
+    if handle.fencing_tokens.is_empty() {
+        vec![json!({ "holder": handle.holder, "fencing_token": handle.fencing_token })]
+    } else {
+        handle
+            .fencing_tokens
+            .iter()
+            .map(|(key, token)| {
+                json!({ "key": key, "holder": handle.holder, "fencing_token": token })
+            })
+            .collect()
     }
 }
 
