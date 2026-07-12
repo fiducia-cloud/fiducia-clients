@@ -36,6 +36,31 @@ pub struct RequestControl {
     pub idempotency_key: Option<String>,
 }
 
+/// A per-axis budget amount or limit. `None` on an axis means unlimited (for a
+/// limit) or unset (for a spend/amount).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BudgetAmount {
+    pub usd_micros: Option<u64>,
+    pub tokens: Option<u64>,
+    pub tool_calls: Option<u64>,
+}
+
+impl BudgetAmount {
+    fn to_json(self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(v) = self.usd_micros {
+            map.insert("usd_micros".into(), json!(v));
+        }
+        if let Some(v) = self.tokens {
+            map.insert("tokens".into(), json!(v));
+        }
+        if let Some(v) = self.tool_calls {
+            map.insert("tool_calls".into(), json!(v));
+        }
+        Value::Object(map)
+    }
+}
+
 /// Parameters for casting a decision vote.
 #[derive(Clone, Copy, Debug)]
 pub struct DecisionVote<'a> {
