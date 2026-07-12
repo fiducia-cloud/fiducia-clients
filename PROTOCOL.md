@@ -190,6 +190,15 @@ it to the resource you're protecting and have that resource reject any token
 lower than the highest it has seen — this defeats a stale holder that paused past
 its lease (Kleppmann fencing).
 
+`fencing_token` (and KV `revision`) are `u64` counters incremented by one per
+grant. They are transported as JSON numbers, so JS/WebAssembly clients handle
+them as `number`: exact for any realistic deployment lifetime — reaching
+`Number.MAX_SAFE_INTEGER` (2^53−1 ≈ 9.0e15) would take ~9 quadrillion grants
+(~centuries at 10^6/s). Clients treat them as opaque monotonic values; do not do
+arithmetic on them beyond compare. The WebAssembly client additionally rejects a
+supplied token/count that isn't a safe integer, so a caller bug fails loudly
+rather than silently rounding.
+
 ## Errors
 
 Non-2xx responses carry a JSON body where possible. Clients surface the status
