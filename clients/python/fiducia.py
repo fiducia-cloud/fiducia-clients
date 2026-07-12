@@ -434,7 +434,7 @@ def _print_json(value):
 def build_parser():
     parser = argparse.ArgumentParser(prog="fiducia")
     parser.add_argument("--base", default=_os.environ.get("FIDUCIA_BASE_URL", "https://api.fiducia.cloud"))
-    parser.add_argument("--timeout", type=float, default=30)
+    parser.add_argument("--timeout", type=float, default=float(_os.environ.get("FIDUCIA_TIMEOUT_SECONDS", "30")))
     sub = parser.add_subparsers(dest="resource", required=True)
 
     sub.add_parser("health")

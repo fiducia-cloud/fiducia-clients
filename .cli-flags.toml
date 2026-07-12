@@ -1,0 +1,26 @@
+[help]
+url = "https://github.com/fiducia-cloud/fiducia-clients"
+columns = ["options", "env", "type", "description"]
+
+[parse]
+stop_at_first_positional = true
+allow_unknown = true
+
+[flags.url]
+env = "FIDUCIA_URL"
+aliases = ["url"]
+type = "string"
+help = "Base URL for the Python coordination CLI."
+
+[flags.base]
+env = "FIDUCIA_BASE_URL"
+aliases = ["base"]
+type = "string"
+help = "Base URL for the full Python client CLI."
+
+[flags.timeout]
+env = "FIDUCIA_TIMEOUT_SECONDS"
+aliases = ["timeout"]
+type = "string"
+help = "HTTP request timeout in seconds."
+

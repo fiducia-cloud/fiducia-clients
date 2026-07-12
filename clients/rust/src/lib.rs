@@ -516,6 +516,41 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)
     }
 
+    // --- counters ---
+    /// Read a counter's current value and revision. An absent counter reports
+    /// `found: false`; callers treat that as value 0.
+    pub fn counter_get(&self, key: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/counters?key={}", enc(key)), None)
+    }
+    /// Atomically add `delta` (which may be negative), creating the counter at 0.
+    /// When `prev_revision` is set, the add is a compare-and-set.
+    pub fn counter_add(
+        &self,
+        key: &str,
+        delta: i64,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/counters/add",
+            Some(json!({ "key": key, "delta": delta, "prev_revision": prev_revision })),
+        )
+    }
+    /// Set a counter to an absolute `value` (e.g. reset to 0). When
+    /// `prev_revision` is set, the write is a compare-and-set.
+    pub fn counter_set(
+        &self,
+        key: &str,
+        value: i64,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/counters/set",
+            Some(json!({ "key": key, "value": value, "prev_revision": prev_revision })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
