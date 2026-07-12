@@ -680,6 +680,57 @@ impl FiduciaClient {
         self.request("POST", "/v1/tasks/cancel", Some(json!({ "name": name })))
     }
 
+    // --- approval-escrow effects ---
+    /// Read an effect's status, approvals, and result. Absent reports
+    /// `found: false`.
+    pub fn effect_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/effects?name={}", enc(name)), None)
+    }
+    /// Prepare a side effect for later authorization (idempotent).
+    /// `required_approvals` of 0 is pre-approved and may be committed immediately.
+    pub fn effect_prepare(
+        &self,
+        name: &str,
+        effect_type: &str,
+        payload: Value,
+        risk: &str,
+        idempotency_key: &str,
+        required_approvals: u32,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/prepare",
+            Some(json!({
+                "name": name,
+                "effect_type": effect_type,
+                "payload": payload,
+                "risk": risk,
+                "idempotency_key": idempotency_key,
+                "required_approvals": required_approvals,
+            })),
+        )
+    }
+    /// Record one principal's approval.
+    pub fn effect_approve(&self, name: &str, principal: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/approve",
+            Some(json!({ "name": name, "principal": principal })),
+        )
+    }
+    /// Commit an approved effect exactly once, recording `result`.
+    pub fn effect_commit(&self, name: &str, result: Value) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/effects/commit",
+            Some(json!({ "name": name, "result": result })),
+        )
+    }
+    /// Abort a prepared/approved effect (terminal).
+    pub fn effect_abort(&self, name: &str) -> Result<Value, Error> {
+        self.request("POST", "/v1/effects/abort", Some(json!({ "name": name })))
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(

@@ -27,6 +27,13 @@ too. `?param` marks an optional argument.
 | `GET` | `/v1/barriers` | `name` | Read a barrier's arrivals and resolution status; absent reads as found=false. |
 | `POST` | `/v1/barriers/create` | `name`, `policy`, `expected`?, `deadline_ms`? | Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum). |
 | `POST` | `/v1/barriers/arrive` | `name`, `participant`, `weight`?, `veto`? | Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent. |
+| `GET` | `/v1/tasks` | `name` | Read a task's status, owner, and fencing token; absent reads as found=false. |
+| `POST` | `/v1/tasks/create` | `name`, `task_type`, `payload`?, `deadline_ms`? | Create a durable task if it does not exist (idempotent). |
+| `POST` | `/v1/tasks/claim` | `name`, `worker`, `ttl_ms`? | Claim a pending or lease-expired task; the grant carries a fencing token. |
+| `POST` | `/v1/tasks/progress` | `name`, `worker`, `fencing_token`, `percent`?, `checkpoint`? | Report progress and a checkpoint under the current fencing token. |
+| `POST` | `/v1/tasks/complete` | `name`, `worker`, `fencing_token`, `result`? | Complete a task with a durable result under the current fencing token. |
+| `POST` | `/v1/tasks/fail` | `name`, `worker`, `fencing_token`, `retryable`? | Fail a task; retryable requeues it for another worker. |
+| `POST` | `/v1/tasks/cancel` | `name` | Cancel a task (terminal), regardless of owner. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |

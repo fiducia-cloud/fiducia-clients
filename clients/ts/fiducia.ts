@@ -106,6 +106,34 @@ export class FiduciaClient {
     return this.request("POST", `/v1/barriers/arrive`, { name: name, participant: participant, weight: opts.weight, veto: opts.veto });
   }
 
+  async taskGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/tasks?name=${enc(name)}`);
+  }
+
+  async taskCreate(name: string, taskType: string, opts: { payload?: Record<string, any>; deadline_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/tasks/create`, { name: name, task_type: taskType, payload: opts.payload, deadline_ms: opts.deadline_ms });
+  }
+
+  async taskClaim(name: string, worker: string, opts: { ttl_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/tasks/claim`, { name: name, worker: worker, ttl_ms: opts.ttl_ms });
+  }
+
+  async taskProgress(name: string, worker: string, fencingToken: number, opts: { percent?: number; checkpoint?: Record<string, any> } = {}): Promise<any> {
+    return this.request("POST", `/v1/tasks/progress`, { name: name, worker: worker, fencing_token: fencingToken, percent: opts.percent, checkpoint: opts.checkpoint });
+  }
+
+  async taskComplete(name: string, worker: string, fencingToken: number, opts: { result?: Record<string, any> } = {}): Promise<any> {
+    return this.request("POST", `/v1/tasks/complete`, { name: name, worker: worker, fencing_token: fencingToken, result: opts.result });
+  }
+
+  async taskFail(name: string, worker: string, fencingToken: number, opts: { retryable?: boolean } = {}): Promise<any> {
+    return this.request("POST", `/v1/tasks/fail`, { name: name, worker: worker, fencing_token: fencingToken, retryable: opts.retryable });
+  }
+
+  async taskCancel(name: string): Promise<any> {
+    return this.request("POST", `/v1/tasks/cancel`, { name: name });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

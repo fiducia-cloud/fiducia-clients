@@ -122,6 +122,34 @@ class FiduciaClient:
         """Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent."""
         return self._request("POST", "/v1/barriers/arrive", {"name": name, "participant": participant, "weight": weight, "veto": veto})
 
+    def task_get(self, name):
+        """Read a task's status, owner, and fencing token; absent reads as found=false."""
+        return self._request("GET", "/v1/tasks?name=%s" % _enc(name))
+
+    def task_create(self, name, task_type, payload=None, deadline_ms=None):
+        """Create a durable task if it does not exist (idempotent)."""
+        return self._request("POST", "/v1/tasks/create", {"name": name, "task_type": task_type, "payload": payload, "deadline_ms": deadline_ms})
+
+    def task_claim(self, name, worker, ttl_ms=None):
+        """Claim a pending or lease-expired task; the grant carries a fencing token."""
+        return self._request("POST", "/v1/tasks/claim", {"name": name, "worker": worker, "ttl_ms": ttl_ms})
+
+    def task_progress(self, name, worker, fencing_token, percent=None, checkpoint=None):
+        """Report progress and a checkpoint under the current fencing token."""
+        return self._request("POST", "/v1/tasks/progress", {"name": name, "worker": worker, "fencing_token": fencing_token, "percent": percent, "checkpoint": checkpoint})
+
+    def task_complete(self, name, worker, fencing_token, result=None):
+        """Complete a task with a durable result under the current fencing token."""
+        return self._request("POST", "/v1/tasks/complete", {"name": name, "worker": worker, "fencing_token": fencing_token, "result": result})
+
+    def task_fail(self, name, worker, fencing_token, retryable=None):
+        """Fail a task; retryable requeues it for another worker."""
+        return self._request("POST", "/v1/tasks/fail", {"name": name, "worker": worker, "fencing_token": fencing_token, "retryable": retryable})
+
+    def task_cancel(self, name):
+        """Cancel a task (terminal), regardless of owner."""
+        return self._request("POST", "/v1/tasks/cancel", {"name": name})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))

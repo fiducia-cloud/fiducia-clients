@@ -454,6 +454,108 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a task's status, owner, and fencing token; absent reads as found=false.
+    #[wasm_bindgen(js_name = taskGet)]
+    pub async fn task_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/tasks");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Create a durable task if it does not exist (idempotent).
+    #[wasm_bindgen(js_name = taskCreate)]
+    pub async fn task_create(&self, name: String, task_type: String, payload: JsValue, deadline_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/create");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("task_type".to_string(), serde_json::Value::String(task_type));
+        if !payload.is_null() && !payload.is_undefined() {
+            _body.insert("payload".to_string(), serde_wasm_bindgen::from_value(payload).map_err(|e| err(0, e.into()))?);
+        }
+        if let Some(v) = deadline_ms {
+            _body.insert("deadline_ms".to_string(), serde_json::json!(checked_int(v, "deadline_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Claim a pending or lease-expired task; the grant carries a fencing token.
+    #[wasm_bindgen(js_name = taskClaim)]
+    pub async fn task_claim(&self, name: String, worker: String, ttl_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/claim");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("worker".to_string(), serde_json::Value::String(worker));
+        if let Some(v) = ttl_ms {
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Report progress and a checkpoint under the current fencing token.
+    #[wasm_bindgen(js_name = taskProgress)]
+    pub async fn task_progress(&self, name: String, worker: String, fencing_token: f64, percent: Option<f64>, checkpoint: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/progress");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("worker".to_string(), serde_json::Value::String(worker));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
+        if let Some(v) = percent {
+            _body.insert("percent".to_string(), serde_json::json!(checked_int(v, "percent")?));
+        }
+        if !checkpoint.is_null() && !checkpoint.is_undefined() {
+            _body.insert("checkpoint".to_string(), serde_wasm_bindgen::from_value(checkpoint).map_err(|e| err(0, e.into()))?);
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Complete a task with a durable result under the current fencing token.
+    #[wasm_bindgen(js_name = taskComplete)]
+    pub async fn task_complete(&self, name: String, worker: String, fencing_token: f64, result: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/complete");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("worker".to_string(), serde_json::Value::String(worker));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
+        if !result.is_null() && !result.is_undefined() {
+            _body.insert("result".to_string(), serde_wasm_bindgen::from_value(result).map_err(|e| err(0, e.into()))?);
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Fail a task; retryable requeues it for another worker.
+    #[wasm_bindgen(js_name = taskFail)]
+    pub async fn task_fail(&self, name: String, worker: String, fencing_token: f64, retryable: Option<bool>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/fail");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("worker".to_string(), serde_json::Value::String(worker));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
+        if let Some(v) = retryable {
+            _body.insert("retryable".to_string(), serde_json::json!(v));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Cancel a task (terminal), regardless of owner.
+    #[wasm_bindgen(js_name = taskCancel)]
+    pub async fn task_cancel(&self, name: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/tasks/cancel");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

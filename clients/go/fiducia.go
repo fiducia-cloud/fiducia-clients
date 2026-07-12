@@ -198,6 +198,53 @@ func (c *Client) BarrierArrive(name string, participant string, opts map[string]
 	return c.request("POST", "/v1/barriers/arrive", body)
 }
 
+// TaskGet Read a task's status, owner, and fencing token; absent reads as found=false.
+func (c *Client) TaskGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/tasks?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// TaskCreate Create a durable task if it does not exist (idempotent).
+func (c *Client) TaskCreate(name string, taskType string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "task_type": taskType}
+	merge(body, opts)
+	return c.request("POST", "/v1/tasks/create", body)
+}
+
+// TaskClaim Claim a pending or lease-expired task; the grant carries a fencing token.
+func (c *Client) TaskClaim(name string, worker string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "worker": worker}
+	merge(body, opts)
+	return c.request("POST", "/v1/tasks/claim", body)
+}
+
+// TaskProgress Report progress and a checkpoint under the current fencing token.
+func (c *Client) TaskProgress(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
+	merge(body, opts)
+	return c.request("POST", "/v1/tasks/progress", body)
+}
+
+// TaskComplete Complete a task with a durable result under the current fencing token.
+func (c *Client) TaskComplete(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
+	merge(body, opts)
+	return c.request("POST", "/v1/tasks/complete", body)
+}
+
+// TaskFail Fail a task; retryable requeues it for another worker.
+func (c *Client) TaskFail(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
+	merge(body, opts)
+	return c.request("POST", "/v1/tasks/fail", body)
+}
+
+// TaskCancel Cancel a task (terminal), regardless of owner.
+func (c *Client) TaskCancel(name string) (map[string]any, error) {
+	body := map[string]any{"name": name}
+	return c.request("POST", "/v1/tasks/cancel", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))
