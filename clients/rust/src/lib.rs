@@ -124,10 +124,15 @@ impl FiduciaClient {
         } else {
             self.retry_max
         };
+        // A retry re-sends the request. That is only safe when either the server
+        // provably did NOT apply the first attempt, or it can dedup a re-send via
+        // the caller's idempotency key. Thread that fact into the retry decision so
+        // a keyless, non-idempotent mutation is never double-applied.
+        let has_idempotency = control.idempotency_key.is_some();
         for attempt in 0..=max_retries {
             match self.request_once(method, path, body.clone(), control.clone(), lock_acquire) {
                 Ok(value) => return Ok(value),
-                Err(err) if attempt < max_retries && Self::retryable(&err) => {
+                Err(err) if attempt < max_retries && Self::retryable(&err, has_idempotency) => {
                     let delay = if control.retry_delay > Duration::ZERO {
                         control.retry_delay
                     } else {
