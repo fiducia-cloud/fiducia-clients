@@ -1,3 +1,4 @@
+// Tests for the high-level locking helpers in the Fiducia Go client.
 package fiducia
 
 import (
