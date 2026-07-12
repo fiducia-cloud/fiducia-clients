@@ -111,14 +111,42 @@ impl std::error::Error for LockError {}
 
 static HOLDER_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// A process-unique holder id (no external uuid dependency).
+/// A per-process random nonce, seeded once. Two processes that generate their
+/// first holder in the same nanosecond would otherwise collide (wall-clock nanos
+/// + a process-local counter that both start at 0); mixing in the pid and a
+/// nonce derived from a stack address makes the id distinct across processes.
+fn process_nonce() -> u64 {
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let pid = std::process::id() as u64;
+        let stack_local = 0_u8;
+        let addr = &stack_local as *const u8 as u64;
+        // splitmix64 finalizer over the mixed entropy — good avalanche, no deps.
+        let mut h = pid ^ nanos ^ addr;
+        h ^= h >> 30;
+        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+        h ^= h >> 31;
+        h
+    })
+}
+
+/// A process-unique holder id (no external uuid dependency). Includes the pid and
+/// a per-process random nonce so ids never collide across processes.
 fn gen_holder() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = HOLDER_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("fdc-{nanos:x}-{seq:x}")
+    let pid = std::process::id();
+    let nonce = process_nonce();
+    format!("fdc-{pid:x}-{nonce:x}-{nanos:x}-{seq:x}")
 }
 
 fn out(resp: &Value) -> &Value {
