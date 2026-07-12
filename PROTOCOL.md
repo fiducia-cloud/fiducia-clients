@@ -143,6 +143,25 @@ the counter's current `mod_revision` matches, else `result.output` is
 body on writes). Use counters for success/failure thresholds, quota tallies, and
 barrier fan-in counts.
 
+### Barriers — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `barrierGet(name)` | `GET /v1/barriers?name=...` | — | `{name, found, barrier}` |
+| `barrierCreate(name, {policy, expected, deadlineMs})` | `POST /v1/barriers/create` | `{name, policy, expected, deadline_ms}` | `{committed, result}` |
+| `barrierArrive(name, {participant, weight, veto})` | `POST /v1/barriers/arrive` | `{name, participant, weight, veto}` | `{committed, result}` |
+
+A barrier gathers arrivals from named participants and resolves per its
+`policy.kind`: `all` (every `expected` participant), `quorum` (`required`
+distinct arrivals), `first_success` (first non-veto arrival), `any_veto` (all
+arrive but any veto aborts), `best_by_deadline` (whoever arrived by
+`deadline_ms`), or `weighted_quorum` (arrival `weight`s sum to
+`required_weight`). Repeat arrivals by the same participant are idempotent, and a
+bare `arrive` on an unknown barrier auto-creates a single-participant `all`
+barrier. `result.output.barrier.status` is `pending`, `satisfied`, `vetoed`, or
+`timed_out`; `result.output.resolved` is a convenience boolean on arrive. Names
+are slash-safe. Use barriers for research-swarm fan-in, evaluator panels,
+multi-model verification, and rollout stage gates.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

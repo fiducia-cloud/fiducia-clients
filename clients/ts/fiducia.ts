@@ -94,6 +94,18 @@ export class FiduciaClient {
     return this.request("POST", `/v1/counters/set`, { key: key, value: value, prev_revision: opts.prev_revision });
   }
 
+  async barrierGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/barriers?name=${enc(name)}`);
+  }
+
+  async barrierCreate(name: string, policy: Record<string, any>, opts: { expected?: number; deadline_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/barriers/create`, { name: name, policy: policy, expected: opts.expected, deadline_ms: opts.deadline_ms });
+  }
+
+  async barrierArrive(name: string, participant: string, opts: { weight?: number; veto?: boolean } = {}): Promise<any> {
+    return this.request("POST", `/v1/barriers/arrive`, { name: name, participant: participant, weight: opts.weight, veto: opts.veto });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

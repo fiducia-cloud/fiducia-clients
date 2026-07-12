@@ -551,6 +551,54 @@ impl FiduciaClient {
         )
     }
 
+    // --- barriers ---
+    /// Read a barrier's arrivals and resolution status. Absent reports
+    /// `found: false`.
+    pub fn barrier_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/barriers?name={}", enc(name)), None)
+    }
+    /// Create (or reconfigure, if still pending) a barrier. `policy` is a JSON
+    /// object like `{"kind":"quorum","required":3}`; `expected` is the
+    /// participant count for `all`/`any_veto` (defaults to 1).
+    pub fn barrier_create(
+        &self,
+        name: &str,
+        policy: Value,
+        expected: Option<u32>,
+        deadline_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/barriers/create",
+            Some(json!({
+                "name": name,
+                "policy": policy,
+                "expected": expected.unwrap_or(1),
+                "deadline_ms": deadline_ms,
+            })),
+        )
+    }
+    /// Record a participant's arrival (or veto). Repeat arrivals by the same
+    /// participant are idempotent.
+    pub fn barrier_arrive(
+        &self,
+        name: &str,
+        participant: &str,
+        weight: Option<u64>,
+        veto: bool,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/barriers/arrive",
+            Some(json!({
+                "name": name,
+                "participant": participant,
+                "weight": weight.unwrap_or(1),
+                "veto": veto,
+            })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1108,6 +1156,50 @@ mod tests {
             "POST",
             "/v1/counters/set",
             json!({ "key": "rollout/v2/failures", "value": 0, "prev_revision": null }),
+        );
+    }
+
+    #[test]
+    fn barrier_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client.barrier_get("release/reviewers").unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/barriers?name=release%2Freviewers",
+            Value::Null,
+        );
+
+        client
+            .barrier_create(
+                "release/reviewers",
+                json!({ "kind": "quorum", "required": 2 }),
+                Some(3),
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/barriers/create",
+            json!({
+                "name": "release/reviewers",
+                "policy": { "kind": "quorum", "required": 2 },
+                "expected": 3,
+                "deadline_ms": null
+            }),
+        );
+
+        client
+            .barrier_arrive("release/reviewers", "reviewer-a", None, false)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/barriers/arrive",
+            json!({ "name": "release/reviewers", "participant": "reviewer-a", "weight": 1, "veto": false }),
         );
     }
 

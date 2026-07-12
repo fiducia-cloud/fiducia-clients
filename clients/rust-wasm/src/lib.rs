@@ -407,6 +407,53 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a barrier's arrivals and resolution status; absent reads as found=false.
+    #[wasm_bindgen(js_name = barrierGet)]
+    pub async fn barrier_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/barriers");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum).
+    #[wasm_bindgen(js_name = barrierCreate)]
+    pub async fn barrier_create(&self, name: String, policy: JsValue, expected: Option<f64>, deadline_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/barriers/create");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("policy".to_string(), serde_wasm_bindgen::from_value(policy).map_err(|e| err(0, e.into()))?);
+        if let Some(v) = expected {
+            _body.insert("expected".to_string(), serde_json::json!(checked_int(v, "expected")?));
+        }
+        if let Some(v) = deadline_ms {
+            _body.insert("deadline_ms".to_string(), serde_json::json!(checked_int(v, "deadline_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent.
+    #[wasm_bindgen(js_name = barrierArrive)]
+    pub async fn barrier_arrive(&self, name: String, participant: String, weight: Option<f64>, veto: Option<bool>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/barriers/arrive");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("participant".to_string(), serde_json::Value::String(participant));
+        if let Some(v) = weight {
+            _body.insert("weight".to_string(), serde_json::json!(checked_int(v, "weight")?));
+        }
+        if let Some(v) = veto {
+            _body.insert("veto".to_string(), serde_json::json!(v));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

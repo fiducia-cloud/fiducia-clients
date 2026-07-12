@@ -178,6 +178,26 @@ func (c *Client) CounterSet(key string, value int64, opts map[string]any) (map[s
 	return c.request("POST", "/v1/counters/set", body)
 }
 
+// BarrierGet Read a barrier's arrivals and resolution status; absent reads as found=false.
+func (c *Client) BarrierGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/barriers?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// BarrierCreate Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum).
+func (c *Client) BarrierCreate(name string, policy map[string]any, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "policy": policy}
+	merge(body, opts)
+	return c.request("POST", "/v1/barriers/create", body)
+}
+
+// BarrierArrive Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent.
+func (c *Client) BarrierArrive(name string, participant string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "participant": participant}
+	merge(body, opts)
+	return c.request("POST", "/v1/barriers/arrive", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))

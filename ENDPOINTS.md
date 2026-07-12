@@ -24,6 +24,9 @@ too. `?param` marks an optional argument.
 | `GET` | `/v1/counters` | `key` | Read a counter's value and revision; absent reads as found=false (treat as 0). |
 | `POST` | `/v1/counters/add` | `key`, `delta`, `prev_revision`? | Atomically add delta (may be negative); prev_revision makes it a compare-and-set. |
 | `POST` | `/v1/counters/set` | `key`, `value`, `prev_revision`? | Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set. |
+| `GET` | `/v1/barriers` | `name` | Read a barrier's arrivals and resolution status; absent reads as found=false. |
+| `POST` | `/v1/barriers/create` | `name`, `policy`, `expected`?, `deadline_ms`? | Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum). |
+| `POST` | `/v1/barriers/arrive` | `name`, `participant`, `weight`?, `veto`? | Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |
