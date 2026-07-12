@@ -154,6 +154,22 @@ export class FiduciaClient {
     return this.request("POST", `/v1/effects/abort`, { name: name });
   }
 
+  async handoffGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/handoffs?name=${enc(name)}`);
+  }
+
+  async handoffOffer(name: string, resource: string, from: string, to: string, fromToken: number, opts: { context?: Record<string, any>; ttl_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/handoffs/offer`, { name: name, resource: resource, from: from, to: to, from_token: fromToken, context: opts.context, ttl_ms: opts.ttl_ms });
+  }
+
+  async handoffAccept(name: string, to: string): Promise<any> {
+    return this.request("POST", `/v1/handoffs/accept`, { name: name, to: to });
+  }
+
+  async handoffReject(name: string, to: string): Promise<any> {
+    return this.request("POST", `/v1/handoffs/reject`, { name: name, to: to });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

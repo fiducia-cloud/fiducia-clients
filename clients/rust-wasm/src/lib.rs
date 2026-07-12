@@ -624,6 +624,61 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a handoff's status, counterparties, and tokens; absent reads as found=false.
+    #[wasm_bindgen(js_name = handoffGet)]
+    pub async fn handoff_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/handoffs");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Offer to transfer ownership of a resource; the original owner keeps authority until accepted.
+    #[wasm_bindgen(js_name = handoffOffer)]
+    pub async fn handoff_offer(&self, name: String, resource: String, from: String, to: String, from_token: f64, context: JsValue, ttl_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/handoffs/offer");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("resource".to_string(), serde_json::Value::String(resource));
+        _body.insert("from".to_string(), serde_json::Value::String(from));
+        _body.insert("to".to_string(), serde_json::Value::String(to));
+        _body.insert("from_token".to_string(), serde_json::json!(checked_int(from_token, "from_token")?));
+        if !context.is_null() && !context.is_undefined() {
+            _body.insert("context".to_string(), serde_wasm_bindgen::from_value(context).map_err(|e| err(0, e.into()))?);
+        }
+        if let Some(v) = ttl_ms {
+            _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Accept an offered handoff; the new owner receives a strictly higher fencing token.
+    #[wasm_bindgen(js_name = handoffAccept)]
+    pub async fn handoff_accept(&self, name: String, to: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/handoffs/accept");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("to".to_string(), serde_json::Value::String(to));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Reject an offered handoff; ownership stays with the original owner.
+    #[wasm_bindgen(js_name = handoffReject)]
+    pub async fn handoff_reject(&self, name: String, to: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/handoffs/reject");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("to".to_string(), serde_json::Value::String(to));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

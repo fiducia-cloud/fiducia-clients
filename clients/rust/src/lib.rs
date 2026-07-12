@@ -781,6 +781,52 @@ impl FiduciaClient {
         )
     }
 
+    // --- decisions (typed weighted voting) ---
+    /// Read a decision's options, tallies, votes, and resolution. Absent reports
+    /// `found: false`.
+    pub fn decision_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/decisions?name={}", enc(name)), None)
+    }
+    /// Propose a decision with typed options and a resolution policy (a JSON
+    /// object like `{"kind":"plurality","min_votes":3}`). Idempotent.
+    pub fn decision_propose(
+        &self,
+        name: &str,
+        question: &str,
+        options: &[&str],
+        policy: Value,
+        deadline_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/decisions/propose",
+            Some(json!({
+                "name": name,
+                "question": question,
+                "options": options,
+                "policy": policy,
+                "deadline_ms": deadline_ms,
+            })),
+        )
+    }
+    /// Cast (or replace) a vote. `option` of `None` abstains; `veto` aborts the
+    /// decision; `weight` drives resolution.
+    pub fn decision_vote(&self, name: &str, vote: DecisionVote<'_>) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/decisions/vote",
+            Some(json!({
+                "name": name,
+                "voter": vote.voter,
+                "option": vote.option,
+                "confidence": vote.confidence,
+                "weight": vote.weight,
+                "veto": vote.veto,
+                "evidence": vote.evidence,
+            })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(

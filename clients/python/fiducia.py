@@ -170,6 +170,22 @@ class FiduciaClient:
         """Abort a prepared/approved effect (terminal)."""
         return self._request("POST", "/v1/effects/abort", {"name": name})
 
+    def handoff_get(self, name):
+        """Read a handoff's status, counterparties, and tokens; absent reads as found=false."""
+        return self._request("GET", "/v1/handoffs?name=%s" % _enc(name))
+
+    def handoff_offer(self, name, resource, from, to, from_token, context=None, ttl_ms=None):
+        """Offer to transfer ownership of a resource; the original owner keeps authority until accepted."""
+        return self._request("POST", "/v1/handoffs/offer", {"name": name, "resource": resource, "from": from, "to": to, "from_token": from_token, "context": context, "ttl_ms": ttl_ms})
+
+    def handoff_accept(self, name, to):
+        """Accept an offered handoff; the new owner receives a strictly higher fencing token."""
+        return self._request("POST", "/v1/handoffs/accept", {"name": name, "to": to})
+
+    def handoff_reject(self, name, to):
+        """Reject an offered handoff; ownership stays with the original owner."""
+        return self._request("POST", "/v1/handoffs/reject", {"name": name, "to": to})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))

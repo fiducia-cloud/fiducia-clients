@@ -277,6 +277,31 @@ func (c *Client) EffectAbort(name string) (map[string]any, error) {
 	return c.request("POST", "/v1/effects/abort", body)
 }
 
+// HandoffGet Read a handoff's status, counterparties, and tokens; absent reads as found=false.
+func (c *Client) HandoffGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/handoffs?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// HandoffOffer Offer to transfer ownership of a resource; the original owner keeps authority until accepted.
+func (c *Client) HandoffOffer(name string, resource string, from string, to string, fromToken int64, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "resource": resource, "from": from, "to": to, "from_token": fromToken}
+	merge(body, opts)
+	return c.request("POST", "/v1/handoffs/offer", body)
+}
+
+// HandoffAccept Accept an offered handoff; the new owner receives a strictly higher fencing token.
+func (c *Client) HandoffAccept(name string, to string) (map[string]any, error) {
+	body := map[string]any{"name": name, "to": to}
+	return c.request("POST", "/v1/handoffs/accept", body)
+}
+
+// HandoffReject Reject an offered handoff; ownership stays with the original owner.
+func (c *Client) HandoffReject(name string, to string) (map[string]any, error) {
+	body := map[string]any{"name": name, "to": to}
+	return c.request("POST", "/v1/handoffs/reject", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))
