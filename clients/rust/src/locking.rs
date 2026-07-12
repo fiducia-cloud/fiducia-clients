@@ -65,7 +65,13 @@ impl Default for LockOptions {
 pub struct LockHandle {
     pub keys: Vec<String>,
     pub holder: String,
+    /// The grant's fencing token. For a single-key grant this is the scalar the
+    /// node returns. For a multi-key (union) grant with per-key tokens it mirrors
+    /// one of `fencing_tokens` (release uses the per-key map, not this scalar).
     pub fencing_token: u64,
+    /// Per-key fencing tokens for a multi-key (union) grant. Empty for a
+    /// single-key grant (release then uses the scalar `fencing_token`).
+    pub fencing_tokens: BTreeMap<String, u64>,
     pub lease_expires_ms: Option<u64>,
 }
 
