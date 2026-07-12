@@ -1362,6 +1362,44 @@ mod tests {
     }
 
     #[test]
+    fn effect_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .effect_prepare(
+                "invoice-882/payment",
+                "send_payment",
+                json!({ "amount_usd": 500 }),
+                "high",
+                "invoice-882:payment",
+                2,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/effects/prepare",
+            json!({
+                "name": "invoice-882/payment",
+                "effect_type": "send_payment",
+                "payload": { "amount_usd": 500 },
+                "risk": "high",
+                "idempotency_key": "invoice-882:payment",
+                "required_approvals": 2
+            }),
+        );
+
+        client.effect_commit("invoice-882/payment", json!({ "confirmation": "pay_123" })).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/effects/commit",
+            json!({ "name": "invoice-882/payment", "result": { "confirmation": "pay_123" } }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
