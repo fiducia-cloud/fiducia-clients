@@ -1285,6 +1285,32 @@ mod tests {
     }
 
     #[test]
+    fn task_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .task_claim("repo/acme/api/issue/482", "agent-a", Some(60_000))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/tasks/claim",
+            json!({ "name": "repo/acme/api/issue/482", "worker": "agent-a", "ttl_ms": 60_000 }),
+        );
+
+        client
+            .task_complete("repo/acme/api/issue/482", "agent-a", 42, json!({ "pr": 991 }))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/tasks/complete",
+            json!({ "name": "repo/acme/api/issue/482", "worker": "agent-a", "fencing_token": 42, "result": { "pr": 991 } }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
