@@ -10,8 +10,16 @@
 ## HTTPS targets require compiling with `-d:ssl` (links OpenSSL), as usual for
 ## std/httpclient. Ops return the parsed JSON body as a `JsonNode` (nil for an
 ## empty body) and raise `FiduciaError` on any HTTP status >= 300.
+##
+## The blocking helpers `mustLock`/`lock` and `mustSemaphore`/`semaphore` do NOT
+## just set `wait=true` and return — the server does not hold the connection, it
+## returns a queued ticket immediately. They acquire-then-poll (`lockGet` /
+## `semaphoreGet`) until the grant is actually held, and raise `LockTimeout` if
+## the wait budget (`maxWaitMs`, default 30s) elapses first. They return a held
+## grant object `{key, holder, fencing_token, lease_expires_ms}` you can release.
 
-import std/[httpclient, json, uri, strutils, options]
+import std/[httpclient, json, uri, strutils, options, os, monotimes, times,
+            sysrand]
 
 export json, options
 
@@ -20,6 +28,12 @@ type
     ## Raised when the server responds with an HTTP status >= 300.
     status*: int      ## numeric HTTP status code
     body*: JsonNode   ## parsed JSON error body (nil when the body was empty)
+
+  LockTimeout* = ref object of CatchableError
+    ## Raised by the blocking helpers (`mustLock`/`lock`, `mustSemaphore`/
+    ## `semaphore`) when the wait budget elapses before the grant is held.
+    keys*: seq[string]  ## the key(s) that were waited on
+    waitedMs*: int      ## the wait budget (ms) that elapsed
 
   Client* = ref object
     ## A thin Fiducia HTTP client. Build one with `newClient`.
@@ -32,6 +46,13 @@ proc newFiduciaError(status: int, body: JsonNode): FiduciaError =
   result.status = status
   result.body = body
   result.msg = "fiducia: HTTP " & $status
+
+proc newLockTimeout(keys: seq[string], waitedMs: int): LockTimeout =
+  new(result)
+  result.keys = keys
+  result.waitedMs = waitedMs
+  result.msg = "fiducia: timed out after " & $waitedMs & "ms waiting for " &
+    keys.join(", ")
 
 proc enc(s: string): string =
   ## Percent-encode a string for use in a path segment or query value.
@@ -118,13 +139,66 @@ proc tryLock*(c: Client, key: string, holder = none(string),
               ttlMs = none(int)): JsonNode =
   c.lockAcquire(key, holder, ttlMs, wait = false)
 
-proc mustLock*(c: Client, key: string, holder = none(string),
-               ttlMs = none(int)): JsonNode =
-  c.lockAcquire(key, holder, ttlMs, wait = true)
+# --- blocking-acquire helpers ---
+# The server does not hold the connection on wait:true; it reserves a FIFO slot
+# and returns a queued ticket immediately. So the blocking helpers acquire, then
+# poll until the grant is actually held (or the wait budget elapses).
+proc genHolder(): string =
+  ## A stable, unique holder id for one logical acquire, e.g. "fdc-9f1c4e...".
+  result = "fdc-"
+  for b in urandom(8): result.add toHex(b.int, 2).toLowerAscii
 
-proc lock*(c: Client, key: string, holder = none(string),
-           ttlMs = none(int)): JsonNode =
-  c.mustLock(key, holder, ttlMs)
+proc jsonOutput(resp: JsonNode): JsonNode =
+  ## `resp.result.output`, nil-safe (an empty object when absent).
+  result = resp{"result", "output"}
+  if result == nil: result = newJObject()
+
+proc mkGrant(key, holder: string, src: JsonNode): JsonNode =
+  ## A held grant the caller can release. `fencing_token` is kept as its native
+  ## JSON node so 64-bit tokens keep full precision.
+  result = newJObject()
+  result["key"] = %key
+  result["holder"] = %holder
+  let ft = src{"fencing_token"}
+  result["fencing_token"] = (if ft != nil: ft else: newJNull())
+  let le = src{"lease_expires_ms"}
+  result["lease_expires_ms"] = (if le != nil: le else: newJNull())
+
+proc heldBy(node: JsonNode, holder: string): bool =
+  ## True when `node` shows `holder` holding with a non-null fencing_token.
+  let ft = node{"fencing_token"}
+  node != nil and node{"holder"}.getStr == holder and ft != nil and
+    ft.kind != JNull
+
+proc pollLock(c: Client, key, holder: string, maxWaitMs, retryIntervalMs: int,
+              maxRetries: Option[int]): JsonNode =
+  let deadline = getMonoTime() + initDuration(milliseconds = maxWaitMs)
+  var attempts = 0
+  while maxRetries.isNone or attempts < maxRetries.get:
+    inc attempts
+    let remaining = inMilliseconds(deadline - getMonoTime()).int
+    if remaining <= 0: break
+    sleep(min(retryIntervalMs, remaining))
+    let lk = c.lockGet(key){"lock"}
+    if lk.heldBy(holder): return mkGrant(key, holder, lk)
+  raise newLockTimeout(@[key], maxWaitMs)
+
+proc mustLock*(c: Client, key: string, holder = none(string), ttlMs = none(int),
+               maxWaitMs = 30_000, retryIntervalMs = 250,
+               maxRetries = none(int)): JsonNode =
+  ## Block until the lock is actually held, else raise `LockTimeout` after
+  ## `maxWaitMs`. Acquires with wait:true, then polls `lockGet` every
+  ## `retryIntervalMs`. Returns a held grant `{key, holder, fencing_token,
+  ## lease_expires_ms}`; a holder is generated when none is given.
+  let h = if holder.isSome: holder.get else: genHolder()
+  let o = jsonOutput(c.lockAcquire(key, some(h), ttlMs, wait = true))
+  if o{"acquired"}.getBool: return mkGrant(key, h, o)
+  c.pollLock(key, h, maxWaitMs, retryIntervalMs, maxRetries)
+
+proc lock*(c: Client, key: string, holder = none(string), ttlMs = none(int),
+           maxWaitMs = 30_000, retryIntervalMs = 250,
+           maxRetries = none(int)): JsonNode =
+  c.mustLock(key, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
 proc lockRelease*(c: Client, key: string, holder: string,
                   fencingToken: JsonNode): JsonNode =
@@ -149,13 +223,38 @@ proc trySemaphore*(c: Client, key: string, limit: int, holder = none(string),
                    ttlMs = none(int)): JsonNode =
   c.semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
+proc pollSemaphore(c: Client, key, holder: string, maxWaitMs,
+                   retryIntervalMs: int, maxRetries: Option[int]): JsonNode =
+  let deadline = getMonoTime() + initDuration(milliseconds = maxWaitMs)
+  var attempts = 0
+  while maxRetries.isNone or attempts < maxRetries.get:
+    inc attempts
+    let remaining = inMilliseconds(deadline - getMonoTime()).int
+    if remaining <= 0: break
+    sleep(min(retryIntervalMs, remaining))
+    let holders = c.semaphoreGet(key){"semaphore", "holders"}
+    if holders != nil and holders.kind == JArray:
+      for slot in holders:
+        if slot.heldBy(holder): return mkGrant(key, holder, slot)
+  raise newLockTimeout(@[key], maxWaitMs)
+
 proc mustSemaphore*(c: Client, key: string, limit: int, holder = none(string),
-                    ttlMs = none(int)): JsonNode =
-  c.semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+                    ttlMs = none(int), maxWaitMs = 30_000,
+                    retryIntervalMs = 250, maxRetries = none(int)): JsonNode =
+  ## Block until a permit is actually held, else raise `LockTimeout` after
+  ## `maxWaitMs`. Acquires with wait:true, then polls `semaphoreGet` for this
+  ## holder's slot. Returns a held grant `{key, holder, fencing_token,
+  ## lease_expires_ms}`; a holder is generated when none is given.
+  let h = if holder.isSome: holder.get else: genHolder()
+  let o = jsonOutput(c.semaphoreAcquire(key, limit, some(h), ttlMs, wait = true))
+  if o{"acquired"}.getBool: return mkGrant(key, h, o)
+  c.pollSemaphore(key, h, maxWaitMs, retryIntervalMs, maxRetries)
 
 proc semaphore*(c: Client, key: string, limit: int, holder = none(string),
-                ttlMs = none(int)): JsonNode =
-  c.mustSemaphore(key, limit, holder, ttlMs)
+                ttlMs = none(int), maxWaitMs = 30_000, retryIntervalMs = 250,
+                maxRetries = none(int)): JsonNode =
+  c.mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs,
+                  maxRetries)
 
 proc semaphoreRelease*(c: Client, key: string, holder: string,
                        fencingToken: JsonNode): JsonNode =

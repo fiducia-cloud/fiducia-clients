@@ -40,11 +40,16 @@ The only runtime dependency is `org.clojure/data.json` (HTTP uses the JDK).
 (def tok (get-in lk [:result :output :fencing_token]))
 (f/lock-release c "orders/checkout" "worker-a" tok)
 
-;; Non-blocking / blocking variants + union lock
-(f/try-lock  c "orders/checkout")                      ; wait=false
-(f/must-lock c "orders/checkout")                      ; wait=true
-(f/lock      c "orders/checkout")                      ; alias of must-lock
-(f/lock-acquire-many c ["a" "b" "c"] {:ttl_ms 10000})  ; union lock
+;; try-lock: single, non-blocking shot (wait=false) — raw acquire response
+(f/try-lock  c "orders/checkout")
+
+;; must-lock / lock: BLOCK until actually held (reserve slot + poll), or time out.
+;; Returns a held-grant map you can release directly:
+(let [g (f/must-lock c "orders/checkout" {:max_wait_ms 30000 :retry_interval_ms 250})]
+  (f/lock-release c (:key g) (:holder g) (:fencing_token g)))
+;; (f/lock c "orders/checkout") is an alias of must-lock.
+
+(f/lock-acquire-many c ["a" "b" "c"] {:ttl_ms 10000})  ; union lock (single shot)
 
 ;; A sampling of the rest
 (f/semaphore-acquire c "pool/db" 5 {:ttl_ms 10000})
@@ -61,6 +66,14 @@ keyword keys (or `nil` for an empty body). Optional arguments go in a trailing
 options map; only the keys you actually pass are placed in the request body (so
 compare-and-set semantics like `:prev_revision` behave correctly).
 
+The blocking helpers `must-lock`/`lock` and `must-semaphore`/`semaphore` are the
+exception: a `wait=true` acquire only reserves a FIFO slot server-side, so these
+reserve the slot and then **poll** the matching `*-get` until this holder actually
+holds the resource. They return a held-grant map — `{:key :holder :fencing_token
+:lease_expires_ms}` — ready to pass to `lock-release`/`semaphore-release`, and
+accept `:holder :ttl_ms :max_wait_ms` (30000) `:retry_interval_ms` (250)
+`:max_retries`. `try-lock`/`try-semaphore` stay single-shot (no poll).
+
 ## Errors
 
 On HTTP status `>= 300` the client throws an `ex-info`:
@@ -70,8 +83,12 @@ On HTTP status `>= 300` the client throws an `ex-info`:
   (f/lock-get c "missing")
   (catch clojure.lang.ExceptionInfo e
     (:status (ex-data e))    ; => numeric HTTP status
-    (:body   (ex-data e))))  ; => parsed JSON body (keywordized) or nil
+    (:body   (ex-data e))))  ; => parsed JSON body (keywordized), raw text, or nil
 ```
+
+The blocking helpers (`must-lock`/`must-semaphore`) also throw an `ex-info` when
+they cannot acquire within `:max_wait_ms` (or `:max_retries` polls); that one
+carries `{:timeout true :key ... :holder ...}` in its `ex-data` (no `:status`).
 
 ## Method surface
 

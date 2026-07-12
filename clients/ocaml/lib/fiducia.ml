@@ -12,6 +12,13 @@
    payload (or `Null for an empty body). *)
 exception Fiducia_error of { status : int; body : Yojson.Safe.t }
 
+(* Raised by the blocking helpers [must_lock]/[lock] and [must_semaphore]/
+   [semaphore] when the grant is not held before the wait budget elapses (or the
+   optional [max_retries] cap is hit). [keys] is the contended key(s); [waited_ms]
+   is the configured [max_wait_ms] budget. try_lock/try_semaphore never raise this
+   — they are single-shot and return the immediate (possibly not-acquired) result. *)
+exception Lock_timeout of { keys : string list; waited_ms : int }
+
 (* A client owns a single libcurl easy handle (via ezcurl) that is reused across
    requests for connection pooling. Like every libcurl easy handle it is NOT safe
    for concurrent use: do not drive requests on one [client] from multiple threads

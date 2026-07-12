@@ -44,8 +44,13 @@ lk = c.lockAcquire('orders/checkout', 'holder', 'worker-a', 'ttl_ms', 30000);
 token = lk.result.output.fencing_token;
 c.lockRelease('orders/checkout', 'worker-a', token);
 
-% Non-blocking try. tryLock/mustLock/lock just flip the wait flag.
+% Non-blocking try (single shot, wait=false): returns the raw acquire response.
 r = c.tryLock('orders/checkout', 'ttl_ms', 5000);
+
+% Blocking acquire: polls lockGet until held, then returns a held grant you can
+% release; raises 'fiducia:lockTimeout' if not held within max_wait_ms.
+g = c.mustLock('orders/checkout', 'ttl_ms', 30000, 'max_wait_ms', 10000);
+c.lockRelease(g.key, g.holder, g.fencing_token);
 
 % A union lock over several keys at once.
 c.lockAcquireMany({'a', 'b', 'c'}, 'ttl_ms', 30000);
@@ -79,7 +84,10 @@ lk = c.lockAcquire('orders/checkout', ttl_ms=30000, wait=true);
 Every method returns the decoded JSON response: a `struct` for a JSON object, a
 cell/array for a JSON array, and `[]` for an empty body (`jsondecode`
 conventions). Reach into nested fields directly, e.g.
-`lk.result.output.fencing_token`.
+`lk.result.output.fencing_token`. The blocking helpers
+`mustLock`/`lock`/`mustSemaphore`/`semaphore` instead return a held-grant
+`struct` with fields `key`, `holder`, `fencing_token`, `lease_expires_ms` — pass
+those straight to `lockRelease`/`semaphoreRelease`.
 
 ### Optional parameters
 
@@ -105,6 +113,11 @@ catch err
     end
 end
 ```
+
+The blocking helpers `mustLock` / `lock` / `mustSemaphore` / `semaphore` raise
+`fiducia:lockTimeout` / `fiducia:semaphoreTimeout` if the lock/permit is not held
+within `max_wait_ms` (default 30000; polled every `retry_interval_ms`, default
+250, with an optional `max_retries` cap).
 
 ## Method surface
 
