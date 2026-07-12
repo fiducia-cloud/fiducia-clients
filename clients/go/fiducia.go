@@ -352,6 +352,44 @@ func (c *Client) BudgetRelease(name string, reservationId string) (map[string]an
 	return c.request("POST", "/v1/budgets/release", body)
 }
 
+// ClaimGet Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false.
+func (c *Client) ClaimGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/claims?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// ClaimAssert Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests.
+func (c *Client) ClaimAssert(name string, subject string, predicate string, author string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "subject": subject, "predicate": predicate, "author": author}
+	merge(body, opts)
+	return c.request("POST", "/v1/claims/assert", body)
+}
+
+// ClaimSupport Record an agent's support for a claim.
+func (c *Client) ClaimSupport(name string, agent string) (map[string]any, error) {
+	body := map[string]any{"name": name, "agent": agent}
+	return c.request("POST", "/v1/claims/support", body)
+}
+
+// ClaimContest Record an agent's contest of a claim, moving it to contested.
+func (c *Client) ClaimContest(name string, agent string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "agent": agent}
+	merge(body, opts)
+	return c.request("POST", "/v1/claims/contest", body)
+}
+
+// ClaimResolve Authoritatively accept or reject a claim (terminal).
+func (c *Client) ClaimResolve(name string, accepted bool) (map[string]any, error) {
+	body := map[string]any{"name": name, "accepted": accepted}
+	return c.request("POST", "/v1/claims/resolve", body)
+}
+
+// ClaimSupersede Supersede a claim with a newer one (terminal).
+func (c *Client) ClaimSupersede(name string, supersededBy string) (map[string]any, error) {
+	body := map[string]any{"name": name, "superseded_by": supersededBy}
+	return c.request("POST", "/v1/claims/supersede", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))

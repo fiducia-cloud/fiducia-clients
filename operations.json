@@ -182,6 +182,31 @@
       { "name": "name", "in": "body", "type": "string" },
       { "name": "reservation_id", "in": "body", "type": "string" } ], "doc": "Release a still-held reservation, returning its full headroom." },
 
+    { "name": "claim_get", "group": "claims", "method": "GET", "path": "/v1/claims", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false." },
+    { "name": "claim_assert", "group": "claims", "method": "POST", "path": "/v1/claims/assert", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "subject", "in": "body", "type": "string" },
+      { "name": "predicate", "in": "body", "type": "string" },
+      { "name": "value", "in": "body", "type": "object", "optional": true },
+      { "name": "confidence", "in": "body", "type": "number", "optional": true },
+      { "name": "author", "in": "body", "type": "string" },
+      { "name": "evidence", "in": "body", "type": "object", "optional": true },
+      { "name": "valid_until_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests." },
+    { "name": "claim_support", "group": "claims", "method": "POST", "path": "/v1/claims/support", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "agent", "in": "body", "type": "string" } ], "doc": "Record an agent's support for a claim." },
+    { "name": "claim_contest", "group": "claims", "method": "POST", "path": "/v1/claims/contest", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "agent", "in": "body", "type": "string" },
+      { "name": "reason", "in": "body", "type": "string", "optional": true } ], "doc": "Record an agent's contest of a claim, moving it to contested." },
+    { "name": "claim_resolve", "group": "claims", "method": "POST", "path": "/v1/claims/resolve", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "accepted", "in": "body", "type": "bool" } ], "doc": "Authoritatively accept or reject a claim (terminal)." },
+    { "name": "claim_supersede", "group": "claims", "method": "POST", "path": "/v1/claims/supersede", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "superseded_by", "in": "body", "type": "string" } ], "doc": "Supersede a claim with a newer one (terminal)." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [

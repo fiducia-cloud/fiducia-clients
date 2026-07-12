@@ -202,6 +202,30 @@ export class FiduciaClient {
     return this.request("POST", `/v1/budgets/release`, { name: name, reservation_id: reservationId });
   }
 
+  async claimGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/claims?name=${enc(name)}`);
+  }
+
+  async claimAssert(name: string, subject: string, predicate: string, author: string, opts: { value?: Record<string, any>; confidence?: number; evidence?: Record<string, any>; valid_until_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/claims/assert`, { name: name, subject: subject, predicate: predicate, value: opts.value, confidence: opts.confidence, author: author, evidence: opts.evidence, valid_until_ms: opts.valid_until_ms });
+  }
+
+  async claimSupport(name: string, agent: string): Promise<any> {
+    return this.request("POST", `/v1/claims/support`, { name: name, agent: agent });
+  }
+
+  async claimContest(name: string, agent: string, opts: { reason?: string } = {}): Promise<any> {
+    return this.request("POST", `/v1/claims/contest`, { name: name, agent: agent, reason: opts.reason });
+  }
+
+  async claimResolve(name: string, accepted: boolean): Promise<any> {
+    return this.request("POST", `/v1/claims/resolve`, { name: name, accepted: accepted });
+  }
+
+  async claimSupersede(name: string, supersededBy: string): Promise<any> {
+    return this.request("POST", `/v1/claims/supersede`, { name: name, superseded_by: supersededBy });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

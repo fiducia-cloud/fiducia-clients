@@ -794,6 +794,91 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false.
+    #[wasm_bindgen(js_name = claimGet)]
+    pub async fn claim_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/claims");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests.
+    #[wasm_bindgen(js_name = claimAssert)]
+    pub async fn claim_assert(&self, name: String, subject: String, predicate: String, author: String, value: JsValue, confidence: Option<f64>, evidence: JsValue, valid_until_ms: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/claims/assert");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("subject".to_string(), serde_json::Value::String(subject));
+        _body.insert("predicate".to_string(), serde_json::Value::String(predicate));
+        if !value.is_null() && !value.is_undefined() {
+            _body.insert("value".to_string(), serde_wasm_bindgen::from_value(value).map_err(|e| err(0, e.into()))?);
+        }
+        if let Some(v) = confidence {
+            _body.insert("confidence".to_string(), serde_json::json!(v));
+        }
+        _body.insert("author".to_string(), serde_json::Value::String(author));
+        if !evidence.is_null() && !evidence.is_undefined() {
+            _body.insert("evidence".to_string(), serde_wasm_bindgen::from_value(evidence).map_err(|e| err(0, e.into()))?);
+        }
+        if let Some(v) = valid_until_ms {
+            _body.insert("valid_until_ms".to_string(), serde_json::json!(checked_int(v, "valid_until_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Record an agent's support for a claim.
+    #[wasm_bindgen(js_name = claimSupport)]
+    pub async fn claim_support(&self, name: String, agent: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/claims/support");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("agent".to_string(), serde_json::Value::String(agent));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Record an agent's contest of a claim, moving it to contested.
+    #[wasm_bindgen(js_name = claimContest)]
+    pub async fn claim_contest(&self, name: String, agent: String, reason: Option<String>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/claims/contest");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("agent".to_string(), serde_json::Value::String(agent));
+        if let Some(v) = reason {
+            _body.insert("reason".to_string(), serde_json::json!(v));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Authoritatively accept or reject a claim (terminal).
+    #[wasm_bindgen(js_name = claimResolve)]
+    pub async fn claim_resolve(&self, name: String, accepted: bool) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/claims/resolve");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("accepted".to_string(), serde_json::json!(accepted));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Supersede a claim with a newer one (terminal).
+    #[wasm_bindgen(js_name = claimSupersede)]
+    pub async fn claim_supersede(&self, name: String, superseded_by: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/claims/supersede");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("superseded_by".to_string(), serde_json::Value::String(superseded_by));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

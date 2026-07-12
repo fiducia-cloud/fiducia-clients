@@ -51,6 +51,12 @@ too. `?param` marks an optional argument.
 | `POST` | `/v1/budgets/reserve` | `name`, `reservation_id`, `holder`, `amount` | Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription). |
 | `POST` | `/v1/budgets/commit` | `name`, `reservation_id`, `actual` | Commit a reservation with the actual spend (capped at reserved); frees the difference. |
 | `POST` | `/v1/budgets/release` | `name`, `reservation_id` | Release a still-held reservation, returning its full headroom. |
+| `GET` | `/v1/claims` | `name` | Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false. |
+| `POST` | `/v1/claims/assert` | `name`, `subject`, `predicate`, `value`?, `confidence`?, `author`, `evidence`?, `valid_until_ms`? | Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests. |
+| `POST` | `/v1/claims/support` | `name`, `agent` | Record an agent's support for a claim. |
+| `POST` | `/v1/claims/contest` | `name`, `agent`, `reason`? | Record an agent's contest of a claim, moving it to contested. |
+| `POST` | `/v1/claims/resolve` | `name`, `accepted` | Authoritatively accept or reject a claim (terminal). |
+| `POST` | `/v1/claims/supersede` | `name`, `superseded_by` | Supersede a claim with a newer one (terminal). |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
 | `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |

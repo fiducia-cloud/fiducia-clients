@@ -920,6 +920,74 @@ impl FiduciaClient {
         )
     }
 
+    // --- claims (contestable ledger) ---
+    /// Read a claim's subject/predicate/value, status, support, and contests.
+    /// Absent reports `found: false`.
+    pub fn claim_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/claims?name={}", enc(name)), None)
+    }
+    /// Assert (or re-assert) a claim; re-asserting bumps the version and resets
+    /// support/contests.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim_assert(
+        &self,
+        name: &str,
+        subject: &str,
+        predicate: &str,
+        value: Value,
+        confidence: f64,
+        author: &str,
+        evidence: &[&str],
+        valid_until_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/claims/assert",
+            Some(json!({
+                "name": name,
+                "subject": subject,
+                "predicate": predicate,
+                "value": value,
+                "confidence": confidence,
+                "author": author,
+                "evidence": evidence,
+                "valid_until_ms": valid_until_ms,
+            })),
+        )
+    }
+    /// Record an agent's support for a claim.
+    pub fn claim_support(&self, name: &str, agent: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/claims/support",
+            Some(json!({ "name": name, "agent": agent })),
+        )
+    }
+    /// Record an agent's contest of a claim, moving it to `contested`.
+    pub fn claim_contest(&self, name: &str, agent: &str, reason: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/claims/contest",
+            Some(json!({ "name": name, "agent": agent, "reason": reason })),
+        )
+    }
+    /// Authoritatively accept or reject a claim (terminal).
+    pub fn claim_resolve(&self, name: &str, accepted: bool) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/claims/resolve",
+            Some(json!({ "name": name, "accepted": accepted })),
+        )
+    }
+    /// Supersede a claim with a newer one (terminal).
+    pub fn claim_supersede(&self, name: &str, superseded_by: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/claims/supersede",
+            Some(json!({ "name": name, "superseded_by": superseded_by })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1722,6 +1790,48 @@ mod tests {
             "POST",
             "/v1/budgets/commit",
             json!({ "name": "org/acme/wf/42", "reservation_id": "res-1", "actual": { "usd_micros": 200_000 } }),
+        );
+    }
+
+    #[test]
+    fn claim_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .claim_assert(
+                "customer/219/refund_eligible",
+                "customer:219",
+                "eligible_for_refund",
+                json!(true),
+                0.91,
+                "billing-agent",
+                &["ticket:88"],
+                None,
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/claims/assert",
+            json!({
+                "name": "customer/219/refund_eligible",
+                "subject": "customer:219",
+                "predicate": "eligible_for_refund",
+                "value": true,
+                "confidence": 0.91,
+                "author": "billing-agent",
+                "evidence": ["ticket:88"],
+                "valid_until_ms": null
+            }),
+        );
+
+        client.claim_resolve("customer/219/refund_eligible", true).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/claims/resolve",
+            json!({ "name": "customer/219/refund_eligible", "accepted": true }),
         );
     }
 

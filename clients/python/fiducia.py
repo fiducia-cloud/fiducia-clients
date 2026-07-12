@@ -218,6 +218,30 @@ class FiduciaClient:
         """Release a still-held reservation, returning its full headroom."""
         return self._request("POST", "/v1/budgets/release", {"name": name, "reservation_id": reservation_id})
 
+    def claim_get(self, name):
+        """Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false."""
+        return self._request("GET", "/v1/claims?name=%s" % _enc(name))
+
+    def claim_assert(self, name, subject, predicate, author, value=None, confidence=None, evidence=None, valid_until_ms=None):
+        """Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests."""
+        return self._request("POST", "/v1/claims/assert", {"name": name, "subject": subject, "predicate": predicate, "value": value, "confidence": confidence, "author": author, "evidence": evidence, "valid_until_ms": valid_until_ms})
+
+    def claim_support(self, name, agent):
+        """Record an agent's support for a claim."""
+        return self._request("POST", "/v1/claims/support", {"name": name, "agent": agent})
+
+    def claim_contest(self, name, agent, reason=None):
+        """Record an agent's contest of a claim, moving it to contested."""
+        return self._request("POST", "/v1/claims/contest", {"name": name, "agent": agent, "reason": reason})
+
+    def claim_resolve(self, name, accepted):
+        """Authoritatively accept or reject a claim (terminal)."""
+        return self._request("POST", "/v1/claims/resolve", {"name": name, "accepted": accepted})
+
+    def claim_supersede(self, name, superseded_by):
+        """Supersede a claim with a newer one (terminal)."""
+        return self._request("POST", "/v1/claims/supersede", {"name": name, "superseded_by": superseded_by})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))
