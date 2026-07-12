@@ -130,6 +130,23 @@
     { "name": "effect_abort", "group": "effects", "method": "POST", "path": "/v1/effects/abort", "params": [
       { "name": "name", "in": "body", "type": "string" } ], "doc": "Abort a prepared/approved effect (terminal)." },
 
+    { "name": "handoff_get", "group": "handoffs", "method": "GET", "path": "/v1/handoffs", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a handoff's status, counterparties, and tokens; absent reads as found=false." },
+    { "name": "handoff_offer", "group": "handoffs", "method": "POST", "path": "/v1/handoffs/offer", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "resource", "in": "body", "type": "string" },
+      { "name": "from", "in": "body", "type": "string" },
+      { "name": "to", "in": "body", "type": "string" },
+      { "name": "from_token", "in": "body", "type": "int" },
+      { "name": "context", "in": "body", "type": "object", "optional": true },
+      { "name": "ttl_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Offer to transfer ownership of a resource; the original owner keeps authority until accepted." },
+    { "name": "handoff_accept", "group": "handoffs", "method": "POST", "path": "/v1/handoffs/accept", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "to", "in": "body", "type": "string" } ], "doc": "Accept an offered handoff; the new owner receives a strictly higher fencing token." },
+    { "name": "handoff_reject", "group": "handoffs", "method": "POST", "path": "/v1/handoffs/reject", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "to", "in": "body", "type": "string" } ], "doc": "Reject an offered handoff; ownership stays with the original owner." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
