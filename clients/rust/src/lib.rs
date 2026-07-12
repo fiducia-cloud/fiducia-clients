@@ -36,6 +36,18 @@ pub struct RequestControl {
     pub idempotency_key: Option<String>,
 }
 
+/// Parameters for casting a decision vote.
+#[derive(Clone, Copy, Debug)]
+pub struct DecisionVote<'a> {
+    pub voter: &'a str,
+    /// The chosen option, or `None` to abstain.
+    pub option: Option<&'a str>,
+    pub confidence: f32,
+    pub weight: u64,
+    pub veto: bool,
+    pub evidence: &'a [&'a str],
+}
+
 /// Parameters for a rate-limit check.
 #[derive(Clone, Copy, Debug)]
 pub struct RateLimitCheckRequest<'a> {
