@@ -1082,6 +1082,36 @@ mod tests {
     }
 
     #[test]
+    fn counter_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client.counter_get("rollout/v2/failures").unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/counters?key=rollout%2Fv2%2Ffailures",
+            Value::Null,
+        );
+
+        client.counter_add("rollout/v2/failures", -1, Some(7)).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/counters/add",
+            json!({ "key": "rollout/v2/failures", "delta": -1, "prev_revision": 7 }),
+        );
+
+        client.counter_set("rollout/v2/failures", 0, None).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/counters/set",
+            json!({ "key": "rollout/v2/failures", "value": 0, "prev_revision": null }),
+        );
+    }
+
+    #[test]
     fn service_discovery_sends_metadata_and_heartbeat_body() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
