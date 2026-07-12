@@ -1,5 +1,13 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" c "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
+. "$ROOT/scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+cmake -S . -B "${TMPDIR:-/tmp}/fiducia-c-build"
+if [ "$PUBLISH_MODE" = release ]; then
+  publish_git_tag "$ROOT" c
+  tag="clients/c/v$PACKAGE_VERSION"
+  gh release create "$tag" fiducia.h fiducia.c --title "fiducia c $PACKAGE_VERSION" --notes "C client release for fiducia.cloud."
+fi

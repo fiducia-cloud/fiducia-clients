@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" powershell "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$DIR/../../scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+pwsh -NoLogo -NoProfile -Command 'Test-ModuleManifest ./Fiducia.psd1 | Out-Null'
+[ "$PUBLISH_MODE" = dry-run ] || { publish_require POWERSHELL_GALLERY_API_KEY; pwsh -NoLogo -NoProfile -Command 'Publish-Module -Path . -Repository PSGallery -NuGetApiKey $env:POWERSHELL_GALLERY_API_KEY'; }

@@ -1,5 +1,13 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" crystal "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
+. "$ROOT/scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+crystal build --no-codegen src/fiducia.cr
+if [ "$PUBLISH_MODE" = release ]; then
+  publish_git_tag "$ROOT" crystal
+  tag="clients/crystal/v$PACKAGE_VERSION"
+  gh release create "$tag" shard.yml --title "fiducia crystal $PACKAGE_VERSION" --notes "Crystal client release for fiducia.cloud."
+fi

@@ -123,6 +123,11 @@ Optional params are shown inside the trailing `opts = { ... }` table.
 
 ## Notes
 
+- **Redirects are not followed.** luasocket's default redirect-following is
+  disabled, so a `3xx` is raised as an error (like any `>= 300`) rather than
+  replaying the request — and its `Authorization` / idempotency headers — to the
+  `Location` (which could be cross-origin or an `https://`→`http://` downgrade).
+
 ### Blocking helpers
 
 `try_lock`/`try_semaphore` set `wait = false` and return the raw acquire response

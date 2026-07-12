@@ -27,5 +27,7 @@ features = [
     "Headers",
     "Request",
     "RequestInit",
+    "RequestRedirect",
     "Response",
+    "ResponseType",
 ]

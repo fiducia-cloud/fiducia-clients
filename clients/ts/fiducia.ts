@@ -130,10 +130,69 @@ export class FiduciaTimeoutError extends Error {
 
 const enc = encodeURIComponent;
 
+// Methods safe to retry without an idempotency key. Per RFC 7231 GET/HEAD/OPTIONS
+// and the idempotent-by-contract PUT/DELETE converge to the same server state when
+// replayed; only POST (lock/semaphore acquire, release) can duplicate on retry.
+function isIdempotentMethod(method: string): boolean {
+  const m = method.toUpperCase();
+  return m === "GET" || m === "HEAD" || m === "OPTIONS" || m === "PUT" || m === "DELETE";
+}
+
+// Collision-resistant key that lets the server dedup a retried mutation. Uses
+// Web Crypto (Node 18+, browsers, workers); falls back to a non-crypto id only
+// if unavailable — still unique enough to pin a single logical request.
+function genIdempotencyKey(): string {
+  const c: any = (globalThis as any).crypto;
+  if (typeof c?.randomUUID === "function") return `cli_${c.randomUUID()}`;
+  if (typeof c?.getRandomValues === "function") {
+    const b = new Uint8Array(16);
+    c.getRandomValues(b);
+    return "cli_" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  return `cli_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+// A response is a redirect if it's a 3xx (Node/undici with redirect:"manual") or
+// an opaque redirect (browsers/workers with redirect:"manual" yield status 0).
+function isRedirect(res: Response): boolean {
+  return res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
+}
+
+function redirectError(res: Response, method: string, path: string): FiduciaError {
+  const location = res.headers?.get?.("location") ?? undefined;
+  return new FiduciaError(res.status, {
+    error: "redirect_not_followed",
+    message: `fiducia: refusing to follow redirect (${res.status || "opaque"}) for ${method} ${path}`,
+    location,
+  }, res.headers);
+}
+
+// Metadata is a string->string map on the wire. Reject non-string values loudly
+// (matching the wasm client) instead of silently coercing — a nested object or
+// number would otherwise stringify to junk on one client but not another.
+function validateMetadata(metadata: Record<string, string> | undefined, where: string): void {
+  if (metadata === undefined) return;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value !== "string") {
+      const got = value === null ? "null" : typeof value;
+      throw new TypeError(`fiducia: ${where} metadata["${key}"] must be a string, got ${got}`);
+    }
+  }
+}
+
+// A CR or LF in a header value enables header/response splitting. Node/undici and
+// browsers reject these too, but with an opaque error — surface a clear one first.
+function assertHeaderValueSafe(name: string, value: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new TypeError(`fiducia: ${name} header value contains an illegal CR/LF character`);
+  }
+}
+
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
+  validateMetadata(metadata, "service filter");
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(metadata)) {
-    if (key.trim() && value !== undefined) params.set(`metadata.${key}`, String(value));
+    if (key.trim()) params.set(`metadata.${key}`, value);
   }
   const query = params.toString();
   return query ? `?${query}` : "";
@@ -199,8 +258,13 @@ export class FiduciaClient {
     return this.pickRetryDelayMs({ retryDelayMs: opts.retryDelayMs ?? this.retryDelayMs });
   }
 
-  private retryable(err: unknown, signal?: AbortSignal): boolean {
+  private retryable(err: unknown, signal: AbortSignal | undefined, method: string, idempotencyKey?: string): boolean {
     if (signal?.aborted) return false;
+    // Belt-and-suspenders: never retry a non-idempotent mutation that carries no
+    // idempotency key — replaying it could duplicate a committed-but-unacked effect.
+    // request() attaches a stable key to retry-enabled POSTs, so in practice a key is
+    // always present here; this guard keeps the safety even if that ever changes.
+    if (!isIdempotentMethod(method) && !idempotencyKey) return false;
     if (err instanceof FiduciaTimeoutError) return true;
     if (err instanceof FiduciaError) return [408, 425, 429, 500, 502, 503, 504].includes(err.status);
     return ["AbortError", "TimeoutError", "TypeError"].includes(String((err as any)?.name));
@@ -235,11 +299,22 @@ export class FiduciaClient {
     const maxRetries = this.resolveRetryMax(opts);
     const retryDelayMs = this.resolveRetryDelayMs(opts);
 
+    // A retried non-idempotent (mutating) request that committed server-side but
+    // whose response was lost would otherwise be silently duplicated — e.g. a
+    // second lock/semaphore acquire, a double FIFO slot. When retries are enabled,
+    // pin one stable Idempotency-Key across every attempt so the server can dedup.
+    // A caller-supplied key wins; GET/HEAD and single-shot (maxRetries=0) calls are
+    // left untouched, so this never changes non-retrying behavior.
+    let effectiveOpts = opts;
+    if (maxRetries > 0 && !isIdempotentMethod(method) && !opts.idempotencyKey) {
+      effectiveOpts = { ...opts, idempotencyKey: genIdempotencyKey() };
+    }
+
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await this.requestOnce(method, path, body, opts, attempt + 1, lockAcquire);
+        return await this.requestOnce(method, path, body, effectiveOpts, attempt + 1, lockAcquire);
       } catch (err) {
-        if (attempt >= maxRetries || !this.retryable(err, opts.signal)) throw err;
+        if (attempt >= maxRetries || !this.retryable(err, opts.signal, method, effectiveOpts.idempotencyKey)) throw err;
         await this.sleep(retryDelayMs, opts.signal);
       }
     }
@@ -275,13 +350,23 @@ export class FiduciaClient {
     try {
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
-      if (opts.idempotencyKey) headers["idempotency-key"] = opts.idempotencyKey;
+      if (opts.idempotencyKey) {
+        assertHeaderValueSafe("idempotency-key", opts.idempotencyKey);
+        headers["idempotency-key"] = opts.idempotencyKey;
+      }
       const res = await this.fetchImpl(this.base + path, {
         signal: controller?.signal,
         method,
         headers: Object.keys(headers).length ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        redirect: "manual",
       });
+      // Hard-reject redirects. A coordination API should never 3xx, and following
+      // one would replay this (possibly mutating) request — plus its Authorization
+      // and Idempotency-Key headers — to an attacker-controlled Location, including
+      // an https->http downgrade. With redirect:"manual" Node exposes the 3xx
+      // status; browsers yield an opaque redirect (type "opaqueredirect", status 0).
+      if (isRedirect(res)) throw redirectError(res, method, path);
       const text = await res.text();
       const data = text ? JSON.parse(text) : null;
       if (!res.ok) throw new FiduciaError(res.status, data, res.headers);
@@ -315,7 +400,9 @@ export class FiduciaClient {
         method: "GET",
         headers: { accept: "text/event-stream" },
         signal: controller?.signal,
+        redirect: "manual",
       });
+      if (isRedirect(res)) throw redirectError(res, "GET", path);
       if (!res.ok) {
         const text = await res.text();
         const data = text ? JSON.parse(text) : null;
@@ -457,6 +544,7 @@ export class FiduciaClient {
     return this.request("GET", `/v1/idempotency?key=${enc(key)}`);
   }
   idempotencyClaim(key: string, opts: IdempotencyClaimOpts = {}) {
+    validateMetadata(opts.metadata, "idempotency claim");
     return this.request("POST", "/v1/idempotency/claim", {
       key,
       owner: opts.owner,
@@ -540,6 +628,7 @@ export class FiduciaClient {
 
   // --- leader election ---
   electionCampaign(name: string, candidate: string, ttlMs: number, opts: ElectionCampaignOpts = {}) {
+    validateMetadata(opts.metadata, "election campaign");
     return this.request("POST", `/v1/elections/${enc(name)}/campaign`, {
       candidate,
       ttl_ms: ttlMs,
@@ -559,6 +648,7 @@ export class FiduciaClient {
 
   // --- service discovery ---
   serviceRegister(service: string, instanceId: string, address: string, ttlMs: number, metadata: Record<string, string> = {}) {
+    validateMetadata(metadata, "service register");
     return this.request("PUT", `/v1/services/${enc(service)}/instances/${enc(instanceId)}`,
       { address, ttl_ms: ttlMs, metadata });
   }
