@@ -366,6 +366,47 @@ impl FiduciaClient {
         self.request("DELETE", path, None).await
     }
 
+    /// Read a counter's value and revision; absent reads as found=false (treat as 0).
+    #[wasm_bindgen(js_name = counterGet)]
+    pub async fn counter_get(&self, key: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/counters");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("key={}", enc(&key)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Atomically add delta (may be negative); prev_revision makes it a compare-and-set.
+    #[wasm_bindgen(js_name = counterAdd)]
+    pub async fn counter_add(&self, key: String, delta: f64, prev_revision: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/counters/add");
+        let mut _body = serde_json::Map::new();
+        _body.insert("key".to_string(), serde_json::Value::String(key));
+        _body.insert("delta".to_string(), serde_json::json!(checked_int(delta, "delta")?));
+        if let Some(v) = prev_revision {
+            _body.insert("prev_revision".to_string(), serde_json::json!(checked_int(v, "prev_revision")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set.
+    #[wasm_bindgen(js_name = counterSet)]
+    pub async fn counter_set(&self, key: String, value: f64, prev_revision: Option<f64>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/counters/set");
+        let mut _body = serde_json::Map::new();
+        _body.insert("key".to_string(), serde_json::Value::String(key));
+        _body.insert("value".to_string(), serde_json::json!(checked_int(value, "value")?));
+        if let Some(v) = prev_revision {
+            _body.insert("prev_revision".to_string(), serde_json::json!(checked_int(v, "prev_revision")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {
