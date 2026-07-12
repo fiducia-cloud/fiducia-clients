@@ -1,3 +1,4 @@
+# Julia package manifest for the Fiducia client.
 name = "Fiducia"
 uuid = "1b225e7a-2078-4660-a2a3-9f9a3eaf8229"
 version = "0.1.0"
