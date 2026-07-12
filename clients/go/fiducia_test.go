@@ -1,3 +1,4 @@
+// Tests for the generated Fiducia Go client.
 package fiducia
 
 import (

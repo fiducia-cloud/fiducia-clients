@@ -1,3 +1,4 @@
+# CI workflow: best-effort build/test of each language client on push and PR.
 name: ci
 on:
   push:

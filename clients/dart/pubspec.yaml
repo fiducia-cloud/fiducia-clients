@@ -1,3 +1,4 @@
+# Pub package manifest for the Dart Fiducia client.
 name: fiducia_client
 version: 0.1.0
 description: Fiducia HTTP client for Dart.

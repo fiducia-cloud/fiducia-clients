@@ -1,3 +1,4 @@
+# Shard (package) manifest for the Crystal Fiducia client.
 name: fiducia-client
 version: 0.1.0
 description: |

@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# Package/build/validate/release entrypoint for the Dart Fiducia client (see clients/PUBLISHING.md).
 set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$DIR/../../scripts/publish-common.sh"

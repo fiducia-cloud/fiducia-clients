@@ -1,3 +1,4 @@
+# Cargo manifest for the Rust Fiducia client.
 [package]
 name = "fiducia-client"
 version = "0.1.0"

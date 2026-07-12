@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Wrapper that resolves CLI flags to FIDUCIA_* env vars via flags2env, then execs the given command.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"

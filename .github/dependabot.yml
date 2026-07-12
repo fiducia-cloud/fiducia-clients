@@ -1,3 +1,4 @@
+# Dependabot config: weekly update checks for the TypeScript client's npm deps and GitHub Actions.
 version: 2
 updates:
   # The only package.json lives in the TypeScript client.

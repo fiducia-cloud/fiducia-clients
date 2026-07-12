@@ -1,3 +1,4 @@
+# Python packaging manifest for the Fiducia client.
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"

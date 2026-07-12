@@ -1,3 +1,4 @@
+# Cargo manifest for the Rust->WebAssembly Fiducia client.
 [package]
 name = "fiducia-client-wasm"
 version = "0.1.0"
