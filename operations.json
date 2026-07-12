@@ -58,6 +58,17 @@
     { "name": "kv_delete", "group": "kv", "method": "DELETE", "path": "/v1/kv", "params": [
       { "name": "key", "in": "query", "type": "string" } ], "doc": "Delete a config key." },
 
+    { "name": "counter_get", "group": "counters", "method": "GET", "path": "/v1/counters", "params": [
+      { "name": "key", "in": "query", "type": "string" } ], "doc": "Read a counter's value and revision; absent reads as found=false (treat as 0)." },
+    { "name": "counter_add", "group": "counters", "method": "POST", "path": "/v1/counters/add", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "delta", "in": "body", "type": "int" },
+      { "name": "prev_revision", "in": "body", "type": "int", "optional": true } ], "doc": "Atomically add delta (may be negative); prev_revision makes it a compare-and-set." },
+    { "name": "counter_set", "group": "counters", "method": "POST", "path": "/v1/counters/set", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "value", "in": "body", "type": "int" },
+      { "name": "prev_revision", "in": "body", "type": "int", "optional": true } ], "doc": "Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [
