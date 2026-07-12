@@ -1338,6 +1338,52 @@ mod tests {
         (base, rx)
     }
 
+    /// A server that always answers `status`, counting the requests it received.
+    /// Used to observe whether a failed request is retried.
+    fn erroring_server(status: u16) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                // Drain the full request (headers + body) before responding so the
+                // client's write never races the connection close.
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 1024];
+                let mut header_end = None;
+                let mut content_len = 0_usize;
+                loop {
+                    let n = stream.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none() {
+                        if let Some(pos) = find_header_end(&buf) {
+                            header_end = Some(pos);
+                            content_len = content_length(&String::from_utf8_lossy(&buf[..pos]));
+                        }
+                    }
+                    if let Some(pos) = header_end {
+                        if buf.len() >= pos + 4 + content_len {
+                            break;
+                        }
+                    }
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 {status} STATUS\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{{\"ok\":true}}"
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        (base, hits)
+    }
+
     fn find_header_end(buf: &[u8]) -> Option<usize> {
         buf.windows(4).position(|window| window == b"\r\n\r\n")
     }
