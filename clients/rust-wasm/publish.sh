@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" rust-wasm "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$DIR/../../scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+wasm-pack build --target bundler --release; npm pack --dry-run ./pkg
+[ "$PUBLISH_MODE" = dry-run ] || { npm publish ./pkg --access public; }

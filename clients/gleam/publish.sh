@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" gleam "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$DIR/../../scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+gleam build
+[ "$PUBLISH_MODE" = dry-run ] || { gleam publish --yes; }

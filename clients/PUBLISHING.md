@@ -1,7 +1,8 @@
 # Publishing Fiducia Clients
 
-Each language folder has a `publish.sh` entrypoint. By default it prints the
-native package-manager command without publishing anything:
+Each language folder owns a `publish.sh` entrypoint containing that ecosystem's
+build, validation, and release commands. By default the entrypoint performs a
+real package/build validation without publishing anything:
 
 ```sh
 clients/ts/publish.sh
@@ -12,6 +13,11 @@ clients/java/publish.sh --release
 Use `--release` only from CI or a workstation where the target registry
 credentials are already configured. Release commands that create git tags also
 require a clean worktree before they tag or push.
+
+`scripts/publish-client.sh <language> ...` remains a compatibility dispatcher,
+but contains no language-specific policy. `scripts/publish-common.sh` is limited
+to argument parsing, credential checks, and safe git-tag mechanics. This keeps
+registry behavior reviewable and testable beside each package manifest.
 
 | Client | Registry or channel | Release notes |
 | --- | --- | --- |

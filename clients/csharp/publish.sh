@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" csharp "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$DIR/../../scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/fiducia-csharp.XXXXXX")"; dotnet pack -c Release --output "$tmp"
+[ "$PUBLISH_MODE" = dry-run ] || { publish_require NUGET_API_KEY; dotnet nuget push "$tmp"/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --skip-duplicate; }

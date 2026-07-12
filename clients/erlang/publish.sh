@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 set -eu
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/../../scripts/publish-client.sh" erlang "$@"
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$DIR/../../scripts/publish-common.sh"
+publish_parse_mode "$@"
+cd "$DIR"
+rebar3 hex build
+[ "$PUBLISH_MODE" = dry-run ] || { rebar3 hex publish --yes; }
