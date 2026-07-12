@@ -1,3 +1,4 @@
+# Workflow that audits .cli-flags.toml against the flags-2-env tool whenever the CLI flag config changes.
 name: CLI flags
 
 on:
