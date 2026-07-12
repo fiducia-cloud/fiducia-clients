@@ -433,6 +433,7 @@ fn release_payloads(handle: &LockHandle) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn generated_holders_are_unique() {
@@ -440,6 +441,62 @@ mod tests {
         let b = gen_holder();
         assert_ne!(a, b);
         assert!(a.starts_with("fdc-"));
+    }
+
+    #[test]
+    fn holder_id_contains_pid() {
+        // The pid segment is what makes ids distinct across processes that would
+        // otherwise share the same first-nanosecond + seq-0.
+        let id = gen_holder();
+        let pid = format!("{:x}", std::process::id());
+        assert!(
+            id.contains(&format!("-{pid}-")),
+            "id {id} should contain pid {pid}"
+        );
+    }
+
+    #[test]
+    fn single_key_grant_uses_scalar_token() {
+        let output = json!({ "acquired": true, "fencing_token": 5, "lease_expires_ms": 100 });
+        let handle = lock_handle(&["orders/42"], "worker-a", &output).unwrap();
+        assert_eq!(handle.fencing_token, 5);
+        assert!(handle.fencing_tokens.is_empty());
+        // Single-key release body is unchanged: no `key`, scalar token.
+        assert_eq!(
+            release_payloads(&handle),
+            vec![json!({ "holder": "worker-a", "fencing_token": 5 })]
+        );
+    }
+
+    #[test]
+    fn multi_key_grant_carries_per_key_tokens() {
+        // A union grant whose scalar token is absent but per-key tokens are set.
+        let output = json!({
+            "acquired": true,
+            "keys": ["a", "b"],
+            "fencing_tokens": { "a": 7, "b": 9 },
+        });
+        let handle = lock_handle(&["a", "b"], "worker-a", &output).unwrap();
+        assert_eq!(handle.fencing_tokens.get("a"), Some(&7));
+        assert_eq!(handle.fencing_tokens.get("b"), Some(&9));
+        // The scalar is no longer 0 (which broke release); it mirrors a real token.
+        assert_ne!(handle.fencing_token, 0);
+        // Release sends each key with its own token (BTreeMap → sorted order).
+        assert_eq!(
+            release_payloads(&handle),
+            vec![
+                json!({ "key": "a", "holder": "worker-a", "fencing_token": 7 }),
+                json!({ "key": "b", "holder": "worker-a", "fencing_token": 9 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn acquired_grant_with_no_token_is_a_hard_error() {
+        // A successful acquire that resolves no token at all must error rather
+        // than silently carry token 0 (which release can never match).
+        let output = json!({ "acquired": true, "keys": ["a"] });
+        assert!(lock_handle(&["a"], "worker-a", &output).is_err());
     }
 
     #[test]
