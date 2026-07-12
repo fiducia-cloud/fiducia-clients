@@ -868,6 +868,58 @@ impl FiduciaClient {
         )
     }
 
+    // --- hierarchical budgets ---
+    /// Read a budget's ceiling, consumption, and reservations. Absent reports
+    /// `found: false`.
+    pub fn budget_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/budgets?name={}", enc(name)), None)
+    }
+    /// Create or re-cap a budget with a per-axis ceiling (unset axis = unlimited).
+    pub fn budget_set(&self, name: &str, limit: BudgetAmount) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/set",
+            Some(json!({ "name": name, "limit": limit.to_json() })),
+        )
+    }
+    /// Reserve `amount` under `reservation_id`; rejected if it would exceed the
+    /// ceiling on any limited axis.
+    pub fn budget_reserve(
+        &self,
+        name: &str,
+        reservation_id: &str,
+        holder: &str,
+        amount: BudgetAmount,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/reserve",
+            Some(json!({ "name": name, "reservation_id": reservation_id, "holder": holder, "amount": amount.to_json() })),
+        )
+    }
+    /// Commit a reservation with the `actual` spend (capped at the reservation),
+    /// freeing the difference.
+    pub fn budget_commit(
+        &self,
+        name: &str,
+        reservation_id: &str,
+        actual: BudgetAmount,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/commit",
+            Some(json!({ "name": name, "reservation_id": reservation_id, "actual": actual.to_json() })),
+        )
+    }
+    /// Release a still-held reservation, returning its full headroom.
+    pub fn budget_release(&self, name: &str, reservation_id: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/release",
+            Some(json!({ "name": name, "reservation_id": reservation_id })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
