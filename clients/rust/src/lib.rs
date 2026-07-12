@@ -1262,7 +1262,9 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver};
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct RecordedRequest {
