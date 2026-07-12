@@ -190,12 +190,19 @@ impl FiduciaClient {
             .or(self.request_timeout)
     }
 
-    fn retryable(err: &Error) -> bool {
+    /// Whether `err` may be retried. `429` and `503` mean the server rejected the
+    /// request before applying it, so re-sending is always safe. Every other
+    /// retryable status (`408/425/500/502/504`) and any transport failure can
+    /// occur *after* the server applied a mutation, so re-sending is only safe
+    /// when the caller supplied an idempotency key for the server to dedup on.
+    fn retryable(err: &Error, has_idempotency: bool) -> bool {
         match err {
-            Error::Http { status, .. } => {
-                matches!(*status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
-            }
-            Error::Transport(_) => true,
+            Error::Http { status, .. } => match *status {
+                429 | 503 => true,
+                408 | 425 | 500 | 502 | 504 => has_idempotency,
+                _ => false,
+            },
+            Error::Transport(_) => has_idempotency,
         }
     }
 
