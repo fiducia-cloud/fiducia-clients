@@ -170,6 +170,18 @@ export class FiduciaClient {
     return this.request("POST", `/v1/handoffs/reject`, { name: name, to: to });
   }
 
+  async decisionGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/decisions?name=${enc(name)}`);
+  }
+
+  async decisionPropose(name: string, question: string, options: Record<string, any>, policy: Record<string, any>, opts: { deadline_ms?: number } = {}): Promise<any> {
+    return this.request("POST", `/v1/decisions/propose`, { name: name, question: question, options: options, policy: policy, deadline_ms: opts.deadline_ms });
+  }
+
+  async decisionVote(name: string, voter: string, opts: { option?: string; confidence?: number; weight?: number; veto?: boolean; evidence?: Record<string, any> } = {}): Promise<any> {
+    return this.request("POST", `/v1/decisions/vote`, { name: name, voter: voter, option: opts.option, confidence: opts.confidence, weight: opts.weight, veto: opts.veto, evidence: opts.evidence });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

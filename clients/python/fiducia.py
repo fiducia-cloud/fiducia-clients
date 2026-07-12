@@ -186,6 +186,18 @@ class FiduciaClient:
         """Reject an offered handoff; ownership stays with the original owner."""
         return self._request("POST", "/v1/handoffs/reject", {"name": name, "to": to})
 
+    def decision_get(self, name):
+        """Read a decision's options, tallies, votes, and resolution; absent reads as found=false."""
+        return self._request("GET", "/v1/decisions?name=%s" % _enc(name))
+
+    def decision_propose(self, name, question, options, policy, deadline_ms=None):
+        """Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous)."""
+        return self._request("POST", "/v1/decisions/propose", {"name": name, "question": question, "options": options, "policy": policy, "deadline_ms": deadline_ms})
+
+    def decision_vote(self, name, voter, option=None, confidence=None, weight=None, veto=None, evidence=None):
+        """Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution."""
+        return self._request("POST", "/v1/decisions/vote", {"name": name, "voter": voter, "option": option, "confidence": confidence, "weight": weight, "veto": veto, "evidence": evidence})
+
     def election_get(self, name):
         """Observe the current holder of a named election."""
         return self._request("GET", "/v1/elections/%s" % _enc(name))

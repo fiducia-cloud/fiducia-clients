@@ -302,6 +302,26 @@ func (c *Client) HandoffReject(name string, to string) (map[string]any, error) {
 	return c.request("POST", "/v1/handoffs/reject", body)
 }
 
+// DecisionGet Read a decision's options, tallies, votes, and resolution; absent reads as found=false.
+func (c *Client) DecisionGet(name string) (map[string]any, error) {
+	path := fmt.Sprintf("/v1/decisions?name=%s", enc(name))
+	return c.request("GET", path, nil)
+}
+
+// DecisionPropose Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous).
+func (c *Client) DecisionPropose(name string, question string, options map[string]any, policy map[string]any, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "question": question, "options": options, "policy": policy}
+	merge(body, opts)
+	return c.request("POST", "/v1/decisions/propose", body)
+}
+
+// DecisionVote Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution.
+func (c *Client) DecisionVote(name string, voter string, opts map[string]any) (map[string]any, error) {
+	body := map[string]any{"name": name, "voter": voter}
+	merge(body, opts)
+	return c.request("POST", "/v1/decisions/vote", body)
+}
+
 // ElectionGet Observe the current holder of a named election.
 func (c *Client) ElectionGet(name string) (map[string]any, error) {
 	path := fmt.Sprintf("/v1/elections/%s", enc(name))
