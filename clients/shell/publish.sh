@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# Package/build/validate/release entrypoint for the shell Fiducia client (see clients/PUBLISHING.md).
 set -eu
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
