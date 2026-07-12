@@ -32,6 +32,14 @@ class FiduciaException(val status: Int, val body: JsonElement?) :
     RuntimeException("fiducia: HTTP $status")
 
 /**
+ * Thrown by the blocking [FiduciaClient.mustLock] / [FiduciaClient.mustSemaphore] helpers
+ * when the poll budget elapses before this holder is observed holding the grant.
+ * Carries the key(s) it was waiting on and the elapsed budget in milliseconds.
+ */
+class LockTimeoutException(val keys: List<String>, val waitedMs: Long) :
+    RuntimeException("fiducia: timed out after ${waitedMs}ms waiting for ${keys.joinToString(", ")}")
+
+/**
  * Thin HTTP wrapper over the fiducia.cloud contract. Every method returns the parsed
  * JSON response as a [JsonElement] (an empty body becomes [JsonNull]) and throws a
  * [FiduciaException] on HTTP status >= 300.
@@ -84,11 +92,52 @@ class FiduciaClient(baseUrl: String) {
     fun tryLock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
         lockAcquire(key, holder, ttlMs, wait = false)
 
-    fun mustLock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        lockAcquire(key, holder, ttlMs, wait = true)
+    /**
+     * Blocks until the lock is held, then returns the held grant; throws [LockTimeoutException]
+     * if [maxWaitMs] elapses first. The server does NOT hold the connection on `wait:true` (it
+     * reserves a FIFO slot and returns a queued ticket immediately), so this acquires with
+     * `wait:true` and then POLLS [lockGet] until this [holder] owns the lock. Returns a JSON
+     * object `{acquired:true, holder, key, fencing_token, lease_expires_ms}` — pass `holder` +
+     * `fencing_token` to [lockRelease]. [holder] defaults to a generated id; [ttlMs] defaults
+     * to 60000; [maxWaitMs] defaults to [lockRequestTimeout] (if set) else 30000.
+     */
+    fun mustLock(
+        key: String,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement {
+        val who = holder ?: genHolder()
+        val out = field(field(lockAcquire(key, who, ttlMs ?: DEFAULT_TTL_MS, wait = true), "result"), "output")
+        if (isTrue(field(out, "acquired"))) {
+            return heldGrant(key, who, field(out, "fencing_token"), field(out, "lease_expires_ms"))
+        }
+        val deadlineNanos = System.nanoTime() + maxWaitMs * NANOS_PER_MS
+        var attempts = 0
+        while (maxRetries == null || attempts < maxRetries) {
+            attempts++
+            val remainingMs = (deadlineNanos - System.nanoTime()) / NANOS_PER_MS
+            if (remainingMs <= 0) break
+            Thread.sleep(minOf(retryIntervalMs, remainingMs))
+            val lk = field(lockGet(key), "lock")
+            val ft = field(lk, "fencing_token")
+            if (holderOf(lk) == who && ft != null && ft !is JsonNull) {
+                return heldGrant(key, who, ft, field(lk, "lease_expires_ms"))
+            }
+        }
+        throw LockTimeoutException(listOf(key), maxWaitMs)
+    }
 
-    fun lock(key: String, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        mustLock(key, holder, ttlMs)
+    fun lock(
+        key: String,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement = mustLock(key, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
     // `key` is accepted for symmetry with acquire; the release wire body only needs the token.
     fun lockRelease(key: String, holder: String, fencingToken: Long): JsonElement =
@@ -113,11 +162,54 @@ class FiduciaClient(baseUrl: String) {
     fun trySemaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
         semaphoreAcquire(key, limit, holder, ttlMs, wait = false)
 
-    fun mustSemaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        semaphoreAcquire(key, limit, holder, ttlMs, wait = true)
+    /**
+     * Blocks until a semaphore permit is held, then returns the held grant; throws
+     * [LockTimeoutException] on timeout. Like [mustLock] but polls [semaphoreGet] and matches
+     * this [holder] among `semaphore.holders`. Returns `{acquired:true, holder, key,
+     * fencing_token, lease_expires_ms}` — pass `holder` + `fencing_token` to [semaphoreRelease].
+     */
+    fun mustSemaphore(
+        key: String,
+        limit: Int,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement {
+        val who = holder ?: genHolder()
+        val out = field(field(semaphoreAcquire(key, limit, who, ttlMs ?: DEFAULT_TTL_MS, wait = true), "result"), "output")
+        if (isTrue(field(out, "acquired"))) {
+            return heldGrant(key, who, field(out, "fencing_token"), field(out, "lease_expires_ms"))
+        }
+        val deadlineNanos = System.nanoTime() + maxWaitMs * NANOS_PER_MS
+        var attempts = 0
+        while (maxRetries == null || attempts < maxRetries) {
+            attempts++
+            val remainingMs = (deadlineNanos - System.nanoTime()) / NANOS_PER_MS
+            if (remainingMs <= 0) break
+            Thread.sleep(minOf(retryIntervalMs, remainingMs))
+            val holders = field(field(semaphoreGet(key), "semaphore"), "holders") as? JsonArray
+            val slot = holders?.firstOrNull {
+                val ft = field(it, "fencing_token")
+                holderOf(it) == who && ft != null && ft !is JsonNull
+            }
+            if (slot != null) {
+                return heldGrant(key, who, field(slot, "fencing_token"), field(slot, "lease_expires_ms"))
+            }
+        }
+        throw LockTimeoutException(listOf(key), maxWaitMs)
+    }
 
-    fun semaphore(key: String, limit: Int, holder: String? = null, ttlMs: Long? = null): JsonElement =
-        mustSemaphore(key, limit, holder, ttlMs)
+    fun semaphore(
+        key: String,
+        limit: Int,
+        holder: String? = null,
+        ttlMs: Long? = null,
+        maxWaitMs: Long = lockRequestTimeout?.toMillis() ?: DEFAULT_MAX_WAIT_MS,
+        retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
+        maxRetries: Int? = null,
+    ): JsonElement = mustSemaphore(key, limit, holder, ttlMs, maxWaitMs, retryIntervalMs, maxRetries)
 
     fun semaphoreRelease(key: String, holder: String, fencingToken: Long): JsonElement =
         request("POST", "/v1/semaphores/release", buildJsonObject {
@@ -355,6 +447,28 @@ class FiduciaClient(baseUrl: String) {
     private fun retryable(e: RuntimeException): Boolean =
         if (e is FiduciaException) e.status in RETRYABLE_STATUS else true
 
+    // --- blocking-acquire poll helpers -----------------------------------------
+
+    private fun genHolder(): String = "fdc-" + UUID.randomUUID()
+
+    // Safe navigation: the child element at [name], or null if [e] is not a JSON object.
+    private fun field(e: JsonElement?, name: String): JsonElement? = (e as? JsonObject)?.get(name)
+
+    private fun isTrue(e: JsonElement?): Boolean = (e as? JsonPrimitive)?.content == "true"
+
+    private fun holderOf(e: JsonElement?): String? = (field(e, "holder") as? JsonPrimitive)?.content
+
+    // A normalized held grant. fencing_token / lease_expires_ms are copied as their original
+    // JSON nodes so 64-bit tokens keep full precision (never coerced through a double).
+    private fun heldGrant(key: String, holder: String, fencingToken: JsonElement?, leaseExpiresMs: JsonElement?): JsonObject =
+        buildJsonObject {
+            put("acquired", true)
+            put("holder", holder)
+            put("key", key)
+            fencingToken?.let { if (it !is JsonNull) put("fencing_token", it) }
+            leaseExpiresMs?.let { if (it !is JsonNull) put("lease_expires_ms", it) }
+        }
+
     // Percent-encode for a path segment or query value; URLEncoder emits '+' for
     // spaces, so normalize to %20 which is valid in both positions.
     private fun enc(s: String): String =
@@ -362,5 +476,9 @@ class FiduciaClient(baseUrl: String) {
 
     private companion object {
         private val RETRYABLE_STATUS = setOf(408, 425, 429, 500, 502, 503, 504)
+        private const val DEFAULT_TTL_MS = 60_000L        // lease TTL when caller gives none
+        private const val DEFAULT_MAX_WAIT_MS = 30_000L   // total blocking-poll budget
+        private const val DEFAULT_RETRY_INTERVAL_MS = 250L
+        private const val NANOS_PER_MS = 1_000_000L
     }
 }

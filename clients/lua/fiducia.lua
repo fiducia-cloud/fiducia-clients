@@ -3,8 +3,16 @@
 --
 --   local Fiducia = require("fiducia")
 --   local c = Fiducia.new("https://api.fiducia.cloud")
---   local lock = c:lock_acquire("orders/checkout", { ttl_ms = 30000 })
---   c:lock_release("orders/checkout", "worker-a", lock.result.output.fencing_token)
+--   local grant = c:must_lock("orders/checkout", { ttl_ms = 30000 })  -- BLOCKS until held
+--   -- ... guarded work using grant.fencing_token ...
+--   grant.release()   -- or c:lock_release(grant.key, grant.holder, grant.fencing_token)
+--
+-- Blocking vs try: must_lock/lock and must_semaphore/semaphore POLL until the lock
+-- is held or the wait budget elapses (the server queues wait:true acquires and
+-- returns immediately -- it does not hold the connection). They return a grant
+-- table { key, holder, fencing_token, lease_expires_ms, release() } and raise a
+-- timeout table { status = 0, timeout = true, keys, waited_ms, body } on timeout.
+-- try_lock/try_semaphore are single-shot (wait:false) and return the raw response.
 --
 -- Errors: on HTTP status >= 300 (or a transport failure) each op raises a Lua
 -- error whose value is a table { status = <number>, body = <parsed JSON | string> }.
@@ -26,6 +34,7 @@
 -- pass your own cafile/capath, or verify = "none" to opt out (insecure).
 
 local http = require("socket.http")
+local socket = require("socket") -- socket.sleep / socket.gettime for the blocking poll loop
 local ltn12 = require("ltn12")
 local dkjson = require("dkjson")
 local https -- luasec (ssl.https); required lazily, only when an https URL is used
@@ -110,6 +119,59 @@ local function resolve_tls(user_tls)
     end
   end
   return params
+end
+
+-- --- blocking (must_*) poll-loop helpers ---
+-- Defaults for the blocking lock/semaphore helpers (all overridable per call).
+local MUST_TTL_MS            = 60000   -- lease requested on the acquire
+local MUST_MAX_WAIT_MS       = 30000   -- total time budget for the poll loop
+local MUST_RETRY_INTERVAL_MS = 250     -- delay between polls
+
+-- Millisecond clock (luasocket wall clock) used for poll deadlines.
+local function now_ms()
+  return math.floor(socket.gettime() * 1000)
+end
+
+-- A stable, unique holder id, generated when the caller does not supply one.
+local function gen_holder()
+  return string.format("fdc-%x-%06x", now_ms(), math.random(0, 0xFFFFFF))
+end
+
+-- resp.result.output (the acquire grant payload), or {} when absent.
+local function output_of(resp)
+  local r = type(resp) == "table" and resp.result
+  local o = type(r) == "table" and r.output
+  return type(o) == "table" and o or {}
+end
+
+-- resp.lock (from lock_get), or {} when absent/null.
+local function lock_of(resp)
+  local lk = type(resp) == "table" and resp.lock
+  return type(lk) == "table" and lk or {}
+end
+
+-- The holders entry matching `holder` in a semaphore_get response, or nil.
+local function find_holder(resp, holder)
+  local sem = type(resp) == "table" and resp.semaphore
+  local hs = type(sem) == "table" and sem.holders
+  if type(hs) == "table" then
+    for _, h in ipairs(hs) do
+      if type(h) == "table" and h.holder == holder then return h end
+    end
+  end
+  return nil
+end
+
+-- The value raised (and pcall-caught) when a blocking helper's budget elapses.
+-- Carries status/body (matching the client's error convention) plus timeout=true.
+local function timeout_error(keys, waited_ms)
+  return {
+    status = 0,
+    timeout = true,
+    keys = keys,
+    waited_ms = waited_ms,
+    body = "fiducia: timed out after " .. waited_ms .. "ms waiting for " .. table.concat(keys, ", "),
+  }
 end
 
 local Fiducia = {}
@@ -223,10 +285,55 @@ function Fiducia:try_lock(key, opts)
   return self:lock_acquire(key, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = false })
 end
 
--- opts: { holder, ttl_ms }
+-- Poll check() (returns a grant or nil) every retry_interval_ms until it yields a
+-- grant or the max_wait_ms budget elapses; on elapse raise a timeout table. `keys`
+-- is only for the timeout message. opts: { max_wait_ms, retry_interval_ms, max_retries }.
+function Fiducia:_poll_until(keys, opts, check)
+  local max_wait_ms = opts.max_wait_ms or MUST_MAX_WAIT_MS
+  local interval_ms = opts.retry_interval_ms or MUST_RETRY_INTERVAL_MS
+  local deadline = now_ms() + max_wait_ms
+  local attempts = 0
+  while opts.max_retries == nil or attempts < opts.max_retries do
+    attempts = attempts + 1
+    local remaining = deadline - now_ms()
+    if remaining <= 0 then break end
+    socket.sleep(math.min(interval_ms, remaining) / 1000)
+    local grant = check()
+    if grant then return grant end
+  end
+  error(timeout_error(keys, max_wait_ms))
+end
+
+-- A held lock grant. grant.release() (or grant:release()) releases it.
+function Fiducia:_lock_grant(key, holder, fencing_token, lease_expires_ms)
+  local client = self
+  return {
+    key = key, holder = holder,
+    fencing_token = fencing_token, lease_expires_ms = lease_expires_ms,
+    release = function() return client:lock_release(key, holder, fencing_token) end,
+  }
+end
+
+-- must_lock(key, opts) / lock(...): BLOCK until the lock is held, then return the
+-- grant. The server queues wait:true acquires and returns immediately, so we poll
+-- lock_get until we hold it (our holder + a fencing_token) or the wait budget
+-- elapses -- on which it raises a timeout table (callers pcall). try_lock is
+-- single-shot and unaffected.
+-- opts: { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries }.
 function Fiducia:must_lock(key, opts)
   opts = opts or {}
-  return self:lock_acquire(key, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = true })
+  local holder = opts.holder or gen_holder()
+  local out = output_of(self:lock_acquire(key,
+    { holder = holder, ttl_ms = opts.ttl_ms or MUST_TTL_MS, wait = true }))
+  if out.acquired then
+    return self:_lock_grant(key, holder, out.fencing_token, out.lease_expires_ms)
+  end
+  return self:_poll_until({ key }, opts, function()
+    local lk = lock_of(self:lock_get(key))
+    if lk.holder == holder and lk.fencing_token ~= nil then
+      return self:_lock_grant(key, holder, lk.fencing_token, lk.lease_expires_ms)
+    end
+  end)
 end
 Fiducia.lock = Fiducia.must_lock
 
@@ -256,10 +363,35 @@ function Fiducia:try_semaphore(key, limit, opts)
   return self:semaphore_acquire(key, limit, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = false })
 end
 
--- opts: { holder, ttl_ms }
+-- A held semaphore permit. grant.release() releases it.
+function Fiducia:_semaphore_grant(key, holder, fencing_token, lease_expires_ms)
+  local client = self
+  return {
+    key = key, holder = holder,
+    fencing_token = fencing_token, lease_expires_ms = lease_expires_ms,
+    release = function() return client:semaphore_release(key, holder, fencing_token) end,
+  }
+end
+
+-- must_semaphore(key, limit, opts) / semaphore(...): BLOCK until a permit is held,
+-- polling semaphore_get for our holder (with a fencing_token) until held or the wait
+-- budget elapses -- on which it raises a timeout table (callers pcall). try_semaphore
+-- is single-shot and unaffected.
+-- opts: { holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries }.
 function Fiducia:must_semaphore(key, limit, opts)
   opts = opts or {}
-  return self:semaphore_acquire(key, limit, { holder = opts.holder, ttl_ms = opts.ttl_ms, wait = true })
+  local holder = opts.holder or gen_holder()
+  local out = output_of(self:semaphore_acquire(key, limit,
+    { holder = holder, ttl_ms = opts.ttl_ms or MUST_TTL_MS, wait = true }))
+  if out.acquired then
+    return self:_semaphore_grant(key, holder, out.fencing_token, out.lease_expires_ms)
+  end
+  return self:_poll_until({ key }, opts, function()
+    local slot = find_holder(self:semaphore_get(key), holder)
+    if slot and slot.fencing_token ~= nil then
+      return self:_semaphore_grant(key, holder, slot.fencing_token, slot.lease_expires_ms)
+    end
+  end)
 end
 Fiducia.semaphore = Fiducia.must_semaphore
 

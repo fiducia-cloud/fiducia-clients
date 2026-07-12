@@ -44,6 +44,118 @@ fiducia_client <- function(base_url, timeout = 30) {
   jsonlite::toJSON(x, auto_unbox = TRUE, null = "null", na = "null")
 }
 
+# --- blocking-acquire poll loop (must_lock / must_semaphore) ---------------
+# PROTOCOL: the server does NOT hold the connection on wait:true; it reserves a
+# FIFO slot and returns {acquired:false, queued:true} IMMEDIATELY. So the
+# blocking helpers must poll lock_get / semaphore_get until our holder actually
+# shows up holding the grant (with a fencing token), or the wait budget elapses.
+# Ported from clients/ruby (_acquire_lock) and clients/elixir (poll_lock).
+
+# Monotonic-ish elapsed clock in ms: proc.time()'s "elapsed" is measured real
+# time since the process started, advances across Sys.sleep(), and (unlike
+# Sys.time()) is not perturbed by wall-clock / NTP adjustments.
+.fiducia_now_ms <- function() {
+  as.numeric(proc.time()[["elapsed"]]) * 1000
+}
+
+# A stable, practically-unique holder id for one blocking acquire: process id +
+# high-resolution timestamp (distinct across processes and across sequential
+# calls in a process). No RNG, so it does not perturb the caller's random stream.
+.fiducia_gen_holder <- function() {
+  paste0("fdc-", Sys.getpid(), "-",
+         gsub(".", "", sprintf("%.6f", as.numeric(Sys.time())), fixed = TRUE))
+}
+
+# resp$result$output as a list ({} when absent). `$` on NULL/missing yields NULL.
+.fiducia_output <- function(resp) {
+  out <- resp$result$output
+  if (is.null(out)) list() else out
+}
+
+# A held grant: carries what lock_release / semaphore_release need. Classed so
+# callers can dispatch on inherits(x, "fiducia_lock" / "fiducia_semaphore").
+.fiducia_grant <- function(key, holder, fencing_token, lease_expires_ms, cls) {
+  structure(
+    list(key = key, holder = holder,
+         fencing_token = fencing_token, lease_expires_ms = lease_expires_ms),
+    class = c(cls, "fiducia_grant")
+  )
+}
+
+# Timeout condition raised when the blocking wait budget elapses. Inherits
+# `fiducia_error` so existing tryCatch(fiducia_error = ...) handlers still catch
+# it; catch `fiducia_timeout` specifically to distinguish a wait timeout.
+.fiducia_timeout <- function(key, waited_ms) {
+  structure(
+    class = c("fiducia_timeout", "fiducia_error", "error", "condition"),
+    list(
+      message = sprintf("fiducia: timed out after %.0fms waiting for %s",
+                        waited_ms, paste(key, collapse = ", ")),
+      key = key,
+      waited_ms = waited_ms
+    )
+  )
+}
+
+# The holders[] entry that is us (matching holder), or NULL.
+.fiducia_find_holder <- function(holders, holder) {
+  for (h in holders) {
+    if (identical(h$holder, holder)) return(h)
+  }
+  NULL
+}
+
+# Block until we hold `key` (poll lock_get), or raise fiducia_timeout.
+.fiducia_acquire_lock <- function(client, key, holder, ttl_ms,
+                                  max_wait_ms, retry_interval_ms, max_retries) {
+  if (is.null(holder)) holder <- .fiducia_gen_holder()
+  if (is.null(ttl_ms)) ttl_ms <- 60000
+  out <- .fiducia_output(lock_acquire(client, key, holder = holder, ttl_ms = ttl_ms, wait = TRUE))
+  if (isTRUE(out$acquired)) {
+    return(.fiducia_grant(key, holder, out$fencing_token, out$lease_expires_ms, "fiducia_lock"))
+  }
+  deadline <- .fiducia_now_ms() + max_wait_ms
+  attempts <- 0L
+  repeat {
+    if (!is.null(max_retries) && attempts >= max_retries) break
+    attempts <- attempts + 1L
+    remaining <- deadline - .fiducia_now_ms()
+    if (remaining <= 0) break
+    Sys.sleep(min(retry_interval_ms, remaining) / 1000)
+    lk <- lock_get(client, key)$lock
+    if (identical(lk$holder, holder) && !is.null(lk$fencing_token)) {
+      return(.fiducia_grant(key, holder, lk$fencing_token, lk$lease_expires_ms, "fiducia_lock"))
+    }
+  }
+  stop(.fiducia_timeout(key, max_wait_ms))
+}
+
+# Block until we hold a permit on `key` (poll semaphore_get), or raise timeout.
+.fiducia_acquire_semaphore <- function(client, key, limit, holder, ttl_ms,
+                                       max_wait_ms, retry_interval_ms, max_retries) {
+  if (is.null(holder)) holder <- .fiducia_gen_holder()
+  if (is.null(ttl_ms)) ttl_ms <- 60000
+  out <- .fiducia_output(semaphore_acquire(client, key, limit,
+                                           holder = holder, ttl_ms = ttl_ms, wait = TRUE))
+  if (isTRUE(out$acquired)) {
+    return(.fiducia_grant(key, holder, out$fencing_token, out$lease_expires_ms, "fiducia_semaphore"))
+  }
+  deadline <- .fiducia_now_ms() + max_wait_ms
+  attempts <- 0L
+  repeat {
+    if (!is.null(max_retries) && attempts >= max_retries) break
+    attempts <- attempts + 1L
+    remaining <- deadline - .fiducia_now_ms()
+    if (remaining <= 0) break
+    Sys.sleep(min(retry_interval_ms, remaining) / 1000)
+    slot <- .fiducia_find_holder(semaphore_get(client, key)$semaphore$holders, holder)
+    if (!is.null(slot) && !is.null(slot$fencing_token)) {
+      return(.fiducia_grant(key, holder, slot$fencing_token, slot$lease_expires_ms, "fiducia_semaphore"))
+    }
+  }
+  stop(.fiducia_timeout(key, max_wait_ms))
+}
+
 # Core request. body = NULL means "send no body" (GET / bare DELETE); a list
 # (even empty) means "send a JSON body". Parses the JSON response, or NULL on
 # an empty body, and raises a `fiducia_error` condition on HTTP status >= 300.

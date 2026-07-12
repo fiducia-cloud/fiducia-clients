@@ -13,6 +13,9 @@
  *
  * Dependency: libcurl (-lcurl). Version 0.1.0. License: UNLICENSED.
  */
+/* clock_gettime(CLOCK_MONOTONIC) + nanosleep (blocking-acquire poll loop). */
+#define _POSIX_C_SOURCE 200809L
+
 #include "fiducia.h"
 
 #include <curl/curl.h>
@@ -20,6 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #define FIDUCIA_VERSION "0.1.0"
 

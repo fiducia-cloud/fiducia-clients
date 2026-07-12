@@ -131,8 +131,30 @@ try_lock(C, Key, Opts) -> lock_acquire(C, Key, Opts#{wait => false}).
 -spec must_lock(client(), binary() | string()) -> result().
 must_lock(C, Key) -> must_lock(C, Key, #{}).
 
+%% @doc Blocking acquire. The server does not hold the connection on wait=true
+%% (it reserves a FIFO slot and returns immediately), so this acquires with
+%% wait=true and then polls lock_get until THIS holder actually holds the lock
+%% or the wait budget elapses. Returns {ok, Grant} where Grant is a map with
+%% <<"holder">>, <<"fencing_token">> and <<"lease_expires_ms">> (the holder is
+%% generated when not supplied, so release with Grant's holder), or
+%% {error, timeout}. Opts knobs (atom keys): holder, ttl_ms (default 60000),
+%% max_wait_ms (default 30000), retry_interval_ms (default 250), max_retries.
 -spec must_lock(client(), binary() | string(), map()) -> result().
-must_lock(C, Key, Opts) -> lock_acquire(C, Key, Opts#{wait => true}).
+must_lock(C, Key, Opts) ->
+    Holder = resolve_holder(Opts),
+    Acq = lock_acquire(C, Key, Opts#{holder => Holder,
+                                     ttl_ms => maps:get(ttl_ms, Opts, 60000),
+                                     wait => true}),
+    case Acq of
+        {ok, Resp} ->
+            Out = output(Resp),
+            case maps:get(<<"acquired">>, Out, false) of
+                true -> {ok, held_grant(Holder, Out)};
+                _ -> poll_lock(C, Key, Holder, deadline(Opts), interval(Opts),
+                               maps:get(max_retries, Opts, undefined), 0)
+            end;
+        Err -> Err
+    end.
 
 %% @doc Alias for must_lock/2.
 -spec lock(client(), binary() | string()) -> result().
@@ -171,8 +193,25 @@ try_semaphore(C, Key, Limit, Opts) -> semaphore_acquire(C, Key, Limit, Opts#{wai
 -spec must_semaphore(client(), binary() | string(), integer()) -> result().
 must_semaphore(C, Key, Limit) -> must_semaphore(C, Key, Limit, #{}).
 
+%% @doc Blocking acquire for a semaphore permit; see must_lock/3 for the poll
+%% behaviour, knobs, and return shape. Polls semaphore_get and returns the held
+%% permit (this holder's entry with a non-null fencing token), or {error, timeout}.
 -spec must_semaphore(client(), binary() | string(), integer(), map()) -> result().
-must_semaphore(C, Key, Limit, Opts) -> semaphore_acquire(C, Key, Limit, Opts#{wait => true}).
+must_semaphore(C, Key, Limit, Opts) ->
+    Holder = resolve_holder(Opts),
+    Acq = semaphore_acquire(C, Key, Limit, Opts#{holder => Holder,
+                                                 ttl_ms => maps:get(ttl_ms, Opts, 60000),
+                                                 wait => true}),
+    case Acq of
+        {ok, Resp} ->
+            Out = output(Resp),
+            case maps:get(<<"acquired">>, Out, false) of
+                true -> {ok, held_grant(Holder, Out)};
+                _ -> poll_semaphore(C, Key, Holder, deadline(Opts), interval(Opts),
+                                    maps:get(max_retries, Opts, undefined), 0)
+            end;
+        Err -> Err
+    end.
 
 %% @doc Alias for must_semaphore/3.
 -spec semaphore(client(), binary() | string(), integer()) -> result().
@@ -378,6 +417,77 @@ with_opts(Body, Opts, Keys) ->
                   error -> Acc
               end
       end, Body, Keys).
+
+%% --- blocking-acquire poll loop (must_lock / must_semaphore) ---
+
+%% Caller-supplied holder, else a stable generated id used for both the acquire
+%% and every poll so lock_get/semaphore_get can recognise our slot.
+resolve_holder(Opts) ->
+    case maps:find(holder, Opts) of
+        {ok, H} -> to_bin(H);
+        error -> <<"fdc-", (binary:encode_hex(rand:bytes(8), lowercase))/binary>>
+    end.
+
+now_ms() -> erlang:monotonic_time(millisecond).
+deadline(Opts) -> now_ms() + maps:get(max_wait_ms, Opts, 30000).
+interval(Opts) -> maps:get(retry_interval_ms, Opts, 250).
+
+%% result.output of an acquire response, or #{} if the shape is unexpected.
+output(#{<<"result">> := #{<<"output">> := Out}}) when is_map(Out) -> Out;
+output(_) -> #{}.
+
+%% A held grant carries the (possibly generated) holder plus the fencing token
+%% and lease expiry — what a caller needs to release the lock/permit.
+held_grant(Holder, Src) when is_map(Src) ->
+    #{<<"holder">> => Holder,
+      <<"fencing_token">> => maps:get(<<"fencing_token">>, Src, null),
+      <<"lease_expires_ms">> => maps:get(<<"lease_expires_ms">>, Src, null)}.
+
+%% A lock/holder entry is ours iff the holder matches AND a fencing token has
+%% been assigned (a queued entry has the holder set but fencing_token null).
+held_by(Entry, Holder) ->
+    maps:get(<<"holder">>, Entry, undefined) =:= Holder
+        andalso maps:get(<<"fencing_token">>, Entry, null) =/= null.
+
+poll_lock(_C, _Key, _Holder, _Deadline, _Interval, MaxRetries, Attempt)
+  when is_integer(MaxRetries), Attempt >= MaxRetries ->
+    {error, timeout};
+poll_lock(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt) ->
+    case Deadline - now_ms() of
+        Rem when Rem =< 0 -> {error, timeout};
+        Rem ->
+            timer:sleep(min(Interval, Rem)),
+            case lock_get(C, Key) of
+                {ok, #{<<"lock">> := Lk}} when is_map(Lk) ->
+                    case held_by(Lk, Holder) of
+                        true -> {ok, held_grant(Holder, Lk)};
+                        false -> poll_lock(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt + 1)
+                    end;
+                {ok, _} ->
+                    poll_lock(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt + 1);
+                Err -> Err
+            end
+    end.
+
+poll_semaphore(_C, _Key, _Holder, _Deadline, _Interval, MaxRetries, Attempt)
+  when is_integer(MaxRetries), Attempt >= MaxRetries ->
+    {error, timeout};
+poll_semaphore(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt) ->
+    case Deadline - now_ms() of
+        Rem when Rem =< 0 -> {error, timeout};
+        Rem ->
+            timer:sleep(min(Interval, Rem)),
+            case semaphore_get(C, Key) of
+                {ok, #{<<"semaphore">> := #{<<"holders">> := Holders}}} when is_list(Holders) ->
+                    case [H || H <- Holders, is_map(H), held_by(H, Holder)] of
+                        [Slot | _] -> {ok, held_grant(Holder, Slot)};
+                        [] -> poll_semaphore(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt + 1)
+                    end;
+                {ok, _} ->
+                    poll_semaphore(C, Key, Holder, Deadline, Interval, MaxRetries, Attempt + 1);
+                Err -> Err
+            end
+    end.
 
 %% Percent-encode a value for use in a path segment or query value.
 enc(X) -> uri_string:quote(to_bin(X)).

@@ -11,7 +11,7 @@ module Fiducia
 import HTTP
 import JSON
 
-export Client, FiduciaError
+export Client, FiduciaError, LockTimeout
 export health, status
 export lock_get, lock_acquire, lock_acquire_many, try_lock, must_lock, lock_release
 export semaphore_get, semaphore_acquire, try_semaphore, must_semaphore, semaphore, semaphore_release
@@ -35,6 +35,20 @@ struct FiduciaError <: Exception
 end
 
 Base.showerror(io::IO, e::FiduciaError) = print(io, "FiduciaError: HTTP ", e.status)
+
+"""
+    LockTimeout(keys, waited_ms)
+
+Thrown by the blocking `must_lock`/`lock`/`must_semaphore`/`semaphore` helpers when
+the acquire is still queued after the `max_wait_ms` budget elapses.
+"""
+struct LockTimeout <: Exception
+    keys
+    waited_ms
+end
+
+Base.showerror(io::IO, e::LockTimeout) =
+    print(io, "LockTimeout: waited ", e.waited_ms, "ms for ", join(e.keys, ", "))
 
 """
     Client(base_url; connect_timeout = 30, read_timeout = 30)
@@ -105,6 +119,47 @@ function _request(c::Client, method::AbstractString, path::AbstractString, body 
     return data
 end
 
+# A stable holder id when the caller does not supply one.
+_gen_holder() = "fdc-" * bytes2hex(rand(UInt8, 16))
+
+# Monotonic clock in milliseconds, for poll deadlines.
+_now_ms() = time_ns() / 1_000_000
+
+# The acquire envelope's `result.output` (or an empty Dict if absent).
+function _acquire_output(resp)
+    resp isa AbstractDict || return Dict{String,Any}()
+    r = get(resp, "result", nothing)
+    r isa AbstractDict || return Dict{String,Any}()
+    o = get(r, "output", nothing)
+    return o isa AbstractDict ? o : Dict{String,Any}()
+end
+
+# A held grant: exactly what a caller needs to release later.
+_grant(key, holder, src) = Dict{String,Any}(
+    "key" => key,
+    "holder" => holder,
+    "fencing_token" => get(src, "fencing_token", nothing),
+    "lease_expires_ms" => get(src, "lease_expires_ms", nothing),
+    "acquired" => true,
+)
+
+# Poll `check` every `retry_interval_ms` until it returns a held grant (non-nothing)
+# or the `max_wait_ms` monotonic budget (or `max_retries`) is exhausted — then throw
+# `LockTimeout`. `check` runs one GET and returns the grant, or `nothing` to retry.
+function _poll_until_held(check, keys, max_wait_ms, retry_interval_ms, max_retries)
+    deadline = _now_ms() + max_wait_ms
+    attempts = 0
+    while max_retries === nothing || attempts < max_retries
+        attempts += 1
+        remaining = deadline - _now_ms()
+        remaining <= 0 && break
+        sleep(min(retry_interval_ms, remaining) / 1000)
+        grant = check()
+        grant === nothing || return grant
+    end
+    throw(LockTimeout(keys, max_wait_ms))
+end
+
 # --- misc ---
 health(c::Client) = _request(c, "GET", "/healthz")
 status(c::Client) = _request(c, "GET", "/v1/status")
@@ -123,13 +178,34 @@ lock_acquire_many(c::Client, keys; holder = nothing, ttl_ms = nothing, wait = tr
 try_lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
     lock_acquire(c, key; holder = holder, ttl_ms = ttl_ms, wait = false)
 
-must_lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
-    lock_acquire(c, key; holder = holder, ttl_ms = ttl_ms, wait = true)
+"""
+    must_lock(c, key; holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    lock(c, key; ...)
 
-# `lock` is the blocking alias of `must_lock`; provided as a method on
-# `Base.lock` (Julia already exports `lock`) so `lock(c, key)` just works.
-Base.lock(c::Client, key; holder = nothing, ttl_ms = nothing) =
-    must_lock(c, key; holder = holder, ttl_ms = ttl_ms)
+Block until the lock is actually HELD, then return a held-grant `Dict` carrying
+`"holder"`, `"fencing_token"` and `"lease_expires_ms"`. The server only reserves a
+FIFO slot on `wait = true`, so this polls `lock_get` until this client's `holder`
+owns the lock, or throws [`LockTimeout`](@ref) once `max_wait_ms` elapses. A
+`holder` is generated when not supplied; release with
+`lock_release(c, key, grant["holder"], grant["fencing_token"])`.
+"""
+function must_lock(c::Client, key; holder = nothing, ttl_ms = nothing,
+        max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    h = holder === nothing ? _gen_holder() : holder
+    out = _acquire_output(lock_acquire(c, key;
+        holder = h, ttl_ms = ttl_ms === nothing ? 60000 : ttl_ms, wait = true))
+    get(out, "acquired", false) === true && return _grant(key, h, out)
+    return _poll_until_held([key], max_wait_ms, retry_interval_ms, max_retries) do
+        resp = lock_get(c, key)
+        lk = resp isa AbstractDict ? get(resp, "lock", nothing) : nothing
+        (lk isa AbstractDict && get(lk, "holder", nothing) == h &&
+            get(lk, "fencing_token", nothing) !== nothing) ? _grant(key, h, lk) : nothing
+    end
+end
+
+# `lock` is the blocking alias of `must_lock`; provided as a method on `Base.lock`
+# (Julia already exports `lock`) so `lock(c, key)` just works.
+Base.lock(c::Client, key; kwargs...) = must_lock(c, key; kwargs...)
 
 # `key` is accepted for symmetry with the other release calls but is not sent.
 lock_release(c::Client, key, holder, fencing_token) =
@@ -146,11 +222,34 @@ semaphore_acquire(c::Client, key, limit; holder = nothing, ttl_ms = nothing, wai
 try_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
     semaphore_acquire(c, key, limit; holder = holder, ttl_ms = ttl_ms, wait = false)
 
-must_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
-    semaphore_acquire(c, key, limit; holder = holder, ttl_ms = ttl_ms, wait = true)
+"""
+    must_semaphore(c, key, limit; holder, ttl_ms, max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    semaphore(c, key, limit; ...)
 
-semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing) =
-    must_semaphore(c, key, limit; holder = holder, ttl_ms = ttl_ms)
+Block until a semaphore permit is actually HELD, then return a held-grant `Dict`
+(see [`must_lock`](@ref)). Polls `semaphore_get` for this client's `holder` among
+the permit holders, or throws [`LockTimeout`](@ref) once `max_wait_ms` elapses.
+"""
+function must_semaphore(c::Client, key, limit; holder = nothing, ttl_ms = nothing,
+        max_wait_ms = 30000, retry_interval_ms = 250, max_retries = nothing)
+    h = holder === nothing ? _gen_holder() : holder
+    out = _acquire_output(semaphore_acquire(c, key, limit;
+        holder = h, ttl_ms = ttl_ms === nothing ? 60000 : ttl_ms, wait = true))
+    get(out, "acquired", false) === true && return _grant(key, h, out)
+    return _poll_until_held([key], max_wait_ms, retry_interval_ms, max_retries) do
+        resp = semaphore_get(c, key)
+        sem = resp isa AbstractDict ? get(resp, "semaphore", nothing) : nothing
+        holders = sem isa AbstractDict ? get(sem, "holders", nothing) : nothing
+        holders isa AbstractVector || return nothing
+        idx = findfirst(holders) do hd
+            hd isa AbstractDict && get(hd, "holder", nothing) == h &&
+                get(hd, "fencing_token", nothing) !== nothing
+        end
+        idx === nothing ? nothing : _grant(key, h, holders[idx])
+    end
+end
+
+semaphore(c::Client, key, limit; kwargs...) = must_semaphore(c, key, limit; kwargs...)
 
 semaphore_release(c::Client, key, holder, fencing_token) =
     _request(c, "POST", "/v1/semaphores/release",

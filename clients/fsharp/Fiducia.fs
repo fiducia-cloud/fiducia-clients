@@ -22,6 +22,14 @@ type FiduciaError(status: int, body: JsonNode) =
     member _.Status = status
     member _.Body = body
 
+/// Raised by the blocking acquire helpers (MustLock/Lock/MustSemaphore/Semaphore)
+/// when the wait budget elapses before the lock/permit is actually held. Distinct
+/// from FiduciaError because a timeout carries no HTTP status or response body.
+type LockTimeout(keys: string[], waitedMs: int64) =
+    inherit Exception(sprintf "fiducia: timed out after %dms waiting for %s" waitedMs (String.Join(", ", keys)))
+    member _.Keys = keys
+    member _.WaitedMs = waitedMs
+
 [<AutoOpen>]
 module internal Internal =
 
@@ -61,6 +69,45 @@ module internal Internal =
         else
             try JsonNode.Parse(text)
             with :? JsonException -> JsonValue.Create(text) :> JsonNode
+
+    // --- helpers for the blocking (must_*) poll loop ---
+
+    // A stable per-request holder id when the caller did not supply one.
+    let genHolder () = "fdc-" + Guid.NewGuid().ToString("N")
+
+    // Null-safe object field access (returns null for a missing key or a non-object).
+    let field (n: JsonNode) (k: string) : JsonNode =
+        match n with
+        | :? JsonObject as o -> (match o.TryGetPropertyValue(k) with | true, v -> v | _ -> null)
+        | _ -> null
+
+    // Walk a path of object keys, returning null if any hop is missing.
+    let rec dig (n: JsonNode) (path: string list) : JsonNode =
+        match path with
+        | [] -> n
+        | k :: rest -> dig (field n k) rest
+
+    // True only when the node is a JSON boolean true.
+    let nodeIsTrue (n: JsonNode) =
+        match n with
+        | :? JsonValue as v -> (match v.TryGetValue<bool>() with | true, b -> b | _ -> false)
+        | _ -> false
+
+    // True only when the node is a JSON string equal to s.
+    let nodeEqualsString (n: JsonNode) (s: string) =
+        match n with
+        | :? JsonValue as v -> (match v.TryGetValue<string>() with | true, x -> x = s | _ -> false)
+        | _ -> false
+
+    // Build a normalized held-grant node the caller can release with: our holder
+    // plus the proof's fencing_token (+ lease_expires_ms). Nodes are cloned via
+    // toNode so they never carry a foreign parent and int64 precision is preserved.
+    let heldGrant (holder: string) (fencingToken: JsonNode) (leaseExpiresMs: JsonNode) : JsonNode =
+        let g = JsonObject()
+        g.["holder"] <- toNode (box holder)
+        g.["fencing_token"] <- toNode (box fencingToken)
+        if not (isNull leaseExpiresMs) then g.["lease_expires_ms"] <- toNode (box leaseExpiresMs)
+        g :> JsonNode
 
 /// Thin HTTP wrapper over the Fiducia contract. Every method issues one request
 /// and returns the parsed JSON response as a JsonNode (null for an empty body).
@@ -112,12 +159,50 @@ type FiduciaClient(baseUrl: string) =
     member this.TryLock(key: string, ?holder: string, ?ttlMs: int64) =
         this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = false)
 
-    member this.MustLock(key: string, ?holder: string, ?ttlMs: int64) =
-        this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    /// Blocking acquire poll loop shared by MustLock/Lock. Sends wait=true; the
+    /// server does NOT hold the connection — it returns a queued FIFO ticket
+    /// immediately — so if we are not acquired we poll lock_get(key) at a fixed
+    /// interval until we hold it (our holder + a fencing_token) or the budget runs
+    /// out. Returns a normalized held-grant node {holder, fencing_token,
+    /// lease_expires_ms}; raises LockTimeout on deadline / max_retries.
+    member private this.AcquireLockBlocking(key: string, holderOpt: string option, ttlMsOpt: int64 option,
+                                            maxWaitMs: int64, retryIntervalMs: int64, maxRetriesOpt: int option) : JsonNode =
+        let holder = match holderOpt with Some h -> h | None -> genHolder ()
+        let ttlMs = defaultArg ttlMsOpt 60000L
+        let out = dig (this.LockAcquire(key, holder = holder, ttlMs = ttlMs, wait = true)) [ "result"; "output" ]
+        if nodeIsTrue (field out "acquired") then
+            heldGrant holder (field out "fencing_token") (field out "lease_expires_ms")
+        else
+            let deadline = Environment.TickCount64 + maxWaitMs
+            let mutable attempt = 0
+            let mutable grant : JsonNode = null
+            let mutable timedOut = false
+            while isNull grant && not timedOut do
+                let capped = match maxRetriesOpt with Some m -> attempt >= m | None -> false
+                let remaining = deadline - Environment.TickCount64
+                if capped || remaining <= 0L then timedOut <- true
+                else
+                    System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(float (min retryIntervalMs remaining)))
+                    let lk = field (this.LockGet(key)) "lock"
+                    if nodeEqualsString (field lk "holder") holder && not (isNull (field lk "fencing_token")) then
+                        grant <- heldGrant holder (field lk "fencing_token") (field lk "lease_expires_ms")
+                    attempt <- attempt + 1
+            if isNull grant then raise (LockTimeout([| key |], maxWaitMs))
+            grant
+
+    /// Blocking acquire: blocks until the lock is HELD and returns a grant
+    /// {holder, fencing_token, lease_expires_ms} (release via LockRelease), or
+    /// raises LockTimeout. Polls lock_get every retryIntervalMs (default 250) until
+    /// held or maxWaitMs (default 30000); optional maxRetries caps the poll count.
+    member this.MustLock(key: string, ?holder: string, ?ttlMs: int64,
+                         ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.AcquireLockBlocking(key, holder, ttlMs, defaultArg maxWaitMs 30000L, defaultArg retryIntervalMs 250L, maxRetries)
 
     /// Alias for MustLock (blocking acquire).
-    member this.Lock(key: string, ?holder: string, ?ttlMs: int64) =
-        this.LockAcquire(key, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    member this.Lock(key: string, ?holder: string, ?ttlMs: int64,
+                     ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.MustLock(key, ?holder = holder, ?ttlMs = ttlMs, ?maxWaitMs = maxWaitMs,
+                      ?retryIntervalMs = retryIntervalMs, ?maxRetries = maxRetries)
 
     /// `key` is accepted for symmetry but is intentionally not sent in the body.
     member this.LockRelease(key: string, holder: string, fencingToken: int64) =
@@ -141,12 +226,54 @@ type FiduciaClient(baseUrl: string) =
     member this.TrySemaphore(key: string, limit: int, ?holder: string, ?ttlMs: int64) =
         this.SemaphoreAcquire(key, limit, ?holder = holder, ?ttlMs = ttlMs, wait = false)
 
-    member this.MustSemaphore(key: string, limit: int, ?holder: string, ?ttlMs: int64) =
-        this.SemaphoreAcquire(key, limit, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    /// Blocking acquire poll loop shared by MustSemaphore/Semaphore. Sends wait=true,
+    /// and if queued, polls semaphore_get(key).semaphore.holders until our holder
+    /// appears with a fencing_token, or the budget runs out. Returns a normalized
+    /// held-grant node; raises LockTimeout on deadline / max_retries.
+    member private this.AcquireSemaphoreBlocking(key: string, limit: int, holderOpt: string option, ttlMsOpt: int64 option,
+                                                 maxWaitMs: int64, retryIntervalMs: int64, maxRetriesOpt: int option) : JsonNode =
+        let holder = match holderOpt with Some h -> h | None -> genHolder ()
+        let ttlMs = defaultArg ttlMsOpt 60000L
+        let out = dig (this.SemaphoreAcquire(key, limit, holder = holder, ttlMs = ttlMs, wait = true)) [ "result"; "output" ]
+        if nodeIsTrue (field out "acquired") then
+            heldGrant holder (field out "fencing_token") (field out "lease_expires_ms")
+        else
+            let deadline = Environment.TickCount64 + maxWaitMs
+            let mutable attempt = 0
+            let mutable grant : JsonNode = null
+            let mutable timedOut = false
+            while isNull grant && not timedOut do
+                let capped = match maxRetriesOpt with Some m -> attempt >= m | None -> false
+                let remaining = deadline - Environment.TickCount64
+                if capped || remaining <= 0L then timedOut <- true
+                else
+                    System.Threading.Thread.Sleep(TimeSpan.FromMilliseconds(float (min retryIntervalMs remaining)))
+                    match dig (this.SemaphoreGet(key)) [ "semaphore"; "holders" ] with
+                    | :? JsonArray as arr ->
+                        let slot =
+                            arr |> Seq.tryFind (fun h ->
+                                nodeEqualsString (field h "holder") holder && not (isNull (field h "fencing_token")))
+                        match slot with
+                        | Some h -> grant <- heldGrant holder (field h "fencing_token") (field h "lease_expires_ms")
+                        | None -> ()
+                    | _ -> ()
+                    attempt <- attempt + 1
+            if isNull grant then raise (LockTimeout([| key |], maxWaitMs))
+            grant
+
+    /// Blocking acquire: blocks until a permit is HELD and returns a grant
+    /// {holder, fencing_token, lease_expires_ms} (release via SemaphoreRelease), or
+    /// raises LockTimeout. Polls semaphore_get every retryIntervalMs (default 250)
+    /// until held or maxWaitMs (default 30000); optional maxRetries caps the polls.
+    member this.MustSemaphore(key: string, limit: int, ?holder: string, ?ttlMs: int64,
+                              ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.AcquireSemaphoreBlocking(key, limit, holder, ttlMs, defaultArg maxWaitMs 30000L, defaultArg retryIntervalMs 250L, maxRetries)
 
     /// Alias for MustSemaphore (blocking acquire).
-    member this.Semaphore(key: string, limit: int, ?holder: string, ?ttlMs: int64) =
-        this.SemaphoreAcquire(key, limit, ?holder = holder, ?ttlMs = ttlMs, wait = true)
+    member this.Semaphore(key: string, limit: int, ?holder: string, ?ttlMs: int64,
+                          ?maxWaitMs: int64, ?retryIntervalMs: int64, ?maxRetries: int) =
+        this.MustSemaphore(key, limit, ?holder = holder, ?ttlMs = ttlMs, ?maxWaitMs = maxWaitMs,
+                           ?retryIntervalMs = retryIntervalMs, ?maxRetries = maxRetries)
 
     member this.SemaphoreRelease(key: string, holder: string, fencingToken: int64) =
         let o = JsonObject()
