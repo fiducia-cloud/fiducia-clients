@@ -16,8 +16,17 @@ require a clean worktree before they tag or push.
 
 `scripts/publish-client.sh <language> ...` remains a compatibility dispatcher,
 but contains no language-specific policy. `scripts/publish-common.sh` is limited
-to argument parsing, credential checks, and safe git-tag mechanics. This keeps
-registry behavior reviewable and testable beside each package manifest.
+to argument parsing, credential checks, safe git-tag mechanics, and a shared
+version-drift guard. This keeps registry behavior reviewable and testable beside
+each package manifest.
+
+When `PACKAGE_VERSION` is set, each client asserts that the version embedded in
+its own package manifest (e.g. `ts` → `package.json`, `java` → `pom.xml`,
+`crystal` → `shard.yml`) matches it, aborting before any pack, upload, or tag.
+This stops a release from shipping a package or git tag whose declared version
+disagrees with the intended one. The check is a no-op when `PACKAGE_VERSION` is
+unset, so registry publishes that take the version straight from the manifest
+are unaffected.
 
 | Client | Registry or channel | Release notes |
 | --- | --- | --- |
