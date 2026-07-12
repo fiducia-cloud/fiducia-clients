@@ -734,6 +734,66 @@ impl FiduciaClient {
         self.request("POST", path, Some(_payload)).await
     }
 
+    /// Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false.
+    #[wasm_bindgen(js_name = budgetGet)]
+    pub async fn budget_get(&self, name: String) -> Result<JsValue, JsValue> {
+        let mut path = String::from("/v1/budgets");
+        let mut _q: Vec<String> = Vec::new();
+        _q.push(format!("name={}", enc(&name)));
+        if !_q.is_empty() {
+            path.push('?');
+            path.push_str(&_q.join("&"));
+        }
+        self.request("GET", path, None).await
+    }
+
+    /// Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited.
+    #[wasm_bindgen(js_name = budgetSet)]
+    pub async fn budget_set(&self, name: String, limit: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/budgets/set");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("limit".to_string(), serde_wasm_bindgen::from_value(limit).map_err(|e| err(0, e.into()))?);
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription).
+    #[wasm_bindgen(js_name = budgetReserve)]
+    pub async fn budget_reserve(&self, name: String, reservation_id: String, holder: String, amount: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/budgets/reserve");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("reservation_id".to_string(), serde_json::Value::String(reservation_id));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        _body.insert("amount".to_string(), serde_wasm_bindgen::from_value(amount).map_err(|e| err(0, e.into()))?);
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Commit a reservation with the actual spend (capped at reserved); frees the difference.
+    #[wasm_bindgen(js_name = budgetCommit)]
+    pub async fn budget_commit(&self, name: String, reservation_id: String, actual: JsValue) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/budgets/commit");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("reservation_id".to_string(), serde_json::Value::String(reservation_id));
+        _body.insert("actual".to_string(), serde_wasm_bindgen::from_value(actual).map_err(|e| err(0, e.into()))?);
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Release a still-held reservation, returning its full headroom.
+    #[wasm_bindgen(js_name = budgetRelease)]
+    pub async fn budget_release(&self, name: String, reservation_id: String) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/budgets/release");
+        let mut _body = serde_json::Map::new();
+        _body.insert("name".to_string(), serde_json::Value::String(name));
+        _body.insert("reservation_id".to_string(), serde_json::Value::String(reservation_id));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
     /// Observe the current holder of a named election.
     #[wasm_bindgen(js_name = electionGet)]
     pub async fn election_get(&self, name: String) -> Result<JsValue, JsValue> {

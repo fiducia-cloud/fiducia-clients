@@ -164,6 +164,24 @@
       { "name": "veto", "in": "body", "type": "bool", "optional": true },
       { "name": "evidence", "in": "body", "type": "object", "optional": true } ], "doc": "Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution." },
 
+    { "name": "budget_get", "group": "budgets", "method": "GET", "path": "/v1/budgets", "params": [
+      { "name": "name", "in": "query", "type": "string" } ], "doc": "Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false." },
+    { "name": "budget_set", "group": "budgets", "method": "POST", "path": "/v1/budgets/set", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "limit", "in": "body", "type": "object" } ], "doc": "Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited." },
+    { "name": "budget_reserve", "group": "budgets", "method": "POST", "path": "/v1/budgets/reserve", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "reservation_id", "in": "body", "type": "string" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "amount", "in": "body", "type": "object" } ], "doc": "Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription)." },
+    { "name": "budget_commit", "group": "budgets", "method": "POST", "path": "/v1/budgets/commit", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "reservation_id", "in": "body", "type": "string" },
+      { "name": "actual", "in": "body", "type": "object" } ], "doc": "Commit a reservation with the actual spend (capped at reserved); frees the difference." },
+    { "name": "budget_release", "group": "budgets", "method": "POST", "path": "/v1/budgets/release", "params": [
+      { "name": "name", "in": "body", "type": "string" },
+      { "name": "reservation_id", "in": "body", "type": "string" } ], "doc": "Release a still-held reservation, returning its full headroom." },
+
     { "name": "election_get", "group": "elections", "method": "GET", "path": "/v1/elections/{name}", "params": [
       { "name": "name", "in": "path", "type": "string" } ], "doc": "Observe the current holder of a named election." },
     { "name": "election_campaign", "group": "elections", "method": "POST", "path": "/v1/elections/{name}/campaign", "params": [

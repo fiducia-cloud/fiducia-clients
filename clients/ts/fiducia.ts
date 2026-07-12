@@ -182,6 +182,26 @@ export class FiduciaClient {
     return this.request("POST", `/v1/decisions/vote`, { name: name, voter: voter, option: opts.option, confidence: opts.confidence, weight: opts.weight, veto: opts.veto, evidence: opts.evidence });
   }
 
+  async budgetGet(name: string): Promise<any> {
+    return this.request("GET", `/v1/budgets?name=${enc(name)}`);
+  }
+
+  async budgetSet(name: string, limit: Record<string, any>): Promise<any> {
+    return this.request("POST", `/v1/budgets/set`, { name: name, limit: limit });
+  }
+
+  async budgetReserve(name: string, reservationId: string, holder: string, amount: Record<string, any>): Promise<any> {
+    return this.request("POST", `/v1/budgets/reserve`, { name: name, reservation_id: reservationId, holder: holder, amount: amount });
+  }
+
+  async budgetCommit(name: string, reservationId: string, actual: Record<string, any>): Promise<any> {
+    return this.request("POST", `/v1/budgets/commit`, { name: name, reservation_id: reservationId, actual: actual });
+  }
+
+  async budgetRelease(name: string, reservationId: string): Promise<any> {
+    return this.request("POST", `/v1/budgets/release`, { name: name, reservation_id: reservationId });
+  }
+
   async electionGet(name: string): Promise<any> {
     return this.request("GET", `/v1/elections/${enc(name)}`);
   }

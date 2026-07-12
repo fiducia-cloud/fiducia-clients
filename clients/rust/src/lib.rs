@@ -36,6 +36,31 @@ pub struct RequestControl {
     pub idempotency_key: Option<String>,
 }
 
+/// A per-axis budget amount or limit. `None` on an axis means unlimited (for a
+/// limit) or unset (for a spend/amount).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BudgetAmount {
+    pub usd_micros: Option<u64>,
+    pub tokens: Option<u64>,
+    pub tool_calls: Option<u64>,
+}
+
+impl BudgetAmount {
+    fn to_json(self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(v) = self.usd_micros {
+            map.insert("usd_micros".into(), json!(v));
+        }
+        if let Some(v) = self.tokens {
+            map.insert("tokens".into(), json!(v));
+        }
+        if let Some(v) = self.tool_calls {
+            map.insert("tool_calls".into(), json!(v));
+        }
+        Value::Object(map)
+    }
+}
+
 /// Parameters for casting a decision vote.
 #[derive(Clone, Copy, Debug)]
 pub struct DecisionVote<'a> {
@@ -216,7 +241,11 @@ impl FiduciaClient {
         self.request_with_control(
             "POST",
             "/v1/semaphores/acquire",
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(2) })),
+            // Clamp only the invalid `0` up to `1`; never clamp higher. `max=1`
+            // is a mutex (per the shared LockAcquireRequest contract), and the
+            // old `.max(2)` silently turned a mutex into a capacity-2 semaphore,
+            // letting two holders enter a section that must admit exactly one.
+            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(1) })),
             control,
             true,
         )
@@ -839,6 +868,58 @@ impl FiduciaClient {
         )
     }
 
+    // --- hierarchical budgets ---
+    /// Read a budget's ceiling, consumption, and reservations. Absent reports
+    /// `found: false`.
+    pub fn budget_get(&self, name: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/budgets?name={}", enc(name)), None)
+    }
+    /// Create or re-cap a budget with a per-axis ceiling (unset axis = unlimited).
+    pub fn budget_set(&self, name: &str, limit: BudgetAmount) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/set",
+            Some(json!({ "name": name, "limit": limit.to_json() })),
+        )
+    }
+    /// Reserve `amount` under `reservation_id`; rejected if it would exceed the
+    /// ceiling on any limited axis.
+    pub fn budget_reserve(
+        &self,
+        name: &str,
+        reservation_id: &str,
+        holder: &str,
+        amount: BudgetAmount,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/reserve",
+            Some(json!({ "name": name, "reservation_id": reservation_id, "holder": holder, "amount": amount.to_json() })),
+        )
+    }
+    /// Commit a reservation with the `actual` spend (capped at the reservation),
+    /// freeing the difference.
+    pub fn budget_commit(
+        &self,
+        name: &str,
+        reservation_id: &str,
+        actual: BudgetAmount,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/commit",
+            Some(json!({ "name": name, "reservation_id": reservation_id, "actual": actual.to_json() })),
+        )
+    }
+    /// Release a still-held reservation, returning its full headroom.
+    pub fn budget_release(&self, name: &str, reservation_id: &str) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/budgets/release",
+            Some(json!({ "name": name, "reservation_id": reservation_id })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1286,7 +1367,8 @@ mod tests {
             &rx,
             "POST",
             "/v1/semaphores/acquire",
-            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 2 }),
+            // max=0 is invalid and clamped to 1 (a mutex); higher values pass through.
+            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 1 }),
         );
 
         client
@@ -1600,6 +1682,46 @@ mod tests {
                 "veto": false,
                 "evidence": ["log:123"]
             }),
+        );
+    }
+
+    #[test]
+    fn budget_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client
+            .budget_reserve(
+                "org/acme/wf/42",
+                "res-1",
+                "research-agent",
+                BudgetAmount { usd_micros: Some(500_000), tokens: Some(100_000), tool_calls: None },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/budgets/reserve",
+            json!({
+                "name": "org/acme/wf/42",
+                "reservation_id": "res-1",
+                "holder": "research-agent",
+                "amount": { "usd_micros": 500_000, "tokens": 100_000 }
+            }),
+        );
+
+        client
+            .budget_commit(
+                "org/acme/wf/42",
+                "res-1",
+                BudgetAmount { usd_micros: Some(200_000), ..Default::default() },
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/budgets/commit",
+            json!({ "name": "org/acme/wf/42", "reservation_id": "res-1", "actual": { "usd_micros": 200_000 } }),
         );
     }
 

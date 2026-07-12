@@ -243,6 +243,27 @@ carries `status` (`open`/`resolved`/`vetoed`/`timed_out`), `winner`, and per-opt
 `tallies`. Don't let agents vote from copied conclusions — record independent
 `evidence`. Use for deployment-safety votes, evaluator panels, and debate systems.
 
+### Budgets — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `budgetGet(name)` | `GET /v1/budgets?name=...` | — | `{name, found, budget}` |
+| `budgetSet(name, {limit})` | `POST /v1/budgets/set` | `{name, limit}` | `{committed, result}` |
+| `budgetReserve(name, {reservationId, holder, amount})` | `POST /v1/budgets/reserve` | `{name, reservation_id, holder, amount}` | `{committed, result}` |
+| `budgetCommit(name, {reservationId, actual})` | `POST /v1/budgets/commit` | `{name, reservation_id, actual}` | `{committed, result}` |
+| `budgetRelease(name, {reservationId})` | `POST /v1/budgets/release` | `{name, reservation_id}` | `{committed, result}` |
+
+A budget has a per-axis ceiling (`usd_micros`, `tokens`, `tool_calls`; an unset
+axis is unlimited). A worker `reserve`s an amount **before** spending — the
+reservation is rejected (`{ ok: false, reason: "insufficient_budget", available }`)
+if it would exceed any limited axis, so ten agents cannot each independently
+believe they can spend the same remaining dollar. `commit` records the `actual`
+spend (capped at the reservation) and **frees the difference**; `release` returns
+a still-held reservation's full headroom. `result.output.budget` reports `limit`,
+`reserved`, `spent`, `available`, and per-reservation status
+(`held`/`committed`/`released`). Nest budgets by naming them by scope
+(`org/acme`, `org/acme/workflow/42`). Use to bound swarm spend across
+organization → customer → workflow → agent → tool-call.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
