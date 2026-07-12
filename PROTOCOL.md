@@ -125,6 +125,24 @@ node runtime does not expose them yet.
 | `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
 | `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
+### Counters — live
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `counterGet(key)` | `GET /v1/counters?key=...` | — | `{key, found, counter}` |
+| `counterAdd(key, {delta, prevRevision})` | `POST /v1/counters/add` | `{key, delta, prev_revision}` | `{committed, result}` |
+| `counterSet(key, {value, prevRevision})` | `POST /v1/counters/set` | `{key, value, prev_revision}` | `{committed, result}` |
+
+A counter is a replicated signed 64-bit integer per key with a monotonic
+`mod_revision`. `add` moves it by a (possibly negative) `delta`, creating it at 0
+first; `set` writes an absolute value (e.g. reset to 0). Both accept an optional
+`prev_revision` that makes the mutation a **compare-and-set** — it applies only if
+the counter's current `mod_revision` matches, else `result.output` is
+`{ ok: false, reason: "cas_mismatch", current_revision }`. A grant returns the new
+`{ value, mod_revision }` in `result.output`. An absent counter reads as
+`found: false` and is treated as 0. Keys are slash-safe (`?key=` on reads, JSON
+body on writes). Use counters for success/failure thresholds, quota tallies, and
+barrier fan-in counts.
+
 ### Rate limiting — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

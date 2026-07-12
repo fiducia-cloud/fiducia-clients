@@ -21,11 +21,14 @@ too. `?param` marks an optional argument.
 | `GET` | `/v1/kv` | `key` | Read a config key. |
 | `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`? | Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist). |
 | `DELETE` | `/v1/kv` | `key` | Delete a config key. |
+| `GET` | `/v1/counters` | `key` | Read a counter's value and revision; absent reads as found=false (treat as 0). |
+| `POST` | `/v1/counters/add` | `key`, `delta`, `prev_revision`? | Atomically add delta (may be negative); prev_revision makes it a compare-and-set. |
+| `POST` | `/v1/counters/set` | `key`, `value`, `prev_revision`? | Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set. |
 | `GET` | `/v1/elections/{name}` | `name` | Observe the current holder of a named election. |
-| `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership; wins if currently unheld. Returns a fencing token on win and echoes candidate metadata on the leadership record. |
+| `POST` | `/v1/elections/{name}/campaign` | `name`, `candidate`, `ttl_ms`, `metadata`? | Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win. |
 | `POST` | `/v1/elections/{name}/renew` | `name`, `candidate`, `fencing_token` | Extend the lease; requires the held fencing token. |
 | `POST` | `/v1/elections/{name}/resign` | `name`, `candidate`, `fencing_token` | Step down; requires the held fencing token. |
-| `GET` | `/v1/services/{service}` | `service`, `metadata.KEY`? | List live instances of a service, optionally filtered by exact metadata matches. |
+| `GET` | `/v1/services/{service}` | `service`, `metadata`? | List live instances of a service, optionally filtered by exact metadata matches. |
 | `PUT` | `/v1/services/{service}/instances/{instance_id}` | `service`, `instance_id`, `address`, `ttl_ms`, `metadata`? | Register/refresh an instance with a TTL lease and optional metadata. |
 | `POST` | `/v1/services/{service}/instances/{instance_id}/heartbeat` | `service`, `instance_id`, `ttl_ms`? | Renew an instance lease before it expires. |
 | `DELETE` | `/v1/services/{service}/instances/{instance_id}` | `service`, `instance_id` | Remove an instance from the registry. |

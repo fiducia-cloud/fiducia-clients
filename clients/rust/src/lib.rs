@@ -516,6 +516,41 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)
     }
 
+    // --- counters ---
+    /// Read a counter's current value and revision. An absent counter reports
+    /// `found: false`; callers treat that as value 0.
+    pub fn counter_get(&self, key: &str) -> Result<Value, Error> {
+        self.request("GET", &format!("/v1/counters?key={}", enc(key)), None)
+    }
+    /// Atomically add `delta` (which may be negative), creating the counter at 0.
+    /// When `prev_revision` is set, the add is a compare-and-set.
+    pub fn counter_add(
+        &self,
+        key: &str,
+        delta: i64,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/counters/add",
+            Some(json!({ "key": key, "delta": delta, "prev_revision": prev_revision })),
+        )
+    }
+    /// Set a counter to an absolute `value` (e.g. reset to 0). When
+    /// `prev_revision` is set, the write is a compare-and-set.
+    pub fn counter_set(
+        &self,
+        key: &str,
+        value: i64,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/counters/set",
+            Some(json!({ "key": key, "value": value, "prev_revision": prev_revision })),
+        )
+    }
+
     // --- rate limiting ---
     pub fn rate_limit_check(&self, request: RateLimitCheckRequest<'_>) -> Result<Value, Error> {
         self.request(
@@ -1043,6 +1078,36 @@ mod tests {
                 "ttl_ms": 15_000,
                 "metadata": { "address": "10.2.4.18:8080", "region": "us-east-1" }
             }),
+        );
+    }
+
+    #[test]
+    fn counter_routes_match_node_contract() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+
+        client.counter_get("rollout/v2/failures").unwrap();
+        assert_next(
+            &rx,
+            "GET",
+            "/v1/counters?key=rollout%2Fv2%2Ffailures",
+            Value::Null,
+        );
+
+        client.counter_add("rollout/v2/failures", -1, Some(7)).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/counters/add",
+            json!({ "key": "rollout/v2/failures", "delta": -1, "prev_revision": 7 }),
+        );
+
+        client.counter_set("rollout/v2/failures", 0, None).unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/counters/set",
+            json!({ "key": "rollout/v2/failures", "value": 0, "prev_revision": null }),
         );
     }
 
