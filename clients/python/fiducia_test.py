@@ -1,3 +1,4 @@
+# Unit tests for the generated Fiducia Python client.
 import contextlib
 import io
 import json
