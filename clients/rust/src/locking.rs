@@ -232,7 +232,7 @@ impl FiduciaClient {
         )?;
         let o = out(&first);
         if o["acquired"].as_bool().unwrap_or(false) {
-            return Ok(Some(lock_handle(keys, &holder, o)));
+            return Ok(Some(lock_handle(keys, &holder, o)?));
         }
         if !wait {
             return Ok(None); // try_lock_handle: held now -> fail fast
