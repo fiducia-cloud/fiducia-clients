@@ -59,17 +59,16 @@ jobs:
         run: |
           cons="$RUNNER_TEMP/consumer"; mkdir -p "$cons"; cd "$cons"
           dotnet new console -lang "F#"
-          cat > nuget.config <<'XML'
+          cat > nuget.config <<XML
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
             <packageSources>
               <clear />
-              <add key="local" value="RUNNER_TEMP_NUPKGS" />
+              <add key="local" value="$RUNNER_TEMP/nupkgs" />
               <add key="nuget" value="https://api.nuget.org/v3/index.json" />
             </packageSources>
           </configuration>
           XML
-          sed -i "s#RUNNER_TEMP_NUPKGS#$RUNNER_TEMP/nupkgs#" nuget.config
           dotnet add package Fiducia.FSharp.Client --version 0.1.0
           cat > Program.fs <<'FS'
           open Fiducia
@@ -174,7 +173,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec # v2
         with:
-          nim-version: "2.2.x"
+          nim-version: "2.2.10"
       - name: nimble install into a temp (publishable artifact)
         working-directory: clients/nim
         run: nimble install -y --nimbleDir:"$RUNNER_TEMP/nimble"
@@ -213,18 +212,21 @@ jobs:
           jar=$(find "$HOME/.ivy2/local/cloud.fiducia" -name 'fiducia-client_2.13.jar' | head -1)
           echo "artifact: $jar"; test -n "$jar"
           unzip -l "$jar" | grep -q 'cloud/fiducia/FiduciaClient.class'
-      - uses: VirtusLab/scala-cli-setup@42e5f90b7aed2c0478e8074e5c25a030e1db3af6 # v1
       - name: Smoke — resolve + compile a consumer against the published artifact
         run: |
-          cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer
-          cat > consumer.sc <<'SCALA'
-          //> using dep cloud.fiducia::fiducia-client:0.1.0
+          cd "$RUNNER_TEMP" && mkdir -p consumer/src/main/scala && cd consumer
+          cat > build.sbt <<'SBT'
+          ThisBuild / scalaVersion := "2.13.14"
+          libraryDependencies += "cloud.fiducia" %% "fiducia-client" % "0.1.0"
+          SBT
+          cat > src/main/scala/Main.scala <<'SCALA'
           import cloud.fiducia.FiduciaClient
-          @main def run(): Unit =
+          object Main extends App {
             val _ = new FiduciaClient("https://api.fiducia.cloud")
             println("scala consumer OK")
+          }
           SCALA
-          scala-cli compile . --scala 2.13.14
+          sbt compile
 
   kotlin:
     name: "A · kotlin (gradle publishToMavenLocal → consumer)"
@@ -423,7 +425,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         with:
-          swift-version: "5.10"
+          swift-version: "6.3.3"
       - name: Assert archive integrity (must_contain)
         run: |
           git archive --format=tar HEAD:clients/swift -o "$RUNNER_TEMP/swift.tar"
@@ -478,6 +480,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Refresh system package indexes
+        run: sudo apt-get update
       - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
         with:
           ocaml-compiler: "5.2"
