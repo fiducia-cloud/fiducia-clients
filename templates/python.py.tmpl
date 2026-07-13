@@ -229,7 +229,13 @@ class FiduciaClient:
             return opts["retry_delay"]
         return self.retry_delay or 0
 
-    def _retryable(self, exc):
+    def _retryable(self, exc, replay_safe):
+        # Never retry a non-idempotent mutation that carries no idempotency key —
+        # replaying it could duplicate a committed-but-unacked effect. _request
+        # attaches a stable key to retry-enabled POSTs, so in practice a key is
+        # always present here; this guard keeps the safety even if that changes.
+        if not replay_safe:
+            return False
         if isinstance(exc, FiduciaError):
             return exc.status in (408, 425, 429, 500, 502, 503, 504)
         return isinstance(exc, (FiduciaTimeoutError, TimeoutError, urllib.error.URLError))
