@@ -24,6 +24,12 @@ stay generated/thin so they can follow the same protocol without inventing a
 second API shape. "Hard-gated" describes offline CI coverage, not uniform public
 authentication or hosted-service release readiness; see below.
 
+Every supported language's publishable artifact is also a required CI gate:
+the packaging workflow installs or compiles from the produced artifact outside
+the repository tree, so a client cannot appear healthy only because local source
+paths happen to resolve. MATLAB remains excluded because no licensed runner is
+available; it is not represented as a verified release artifact.
+
 Each lives under [`clients/`](clients/):
 
 | Language | Dir | HTTP via |

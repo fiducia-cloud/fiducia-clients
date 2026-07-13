@@ -11,9 +11,9 @@
 # MATLAB is intentionally EXCLUDED (no CI runner / proprietary). This file is separate
 # from ci.yml and does not modify it.
 #
-# Every job is continue-on-error: several clients carry local path-deps on a sibling
-# fiducia-interfaces repo absent in single-repo CI, so one client must not gate the rest.
-# Network is allowed (not hermetic); timeouts are short.
+# Every supported artifact check is a required gate. Network-backed toolchain
+# resolution remains bounded by per-job timeouts; a broken client cannot be
+# published merely because another language passed.
 
 name: client-packaging
 
@@ -41,7 +41,6 @@ jobs:
   fsharp:
     name: "A · fsharp (nupkg → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -86,7 +85,6 @@ jobs:
   haskell:
     name: "A · haskell (cabal sdist → build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -97,7 +95,7 @@ jobs:
       - name: sdist (publishable tarball)
         working-directory: clients/haskell
         run: |
-          cabal check || true   # `cabal check` only emits PVP version-bound warnings here
+          cabal check
           cabal sdist -o "$RUNNER_TEMP/dist"
       - name: Assert artifact contents (must_contain)
         run: |
@@ -115,7 +113,6 @@ jobs:
   erlang:
     name: "A · erlang (rebar3 hex build → compile)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -143,7 +140,6 @@ jobs:
   lua:
     name: "A · lua (luarocks make → require)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -173,7 +169,6 @@ jobs:
   nim:
     name: "A · nim (nimble install → import)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -201,7 +196,6 @@ jobs:
   scala:
     name: "A · scala (sbt publishLocal → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -235,7 +229,6 @@ jobs:
   kotlin:
     name: "A · kotlin (gradle publishToMavenLocal → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -276,7 +269,6 @@ jobs:
   clojure:
     name: "A · clojure (build jar → require)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -307,7 +299,6 @@ jobs:
   c:
     name: "A-compile · c (#include fiducia.h, link fiducia.c)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -337,7 +328,6 @@ jobs:
   cpp:
     name: "A-compile · cpp (#include fiducia.hpp)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -365,7 +355,6 @@ jobs:
   zig:
     name: "A-compile · zig (tarball module → @import)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -409,7 +398,6 @@ jobs:
   gleam:
     name: "B · gleam (archive integrity + gleam build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -430,7 +418,6 @@ jobs:
   swift:
     name: "B · swift (archive integrity + swift build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -449,7 +436,6 @@ jobs:
   crystal:
     name: "B · crystal (archive integrity + compile)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -471,7 +457,6 @@ jobs:
   julia:
     name: "B · julia (archive integrity)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -490,7 +475,6 @@ jobs:
   ocaml:
     name: "B · ocaml (opam lint + dune build + archive)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -512,7 +496,6 @@ jobs:
   r:
     name: "B · r (R CMD build → tarball must contain R/fiducia.R)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7

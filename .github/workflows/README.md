@@ -8,4 +8,6 @@ GitHub Actions pipelines for the multi-language client monorepo.
   moving branch. npm and both Rust lockfiles are mandatory audit gates, and all
   Cargo resolution uses `--locked`.
 - `cli-flags.yml` — audits `.cli-flags.toml` against the pinned `flags-2-env` tool whenever the CLI flag config (or its submodule/wrapper) changes.
-- `client-packaging.yml` — verifies each client's publishable artifact rather than its repo-relative source; see `client-packaging-NOTES.md` for the rationale.
+- `client-packaging.yml` — hard-gates each supported client's publishable
+  artifact rather than its repo-relative source; a failure in any language
+  blocks publication. See `client-packaging-NOTES.md` for the rationale.
