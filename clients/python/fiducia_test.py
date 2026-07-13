@@ -66,7 +66,7 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assertEqual(captured["method"], "PUT")
         self.assertEqual(captured["headers"]["idempotency-key"], "req_order_42")
         self.assertEqual(captured["headers"]["content-type"], "application/json")
-        self.assertEqual(captured["body"], {"value": "paid", "ttl_ms": None, "prev_revision": None})
+        self.assertEqual(captured["body"], {"value": "paid"})
         self.assertEqual(captured["timeout"], 9)
 
     def test_sdk_sources_use_live_lock_semaphore_and_kv_routes(self):
@@ -105,14 +105,14 @@ class FiduciaPythonClientTests(unittest.TestCase):
             c,
             "POST",
             "/v1/locks/acquire",
-            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True},
+            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
         )
         c.lock_acquire_many(["orders/42", "inventory/sku-7"], holder="worker-a")
         self.assert_last_call(
             c,
             "POST",
             "/v1/locks/acquire",
-            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": None},
+            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": False},
         )
         c.lock_release("worker-a", 12)
         self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 12})

@@ -3,9 +3,9 @@
 // Hand-written (NOT generated): adds live-mutex-style ergonomics on top of the
 // generated thin Client. Two shapes:
 //
-//   - TryLock(keys)  — wait:false. Returns (lock, nil) if free now, or
+//   - TryLockHandle(keys)  — wait:false. Returns (lock, nil) if free now, or
 //     (nil, nil) if it's held. Never blocks.
-//   - Lock(keys) / MustLock(keys) — wait:true. Blocks (polling) until acquired,
+//   - LockHandle(keys) / MustLockHandle(keys) — wait:true. Blocks until acquired,
 //     the budget elapses (*LockTimeoutError), or the server errors.
 //
 // Counting semaphores get the same pair (TrySemaphore / AcquireSemaphore).
@@ -62,7 +62,13 @@ type Lock struct {
 }
 
 // Release frees the whole grant (every member key) by its fencing token.
-func (l *Lock) Release() (map[string]any, error) { return l.c.LockRelease(l.Holder, l.FencingToken) }
+func (l *Lock) Release() (map[string]any, error) {
+	key := ""
+	if len(l.Keys) > 0 {
+		key = l.Keys[0]
+	}
+	return l.c.LockRelease(key, ReleaseOpts{Holder: l.Holder, FencingToken: uint64(l.FencingToken)})
+}
 
 // Unlock is an alias of Release.
 func (l *Lock) Unlock() (map[string]any, error) { return l.Release() }
@@ -78,7 +84,7 @@ type SemaphoreHandle struct {
 
 // Release returns one permit (admits the next FIFO waiter).
 func (s *SemaphoreHandle) Release() (map[string]any, error) {
-	return s.c.SemaphoreRelease(s.Key, s.Holder, s.FencingToken)
+	return s.c.SemaphoreRelease(s.Key, ReleaseOpts{Holder: s.Holder, FencingToken: uint64(s.FencingToken)})
 }
 
 // Unlock is an alias of Release.
@@ -102,14 +108,15 @@ func genHolder() string {
 
 // --- locks -----------------------------------------------------------------
 
-// TryLock takes the union of keys now (wait:false). Returns (nil, nil) if held.
-func (c *Client) TryLock(keys []string, opts LockOptions) (*Lock, error) {
+// TryLockHandle takes the union of keys now (wait:false). It is deliberately
+// named separately from the thin single-key TryLock method.
+func (c *Client) TryLockHandle(keys []string, opts LockOptions) (*Lock, error) {
 	return c.acquireLock(keys, false, opts.withDefaults())
 }
 
-// Lock blocks until the union of keys is acquired, the budget elapses
+// LockHandle blocks until the union of keys is acquired, the budget elapses
 // (*LockTimeoutError), or the server errors (wait:true).
-func (c *Client) Lock(keys []string, opts LockOptions) (*Lock, error) {
+func (c *Client) LockHandle(keys []string, opts LockOptions) (*Lock, error) {
 	opts = opts.withDefaults()
 	lock, err := c.acquireLock(keys, true, opts)
 	if err != nil {
@@ -121,12 +128,14 @@ func (c *Client) Lock(keys []string, opts LockOptions) (*Lock, error) {
 	return lock, nil
 }
 
-// MustLock is an alias of Lock — blocks until acquired (or errors).
-func (c *Client) MustLock(keys []string, opts LockOptions) (*Lock, error) { return c.Lock(keys, opts) }
+// MustLockHandle is an alias of LockHandle — blocks until acquired (or errors).
+func (c *Client) MustLockHandle(keys []string, opts LockOptions) (*Lock, error) {
+	return c.LockHandle(keys, opts)
+}
 
 // WithLock acquires the union of keys, runs fn, then always releases.
 func (c *Client) WithLock(keys []string, opts LockOptions, fn func(*Lock) error) error {
-	lock, err := c.Lock(keys, opts)
+	lock, err := c.LockHandle(keys, opts)
 	if err != nil {
 		return err
 	}
@@ -135,8 +144,8 @@ func (c *Client) WithLock(keys []string, opts LockOptions, fn func(*Lock) error)
 }
 
 func (c *Client) acquireLock(keys []string, wait bool, opts LockOptions) (*Lock, error) {
-	first, err := c.LockAcquireMany(keys, map[string]any{
-		"holder": opts.Holder, "ttl_ms": opts.TTLMs, "wait": wait,
+	first, err := c.LockAcquireMany(AcquireManyOpts{
+		Keys: keys, Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: wait,
 	})
 	if err != nil {
 		return nil, err
@@ -178,8 +187,9 @@ func (c *Client) acquireLock(keys []string, wait bool, opts LockOptions) (*Lock,
 
 // --- counting semaphores ---------------------------------------------------
 
-// TrySemaphore takes a permit now (wait:false). Returns (nil, nil) if at capacity.
-func (c *Client) TrySemaphore(key string, limit int64, opts LockOptions) (*SemaphoreHandle, error) {
+// TrySemaphoreHandle takes a permit now (wait:false). It is separate from the
+// thin TrySemaphore method, which returns the raw response envelope.
+func (c *Client) TrySemaphoreHandle(key string, limit int64, opts LockOptions) (*SemaphoreHandle, error) {
 	return c.acquireSemaphore(key, limit, false, opts.withDefaults())
 }
 
@@ -197,8 +207,11 @@ func (c *Client) AcquireSemaphore(key string, limit int64, opts LockOptions) (*S
 }
 
 func (c *Client) acquireSemaphore(key string, limit int64, wait bool, opts LockOptions) (*SemaphoreHandle, error) {
-	first, err := c.SemaphoreAcquire(key, limit, map[string]any{
-		"holder": opts.Holder, "ttl_ms": opts.TTLMs, "wait": wait,
+	if limit <= 0 || uint64(limit) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("fiducia: semaphore limit must be between 1 and %d", uint64(^uint32(0)))
+	}
+	first, err := c.SemaphoreAcquire(key, AcquireOpts{
+		Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: wait, Max: uint32(limit),
 	})
 	if err != nil {
 		return nil, err

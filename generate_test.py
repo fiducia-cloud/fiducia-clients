@@ -142,17 +142,21 @@ class HostLanguageRegression(unittest.TestCase):
         generated = g.gen_ts()
         self.assertNotIn("constructor(public ", generated)
         self.assertNotIn("constructor(private ", generated)
+        self.assertNotIn("query.size", generated)
         self.assertIn("this.status = status", generated)
         self.assertIn("this.base = base", generated)
 
     def test_optional_metadata_query_is_built_from_options(self):
         generated_go = g.gen_go()
-        self.assertIn('addMetadataQuery(path, opts["metadata"])', generated_go)
+        self.assertIn("serviceMetadataQuery(metadata)", generated_go)
+        self.assertIn('values.Set("metadata."+key, metadata[key])', generated_go)
         self.assertNotIn("enc(metadata)", generated_go)
         generated_ts = g.gen_ts()
-        self.assertIn("Object.entries(opts.metadata)", generated_ts)
+        self.assertIn("serviceMetadataQuery(metadata)", generated_ts)
+        self.assertIn("`metadata.${key}`", generated_ts)
         generated_python = g.gen_python()
-        self.assertIn("_metadata_query(path, metadata)", generated_python)
+        self.assertIn("_metadata_query(metadata)", generated_python)
+        self.assertIn('"metadata.%s"', generated_python)
 
 
 class AllTargetsSmoke(unittest.TestCase):
@@ -160,6 +164,51 @@ class AllTargetsSmoke(unittest.TestCase):
         for name, (_rel, gen) in g.TARGETS.items():
             out = gen()
             self.assertTrue(out and out.strip(), "empty output for target %s" % name)
+
+
+class FirstTierEmitterRegression(unittest.TestCase):
+    def test_python_reserved_wire_name_is_escaped_but_preserved_in_body(self):
+        src = g.gen_python()
+        compile(src, "generated-fiducia.py", "exec")
+        self.assertIn("def handoff_offer(self, name, resource, from_, to, from_token", src)
+        self.assertIn('"from": from_', src)
+        self.assertNotIn(" resource, from, to,", src)
+
+    def test_typescript_uses_node_erasable_constructor_syntax(self):
+        src = g.gen_ts()
+        # Node 22's built-in strip-types parser rejects parameter properties.
+        self.assertNotRegex(src, r"constructor\s*\(\s*(public|private|protected)\s+")
+        self.assertIn("private base: string;", src)
+        self.assertIn("constructor(baseUrl: string, opts: FiduciaClientOpts = {})", src)
+
+    def test_go_object_query_reads_metadata_from_opts(self):
+        src = g.emit_go({
+            "name": "example",
+            "method": "GET",
+            "path": "/v1/example",
+            "params": [{
+                "name": "metadata",
+                "in": "query",
+                "type": "object",
+                "optional": True,
+            }],
+        })
+        self.assertIn('if raw, ok := opts["metadata"]', src)
+        self.assertNotIn("enc(metadata)", src)
+        self.assertNotIn("fmt.Sprint(metadata)", src)
+
+    def test_every_manifest_operation_is_present_in_each_first_tier_client(self):
+        python = g.gen_python()
+        ts = g.gen_ts()
+        go = g.gen_go()
+        for op in g.OPS:
+            self.assertIn("def %s(" % op["name"], python, op["name"])
+            self.assertIn("%s(" % g.camel(op["name"]), ts, op["name"])
+            self.assertIn(") %s(" % g.pascal(op["name"]), go, op["name"])
+
+    def test_generation_consumes_all_template_markers(self):
+        for src in (g.gen_python(), g.gen_ts(), g.gen_go()):
+            self.assertNotIn("{{GENERATED_OPERATIONS}}", src)
 
 
 def _method_body(src, op_name):
