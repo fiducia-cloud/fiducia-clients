@@ -48,15 +48,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm ci
       # npm test runs the suite and parser-checks the locking helper under Node 22.
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm test
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm run typecheck
 
   rust:
@@ -76,9 +82,9 @@ jobs:
       - working-directory: fiducia-clients/clients/rust
         run: cargo fmt --check
       - working-directory: fiducia-clients/clients/rust
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
       - working-directory: fiducia-clients/clients/rust
-        run: cargo test --all-targets --locked
+        run: cargo test --all-targets
 
   # clients/rust-wasm is generated from operations.json and self-contained.
   rust-wasm:
