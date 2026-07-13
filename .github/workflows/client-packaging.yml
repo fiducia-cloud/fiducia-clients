@@ -244,7 +244,7 @@ jobs:
           distribution: temurin
           java-version: "11"          # build.gradle.kts declares kotlin { jvmToolchain(11) }
           cache: gradle
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.10.2"    # no wrapper is committed; provide gradle on PATH
       - name: publishToMavenLocal (publishable artifact → ~/.m2)
