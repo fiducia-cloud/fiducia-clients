@@ -296,7 +296,40 @@ func (c *Client) resolveRetryMax(ctrl requestControl) int {
 	return 0
 }
 
-func retryable(err error) bool {
+// isIdempotentMethod reports whether a method is safe to retry without an
+// idempotency key. Per RFC 7231 GET/HEAD/OPTIONS and the idempotent-by-contract
+// PUT/DELETE converge to the same server state when replayed; only POST
+// (lock/semaphore acquire, release) can duplicate on retry.
+func isIdempotentMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// genIdempotencyKey returns a collision-resistant key that lets the server
+// dedup a retried mutation.
+func genIdempotencyKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is effectively unheard of; still, never panic in a
+		// client — a time-based key keeps one logical request pinned.
+		return fmt.Sprintf("cli_%x", time.Now().UnixNano())
+	}
+	return "cli_" + hex.EncodeToString(b[:])
+}
+
+func retryable(err error, replaySafe bool) bool {
+	// Never retry a non-idempotent mutation that carries no idempotency key —
+	// replaying it could duplicate a committed-but-unacked effect.
+	// requestWithControl attaches a stable key to retry-enabled POSTs, so in
+	// practice a key is always present here; this guard keeps the safety even if
+	// that ever changes.
+	if !replaySafe {
+		return false
+	}
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
