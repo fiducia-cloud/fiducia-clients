@@ -124,10 +124,15 @@ impl FiduciaClient {
         } else {
             self.retry_max
         };
+        // A retry re-sends the request. That is only safe when either the server
+        // provably did NOT apply the first attempt, or it can dedup a re-send via
+        // the caller's idempotency key. Thread that fact into the retry decision so
+        // a keyless, non-idempotent mutation is never double-applied.
+        let has_idempotency = control.idempotency_key.is_some();
         for attempt in 0..=max_retries {
             match self.request_once(method, path, body.clone(), control.clone(), lock_acquire) {
                 Ok(value) => return Ok(value),
-                Err(err) if attempt < max_retries && Self::retryable(&err) => {
+                Err(err) if attempt < max_retries && Self::retryable(&err, has_idempotency) => {
                     let delay = if control.retry_delay > Duration::ZERO {
                         control.retry_delay
                     } else {
@@ -185,12 +190,19 @@ impl FiduciaClient {
             .or(self.request_timeout)
     }
 
-    fn retryable(err: &Error) -> bool {
+    /// Whether `err` may be retried. `429` and `503` mean the server rejected the
+    /// request before applying it, so re-sending is always safe. Every other
+    /// retryable status (`408/425/500/502/504`) and any transport failure can
+    /// occur *after* the server applied a mutation, so re-sending is only safe
+    /// when the caller supplied an idempotency key for the server to dedup on.
+    fn retryable(err: &Error, has_idempotency: bool) -> bool {
         match err {
-            Error::Http { status, .. } => {
-                matches!(*status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
-            }
-            Error::Transport(_) => true,
+            Error::Http { status, .. } => match *status {
+                429 | 503 => true,
+                408 | 425 | 500 | 502 | 504 => has_idempotency,
+                _ => false,
+            },
+            Error::Transport(_) => has_idempotency,
         }
     }
 
@@ -1250,7 +1262,9 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver};
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct RecordedRequest {
@@ -1322,6 +1336,52 @@ mod tests {
         });
 
         (base, rx)
+    }
+
+    /// A server that always answers `status`, counting the requests it received.
+    /// Used to observe whether a failed request is retried.
+    fn erroring_server(status: u16) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                // Drain the full request (headers + body) before responding so the
+                // client's write never races the connection close.
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 1024];
+                let mut header_end = None;
+                let mut content_len = 0_usize;
+                loop {
+                    let n = stream.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none() {
+                        if let Some(pos) = find_header_end(&buf) {
+                            header_end = Some(pos);
+                            content_len = content_length(&String::from_utf8_lossy(&buf[..pos]));
+                        }
+                    }
+                    if let Some(pos) = header_end {
+                        if buf.len() >= pos + 4 + content_len {
+                            break;
+                        }
+                    }
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 {status} STATUS\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{{\"ok\":true}}"
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        (base, hits)
     }
 
     fn find_header_end(buf: &[u8]) -> Option<usize> {
@@ -1932,5 +1992,38 @@ mod tests {
         assert_eq!(got.path, "/v1/locks/acquire");
         assert_eq!(got.idempotency_key.as_deref(), Some("req_order_42"));
         assert!(got.body.get("idempotency_key").is_none());
+    }
+
+    #[test]
+    fn non_idempotent_mutation_is_only_retried_when_safe() {
+        // A keyless mutation that fails with 500 must NOT be retried: the server
+        // may already have applied it, and a re-send would double-apply.
+        let (base, hits) = erroring_server(500);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        assert!(client.counter_add("counters/add", 1, None).is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "500 keyless must not retry");
+
+        // The same keyless mutation IS retried on 503: the server provably did
+        // not apply it, so re-sending is safe.
+        let (base, hits) = erroring_server(503);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        assert!(client.counter_add("counters/add", 1, None).is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "503 keyless must retry");
+
+        // With an idempotency key the server can dedup a re-send, so even 500 is
+        // retried.
+        let (base, hits) = erroring_server(500);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        let control = RequestControl {
+            idempotency_key: Some("req-1".to_string()),
+            ..RequestControl::default()
+        };
+        assert!(client
+            .try_lock_with_options("orders/42", Some("worker-a"), None, None, control)
+            .is_err());
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "500 keyed must retry");
     }
 }

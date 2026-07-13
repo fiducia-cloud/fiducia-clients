@@ -22,7 +22,9 @@
 //! `/v1/locks/release`) directly, so they're correct regardless of the older
 //! path-style low-level helpers in [`crate`].
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -63,7 +65,13 @@ impl Default for LockOptions {
 pub struct LockHandle {
     pub keys: Vec<String>,
     pub holder: String,
+    /// The grant's fencing token. For a single-key grant this is the scalar the
+    /// node returns. For a multi-key (union) grant with per-key tokens it mirrors
+    /// one of `fencing_tokens` (release uses the per-key map, not this scalar).
     pub fencing_token: u64,
+    /// Per-key fencing tokens for a multi-key (union) grant. Empty for a
+    /// single-key grant (release then uses the scalar `fencing_token`).
+    pub fencing_tokens: BTreeMap<String, u64>,
     pub lease_expires_ms: Option<u64>,
 }
 
@@ -109,14 +117,42 @@ impl std::error::Error for LockError {}
 
 static HOLDER_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// A process-unique holder id (no external uuid dependency).
+/// A per-process random nonce, seeded once. Two processes that generate their
+/// first holder in the same nanosecond would otherwise collide (wall-clock nanos
+/// + a process-local counter that both start at 0); mixing in the pid and a
+/// nonce derived from a stack address makes the id distinct across processes.
+fn process_nonce() -> u64 {
+    static NONCE: OnceLock<u64> = OnceLock::new();
+    *NONCE.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let pid = std::process::id() as u64;
+        let stack_local = 0_u8;
+        let addr = &stack_local as *const u8 as u64;
+        // splitmix64 finalizer over the mixed entropy — good avalanche, no deps.
+        let mut h = pid ^ nanos ^ addr;
+        h ^= h >> 30;
+        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+        h ^= h >> 31;
+        h
+    })
+}
+
+/// A process-unique holder id (no external uuid dependency). Includes the pid and
+/// a per-process random nonce so ids never collide across processes.
 fn gen_holder() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = HOLDER_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("fdc-{nanos:x}-{seq:x}")
+    let pid = std::process::id();
+    let nonce = process_nonce();
+    format!("fdc-{pid:x}-{nonce:x}-{nanos:x}-{seq:x}")
 }
 
 fn out(resp: &Value) -> &Value {
@@ -160,13 +196,16 @@ impl FiduciaClient {
         self.acquire_lock_handle(keys, opts)
     }
 
-    /// Release a held lock grant (every member key) by its fencing token.
+    /// Release a held lock grant by its fencing token(s). A single-key grant is
+    /// released by its scalar token; a multi-key (union) grant is released once
+    /// per member key, each with that key's own token, so no key is left held
+    /// with a mismatched (or zero) token until its lease TTL expires.
     pub fn release_lock(&self, handle: &LockHandle) -> Result<Value, Error> {
-        self.request(
-            "POST",
-            "/v1/locks/release",
-            Some(json!({ "holder": handle.holder, "fencing_token": handle.fencing_token })),
-        )
+        let mut last = Value::Null;
+        for payload in release_payloads(handle) {
+            last = self.request("POST", "/v1/locks/release", Some(payload))?;
+        }
+        Ok(last)
     }
 
     /// Acquire the union of `keys`, run `f`, then always release.
@@ -196,7 +235,7 @@ impl FiduciaClient {
         )?;
         let o = out(&first);
         if o["acquired"].as_bool().unwrap_or(false) {
-            return Ok(Some(lock_handle(keys, &holder, o)));
+            return Ok(Some(lock_handle(keys, &holder, o)?));
         }
         if !wait {
             return Ok(None); // try_lock_handle: held now -> fail fast
@@ -215,11 +254,16 @@ impl FiduciaClient {
             let got = self.request("GET", &format!("/v1/locks?key={}", enc(probe)), None)?;
             let lock = &got["lock"];
             if lock["holder"].as_str() == Some(holder.as_str()) {
-                if let Some(token) = lock["fencing_token"].as_u64() {
+                let fencing_tokens = extract_fencing_tokens(lock);
+                if let Some(token) = lock["fencing_token"]
+                    .as_u64()
+                    .or_else(|| fencing_tokens.values().copied().next())
+                {
                     return Ok(Some(LockHandle {
                         keys: keys.iter().map(|k| k.to_string()).collect(),
                         holder,
                         fencing_token: token,
+                        fencing_tokens,
                         lease_expires_ms: lock["lease_expires_ms"].as_u64(),
                     }));
                 }
@@ -327,18 +371,69 @@ impl FiduciaClient {
     }
 }
 
-fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> LockHandle {
-    LockHandle {
+/// Read per-key fencing tokens from a grant/lock object's `fencing_tokens` map.
+/// Absent (single-key grant) yields an empty map.
+fn extract_fencing_tokens(value: &Value) -> BTreeMap<String, u64> {
+    let mut tokens = BTreeMap::new();
+    if let Some(map) = value["fencing_tokens"].as_object() {
+        for (key, token) in map {
+            if let Some(t) = token.as_u64() {
+                tokens.insert(key.clone(), t);
+            }
+        }
+    }
+    tokens
+}
+
+/// Build a [`LockHandle`] from a successful acquire's `output`. Reads the scalar
+/// `fencing_token` (single-key) and/or the per-key `fencing_tokens` map
+/// (multi-key union). Errors if a granted lock carries no resolvable token at
+/// all — silently defaulting to `0` would make release fail and leak the lock
+/// until its lease TTL expires.
+fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> Result<LockHandle, LockError> {
+    let scalar = output["fencing_token"].as_u64();
+    let fencing_tokens = extract_fencing_tokens(output);
+    if scalar.is_none() && fencing_tokens.is_empty() {
+        return Err(LockError::Client(Error::Transport(format!(
+            "fiducia lock: acquired {keys:?} but response carried no fencing token"
+        ))));
+    }
+    // Keep the scalar for single-key; for a multi-key grant with only per-key
+    // tokens, expose the first as the representative scalar (release uses the map).
+    let fencing_token = scalar
+        .or_else(|| fencing_tokens.values().copied().next())
+        .unwrap_or(0);
+    Ok(LockHandle {
         keys: keys.iter().map(|k| k.to_string()).collect(),
         holder: holder.to_string(),
-        fencing_token: output["fencing_token"].as_u64().unwrap_or(0),
+        fencing_token,
+        fencing_tokens,
         lease_expires_ms: output["lease_expires_ms"].as_u64(),
+    })
+}
+
+/// The release request body/bodies for a handle: one `{ holder, fencing_token }`
+/// for a single-key grant (unchanged), or one `{ key, holder, fencing_token }`
+/// per member key for a multi-key grant so each key is released with its own
+/// token.
+fn release_payloads(handle: &LockHandle) -> Vec<Value> {
+    if handle.fencing_tokens.is_empty() {
+        vec![json!({ "holder": handle.holder, "fencing_token": handle.fencing_token })]
+    } else {
+        handle
+            .fencing_tokens
+            .iter()
+            .map(|(key, token)| {
+                json!({ "key": key, "holder": handle.holder, "fencing_token": token })
+            })
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn generated_holders_are_unique() {
@@ -346,6 +441,62 @@ mod tests {
         let b = gen_holder();
         assert_ne!(a, b);
         assert!(a.starts_with("fdc-"));
+    }
+
+    #[test]
+    fn holder_id_contains_pid() {
+        // The pid segment is what makes ids distinct across processes that would
+        // otherwise share the same first-nanosecond + seq-0.
+        let id = gen_holder();
+        let pid = format!("{:x}", std::process::id());
+        assert!(
+            id.contains(&format!("-{pid}-")),
+            "id {id} should contain pid {pid}"
+        );
+    }
+
+    #[test]
+    fn single_key_grant_uses_scalar_token() {
+        let output = json!({ "acquired": true, "fencing_token": 5, "lease_expires_ms": 100 });
+        let handle = lock_handle(&["orders/42"], "worker-a", &output).unwrap();
+        assert_eq!(handle.fencing_token, 5);
+        assert!(handle.fencing_tokens.is_empty());
+        // Single-key release body is unchanged: no `key`, scalar token.
+        assert_eq!(
+            release_payloads(&handle),
+            vec![json!({ "holder": "worker-a", "fencing_token": 5 })]
+        );
+    }
+
+    #[test]
+    fn multi_key_grant_carries_per_key_tokens() {
+        // A union grant whose scalar token is absent but per-key tokens are set.
+        let output = json!({
+            "acquired": true,
+            "keys": ["a", "b"],
+            "fencing_tokens": { "a": 7, "b": 9 },
+        });
+        let handle = lock_handle(&["a", "b"], "worker-a", &output).unwrap();
+        assert_eq!(handle.fencing_tokens.get("a"), Some(&7));
+        assert_eq!(handle.fencing_tokens.get("b"), Some(&9));
+        // The scalar is no longer 0 (which broke release); it mirrors a real token.
+        assert_ne!(handle.fencing_token, 0);
+        // Release sends each key with its own token (BTreeMap → sorted order).
+        assert_eq!(
+            release_payloads(&handle),
+            vec![
+                json!({ "key": "a", "holder": "worker-a", "fencing_token": 7 }),
+                json!({ "key": "b", "holder": "worker-a", "fencing_token": 9 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn acquired_grant_with_no_token_is_a_hard_error() {
+        // A successful acquire that resolves no token at all must error rather
+        // than silently carry token 0 (which release can never match).
+        let output = json!({ "acquired": true, "keys": ["a"] });
+        assert!(lock_handle(&["a"], "worker-a", &output).is_err());
     }
 
     #[test]
