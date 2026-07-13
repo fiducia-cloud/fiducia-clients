@@ -19,6 +19,15 @@
 
 import { FiduciaClient } from "./fiducia";
 
+type LockClientBase = new (
+  ...args: ConstructorParameters<typeof FiduciaClient>
+) => Omit<FiduciaClient, "tryLock" | "lock" | "mustLock" | "trySemaphore">;
+
+// Runtime inheritance keeps the complete raw client surface. Omitting only the
+// four names replaced by handle-oriented helpers prevents incompatible method
+// overrides from erasing type safety for every other operation.
+const FiduciaLockClientBase = FiduciaClient as unknown as LockClientBase;
+
 /** Thrown by `lock`/`acquireSemaphore` when the wait budget elapses unacquired. */
 export class LockTimeoutError extends Error {
   keys: string[];
@@ -110,7 +119,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * `FiduciaClient` plus high-level lock/semaphore acquisition. Use this in place
  * of `FiduciaClient` when you want `lock`/`tryLock` rather than the raw calls.
  */
-export class FiduciaLockClient extends FiduciaClient {
+export class FiduciaLockClient extends FiduciaLockClientBase {
   // --- locks ---------------------------------------------------------------
 
   /** Try to take the lock right now (wait:false). Returns null if it's held. */
@@ -160,7 +169,7 @@ export class FiduciaLockClient extends FiduciaClient {
     const holder = opts.holder ?? genId();
     const ttl = opts.ttl ?? DEFAULT_TTL;
 
-    const first = await this.lockAcquireMany(keys, { holder, ttl_ms: ttl, wait });
+    const first = await this.lockAcquireMany({ keys, holder, ttlMs: ttl, wait });
     const out = first?.result?.output ?? {};
     if (out.acquired) {
       return this.lockHandle(keys, holder, out.fencing_token, out.lease_expires_ms);
@@ -199,8 +208,8 @@ export class FiduciaLockClient extends FiduciaClient {
       holder,
       fencingToken,
       leaseExpiresMs,
-      unlock: () => this.lockRelease(holder, fencingToken),
-      release: () => this.lockRelease(holder, fencingToken),
+      unlock: () => this.lockRelease(keys[0], { holder, fencingToken }),
+      release: () => this.lockRelease(keys[0], { holder, fencingToken }),
     };
   }
 
@@ -254,7 +263,7 @@ export class FiduciaLockClient extends FiduciaClient {
     const holder = opts.holder ?? genId();
     const ttl = opts.ttl ?? DEFAULT_TTL;
 
-    const first = await this.semaphoreAcquire(key, limit, { holder, ttl_ms: ttl, wait });
+    const first = await this.semaphoreAcquire(key, { max: limit, holder, ttlMs: ttl, wait });
     const out = first?.result?.output ?? {};
     if (out.acquired) {
       return this.semaphoreHandle(key, holder, out.fencing_token, out.lease_expires_ms);
@@ -292,8 +301,8 @@ export class FiduciaLockClient extends FiduciaClient {
       holder,
       fencingToken,
       leaseExpiresMs,
-      unlock: () => this.semaphoreRelease(key, holder, fencingToken),
-      release: () => this.semaphoreRelease(key, holder, fencingToken),
+      unlock: () => this.semaphoreRelease(key, { holder, fencingToken }),
+      release: () => this.semaphoreRelease(key, { holder, fencingToken }),
     };
   }
 }

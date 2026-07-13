@@ -19,14 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Preserve the same sibling layout used by the Go replace directive.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           path: fiducia-clients
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-interfaces
+          ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: fiducia-clients/clients/go/go.mod
       - working-directory: fiducia-clients/clients/go
@@ -35,11 +36,18 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
+          path: fiducia-interfaces
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - working-directory: clients/python
+      - working-directory: fiducia-clients/clients/python
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m unittest fiducia_test.py
@@ -47,63 +55,91 @@ jobs:
   ts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          node-version: "22"
-      - working-directory: clients/ts
-        run: npm ci
+          path: fiducia-clients
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
+          path: fiducia-interfaces
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.22.1"
+      - working-directory: fiducia-clients/clients/ts
+        run: npm ci --ignore-scripts
       # npm test runs the suite and parser-checks the locking helper under Node 22.
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm test
+      - working-directory: fiducia-clients/clients/ts
+        run: npm run typecheck
+      - working-directory: fiducia-clients/clients/ts
+        run: npm audit --audit-level=high
 
   rust:
     runs-on: ubuntu-latest
     steps:
       # Preserve the same sibling layout used by the Rust path dependency.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           path: fiducia-clients
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: fiducia-cloud/fiducia-interfaces
+          ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
       - working-directory: fiducia-clients/clients/rust
-        run: cargo test
+        run: cargo fmt --all -- --check
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo test --all-targets --all-features --locked
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-audit@0.22.2
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo audit
 
   # clients/rust-wasm is generated from operations.json and self-contained.
   rust-wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "22"
+          node-version: "22.22.1"
       # Generator regression tests + drift check for every generated target.
       - run: python3 -m unittest generate_test
       - run: python3 generate.py --check
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: clients/rust-wasm
       # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
         with:
-          tool: wasm-pack
+          tool: wasm-pack@0.15.0
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+        with:
+          tool: cargo-audit@0.22.2
       # compile gate
       - name: Compile to wasm32
-        run: cargo build --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
+        run: cargo build --locked --manifest-path clients/rust-wasm/Cargo.toml --target wasm32-unknown-unknown
       # full wasm-bindgen for the nodejs target (emits pkg/ with .wasm + .d.ts);
       # the .d.ts is target-agnostic, and the nodejs pkg drives the smoke test.
       - name: wasm-bindgen package
-        run: wasm-pack build clients/rust-wasm --target nodejs --dev
+        run: wasm-pack build clients/rust-wasm --target nodejs --dev -- --locked
       # Regression guard: no `bigint` (i64 leak) may reach the generated .d.ts.
       - name: Assert generated .d.ts is clean
         run: |
@@ -118,8 +154,10 @@ jobs:
       - name: Type-check generated .d.ts (tsc)
         run: |
           dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
-          npx -y -p typescript@5 tsc --noEmit --lib esnext,dom "$dts"
+          npx -y -p typescript@5.9.3 tsc --noEmit --lib esnext,dom "$dts"
       # Runtime behavior: drive the compiled wasm against a stubbed fetch
       # (wire format, integer bodies, timeout, error shape).
       - name: Runtime smoke test
         run: node --test clients/rust-wasm/smoke.test.mjs
+      - name: Audit WASM dependency lock
+        run: cargo audit --file clients/rust-wasm/Cargo.lock

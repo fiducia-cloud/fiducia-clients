@@ -4,6 +4,7 @@ name: CLI flags
 on:
   pull_request:
     paths:
+      - ".github/workflows/cli-flags.yml"
       - ".cli-flags.toml"
       - ".gitmodules"
       - "tools/flags-2-env"
@@ -11,6 +12,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/cli-flags.yml"
       - ".cli-flags.toml"
       - ".gitmodules"
       - "tools/flags-2-env"
@@ -23,8 +25,8 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
+      - run: make -B -C tools/flags-2-env all
       - run: tools/flags-2-env/build/flags2env audit .cli-flags.toml
-

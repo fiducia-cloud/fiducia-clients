@@ -6,5 +6,5 @@ DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 publish_parse_mode "$@"
 cd "$DIR"
 publish_check_version Cargo.toml '^version'
-wasm-pack build --target bundler --release; npm pack --dry-run ./pkg
+wasm-pack build --target bundler --release -- --locked; npm pack --dry-run ./pkg
 [ "$PUBLISH_MODE" = dry-run ] || { npm publish ./pkg --access public; }

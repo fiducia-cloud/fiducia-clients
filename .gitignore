@@ -62,3 +62,10 @@ dist-newstyle/
 
 # Nim
 nimcache/
+
+# --- hardened baseline (auto) ---
+Thumbs.db
+*.swp
+*~
+.direnv/
+**/.gradle/

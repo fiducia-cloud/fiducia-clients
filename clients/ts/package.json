@@ -8,7 +8,8 @@
   "main": "fiducia.ts",
   "types": "fiducia.ts",
   "scripts": {
-    "test": "node --test --experimental-strip-types fiducia.test.ts && node --check --experimental-strip-types locking.ts"
+    "test": "node --test --experimental-strip-types fiducia.test.ts && node --check --experimental-strip-types locking.ts",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "files": [
     "fiducia.ts"
@@ -23,5 +24,8 @@
   },
   "dependencies": {
     "@fiducia/interfaces": "^0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }

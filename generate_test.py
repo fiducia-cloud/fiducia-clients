@@ -66,6 +66,18 @@ class RustWasmEmitter(unittest.TestCase):
         self.assertNotIn("web_sys::window()", self.src)
         self.assertIn('js_sys::Reflect::set(&o, &JsValue::from_str("status")', self.src)
 
+    def test_transport_hard_refuses_redirects(self):
+        # Security-critical, matching the go/python/ts transports: never auto-follow
+        # a 3xx, which would replay this (possibly mutating) request plus its auth /
+        # idempotency headers to an attacker-controlled Location (incl. an
+        # https->http downgrade). The wasm transport sets redirect:"manual" and
+        # rejects both the readable 3xx (Node/Deno) and the opaque redirect
+        # (browsers/workers) rather than following either.
+        self.assertIn("opts.set_redirect(RequestRedirect::Manual)", self.src)
+        self.assertIn("ResponseType::Opaqueredirect", self.src)
+        self.assertIn("resp.status() >= 300 && resp.status() < 400", self.src)
+        self.assertIn("refusing to follow redirect", self.src)
+
     def test_request_timeout_via_abort_signal(self):
         # Optional per-request timeout: constructor + setter + AbortSignal wiring.
         self.assertIn("timeout_ms: Option<f64>", self.src)
@@ -131,6 +143,34 @@ class QueryAndPathEncoding(unittest.TestCase):
         self.assertIn('_q.push(format!("key={}"', lines[0])
 
 
+class HostLanguageRegression(unittest.TestCase):
+    def test_python_escapes_reserved_parameter_names(self):
+        generated = g.gen_python()
+        compile(generated, "generated-fiducia.py", "exec")
+        self.assertIn("def handoff_offer(self, name, resource, from_, to, from_token", generated)
+        self.assertIn('"from": from_', generated)
+
+    def test_typescript_uses_node_strip_safe_constructors(self):
+        generated = g.gen_ts()
+        self.assertNotIn("constructor(public ", generated)
+        self.assertNotIn("constructor(private ", generated)
+        self.assertNotIn("query.size", generated)
+        self.assertIn("this.status = status", generated)
+        self.assertIn("this.base = base", generated)
+
+    def test_optional_metadata_query_is_built_from_options(self):
+        generated_go = g.gen_go()
+        self.assertIn("serviceMetadataQuery(metadata)", generated_go)
+        self.assertIn('values.Set("metadata."+key, metadata[key])', generated_go)
+        self.assertNotIn("enc(metadata)", generated_go)
+        generated_ts = g.gen_ts()
+        self.assertIn("serviceMetadataQuery(metadata)", generated_ts)
+        self.assertIn("`metadata.${key}`", generated_ts)
+        generated_python = g.gen_python()
+        self.assertIn("_metadata_query(metadata)", generated_python)
+        self.assertIn('"metadata.%s"', generated_python)
+
+
 class AllTargetsSmoke(unittest.TestCase):
     def test_all_generators_produce_nonempty_output(self):
         for name, (_rel, gen) in g.TARGETS.items():
@@ -181,6 +221,35 @@ class FirstTierEmitterRegression(unittest.TestCase):
     def test_generation_consumes_all_template_markers(self):
         for src in (g.gen_python(), g.gen_ts(), g.gen_go()):
             self.assertNotIn("{{GENERATED_OPERATIONS}}", src)
+
+    def test_go_and_python_default_transports_refuse_redirects(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertIn("CheckRedirect", go)
+        self.assertIn("http.ErrUseLastResponse", go)
+        self.assertIn('"error":    "redirect_not_followed"', go)
+        self.assertIn("class _RefuseRedirects", python)
+        self.assertIn("_OPENER.open", python)
+        self.assertIn('"error": "redirect_not_followed"', python)
+
+    def test_go_and_python_require_explicit_keys_for_mutation_retries(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertNotIn("genIdempotencyKey", go)
+        self.assertIn('replaySafe := isIdempotentMethod(method) || ctrl.IdempotencyKey != ""', go)
+        self.assertIn('req.Header.Set("Idempotency-Key", ctrl.IdempotencyKey)', go)
+        self.assertNotIn("_gen_idempotency_key", python)
+        self.assertIn("replay_safe = idempotent or has_key", python)
+        self.assertIn('req.add_header("Idempotency-Key", str(idempotency_key))', python)
+
+    def test_go_and_python_preserve_retryable_response_failures(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertIn("raw, readErr := io.ReadAll(res.Body)", go)
+        self.assertIn('"error": "truncated_error_response"', go)
+        self.assertIn("if decodeErr != nil", go)
+        self.assertIn('"error": "non_json_error_response"', python)
+        self.assertIn("except json.JSONDecodeError", python)
 
 
 def _method_body(src, op_name):

@@ -1,9 +1,10 @@
 # client-packaging — verification notes
 
-Two-tier design (reviewer "Codex") implemented in `client-packaging.yml`. Every job is
-`continue-on-error: true`, short-timeout, network-allowed. MATLAB is **excluded** (no CI
-runner / proprietary). `clojure` was not in the reviewer's original tier list; it was added
-as a TIER A job at the coordinator's request and grounded locally.
+Two-tier design (reviewer "Codex") implemented in `client-packaging.yml`. Every
+supported job is a required, short-timeout, network-allowed gate. MATLAB is
+**excluded** (no CI runner / proprietary). `clojure` was not in the reviewer's
+original tier list; it was added as a TIER A job at the coordinator's request
+and grounded locally.
 
 "LOCALLY VERIFIED" = the pack/assert (and smoke where feasible) were run **green** on this
 machine, in a temp dir **outside** the repo, against the **artifact** (not repo source).
@@ -46,7 +47,8 @@ requirements (below), not packaging drift.
   and `opam install . --deps-only` (opam depexts pull `libcurl` for the `curl`/`ezcurl` bindings).
 - **lua** — `fiducia.lua` `require`s `socket.http`/`ltn12`/`dkjson` at load time, so the
   `require` smoke needs those deps installed; the job installs them + `libssl-dev` (luasec).
-- **haskell** — `cabal check` emits only PVP version-bound warnings (`|| true`), non-fatal.
+- **haskell** — every dependency now has a PVP upper bound, so `cabal check` is
+  a required gate rather than an ignored warning source.
 - **clojure** — a plain jar on the classpath via `:local/root` does not resolve the jar's
   pom deps, so the `require` smoke adds `org.clojure/data.json` alongside the artifact
   (a real Clojars/Maven consumer gets it transitively from the published pom).

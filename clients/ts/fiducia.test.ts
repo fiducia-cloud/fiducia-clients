@@ -242,23 +242,24 @@ function flakyFetch(calls: RecordedCall[], failFirst: number): typeof fetch {
   }) as typeof fetch;
 }
 
-test("retried POST mutations pin one stable idempotency key across attempts", async () => {
+test("keyless POST mutations are not retried", async () => {
   const calls: RecordedCall[] = [];
   const client = new FiduciaClient("https://fiducia.test", {
     fetch: flakyFetch(calls, 1),
     maxRetries: 2,
   });
 
-  await client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 });
+  await assert.rejects(
+    () => client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 }),
+    TypeError,
+  );
 
-  // two attempts (first failed, second succeeded), both to the mutating route
-  assert.equal(calls.length, 2);
+  // A generated header would falsely imply safety at a direct node, which does
+  // not consume the hosted gateway's customer replay key.
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].path, "/v1/locks/acquire");
-  // both attempts carry a key, and it is the SAME key — so the server dedups the
-  // committed-but-lost first attempt instead of granting a second acquire.
-  assert.ok(calls[0].idempotencyKey, "first attempt must carry an idempotency key");
-  assert.equal(calls[1].idempotencyKey, calls[0].idempotencyKey);
+  assert.equal(calls[0].idempotencyKey, undefined);
 });
 
 test("caller-supplied idempotency key is reused, not overwritten, on retry", async () => {
@@ -374,4 +375,41 @@ test("request controls reject invalid timeout and retry values", () => {
     () => new FiduciaClient("https://fiducia.test", { retryDelayMs: -1 }),
     /retryDelayMs/,
   );
+});
+
+test("new coordination primitives remain layered onto the hardened transport", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+
+  await client.counterAdd("orders/42", 2, { prevRevision: 7 });
+  await client.barrierCreate("deploy", { kind: "quorum" }, { expected: 3 });
+  await client.taskProgress("index", "worker-a", 9, { percent: 50 });
+  await client.effectPrepare("charge", "payment", "payment-42", { requiredApprovals: 2 });
+  await client.handoffOffer("handoff-1", "orders", "worker-a", "worker-b", 11);
+  await client.decisionVote("release", "reviewer-a", { option: "ship", confidence: 0.9 });
+  await client.budgetReserve("root/team", "reservation-1", "worker-a", { usd: 10 });
+  await client.claimAssert("claim-1", "service", "healthy", "observer-a", { confidence: 0.8 });
+
+  assert.deepEqual(calls.map((call) => call.path), [
+    "/v1/counters/add",
+    "/v1/barriers/create",
+    "/v1/tasks/progress",
+    "/v1/effects/prepare",
+    "/v1/handoffs/offer",
+    "/v1/decisions/vote",
+    "/v1/budgets/reserve",
+    "/v1/claims/assert",
+  ]);
+  assert.deepEqual(calls[0]?.body, {
+    key: "orders/42",
+    delta: 2,
+    prev_revision: 7,
+  });
+  assert.deepEqual(calls[4]?.body, {
+    name: "handoff-1",
+    resource: "orders",
+    from: "worker-a",
+    to: "worker-b",
+    from_token: 11,
+  });
 });

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@fiducia/interfaces/typescript": ["../../../fiducia-interfaces/generated/typescript/index.ts"]
+    }
+  },
+  "files": ["fiducia.ts", "locking.ts"]
+}

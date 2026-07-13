@@ -32,7 +32,7 @@ Client/data-plane API is served on **`http://localhost:8090`** (override with
 
 ### `MODE=cargo` (default, no Docker needed)
 
-Builds `../../fiducia-node.rs` with `cargo build --release` and runs the binary.
+Builds `../../fiducia-node.rs` with `cargo build --locked --release` and runs the binary.
 Requires the Rust toolchain and the node repo **plus its two sibling path-dep
 crates** on disk: `fiducia-node.rs`, `fiducia-routing.rs`, `fiducia-interfaces`
 (all siblings under `fiducia.cloud/`). Build artifacts stay in the node repo's

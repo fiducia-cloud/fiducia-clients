@@ -24,6 +24,12 @@ stay generated/thin so they can follow the same protocol without inventing a
 second API shape. "Hard-gated" describes offline CI coverage, not uniform public
 authentication or hosted-service release readiness; see below.
 
+Every supported language's publishable artifact is also a required CI gate:
+the packaging workflow installs or compiles from the produced artifact outside
+the repository tree, so a client cannot appear healthy only because local source
+paths happen to resolve. MATLAB remains excluded because no licensed runner is
+available; it is not represented as a verified release artifact.
+
 Each lives under [`clients/`](clients/):
 
 | Language | Dir | HTTP via |
@@ -176,6 +182,20 @@ customer retry idempotency keys: TypeScript `idempotencyKey`, Python
 `idempotency_key`, Go `IdempotencyKey`, and Rust
 `RequestControl.idempotency_key`.
 
+TypeScript, Python, and Go retry non-idempotent requests only when the caller
+supplies one stable `Idempotency-Key`; they never invent a header that could
+falsely imply replay safety at a direct node. That header is consumed by the
+hosted edge/load-balancer path. Callers pointed straight at a fiducia-node must
+rely on the primitive's documented idempotence or avoid ambiguous mutation
+retries because the node does not provide the customer HTTP-header replay
+ledger. Retrying GET/HEAD and single-shot mutations remain keyless.
+The Rust client never invents a customer key: ambiguous transport/5xx retries
+there require `RequestControl.idempotency_key` (broker-style `429`/`503`
+rejections remain retryable because the server rejected them before applying
+the operation). First-tier default transports also refuse HTTP redirects so a
+mutation and its credentials cannot be replayed to `Location`; injected custom
+Go/TypeScript transports must preserve that no-redirect policy themselves.
+
 For the hosted B2B flow, each service replica registers itself, campaigns for a
 named role, renews before its lease expires, and stops leader-only work if renew
 fails or returns `not_leader`. The winning replica gets a monotonic
@@ -198,7 +218,7 @@ camelCase, that resolves to the parsed JSON response (or rejects with
 
 ```sh
 python3 generate.py rust-wasm                 # (re)generate clients/rust-wasm/src/lib.rs
-wasm-pack build clients/rust-wasm --target web # -> pkg/ with .wasm + .d.ts
+wasm-pack build clients/rust-wasm --target web -- --locked # -> pkg/ with .wasm + .d.ts
 ```
 
 ```js
@@ -237,6 +257,21 @@ python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-m
 The CLI currently has no bearer-token or API-key flag. Use it only with an
 endpoint that intentionally permits unauthenticated access (for example a
 local development endpoint); it is not yet a hosted-customer login client.
+
+## Reproducible build inputs
+
+The Rust client lockfiles are committed, and CI/container Cargo commands use
+`--locked`. Languages that consume the sibling `fiducia-interfaces` checkout
+are tested against the reviewed full commit
+`487e470c45ab5851e8f6f3b1dc048fe067fbf408`, never the moving default branch.
+The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
+detached `HEAD`, and verifies it again; overrides that are branches, tags, short
+hashes, or a different object fail the build. Update all four CI checkout pins
+and the Docker argument together when intentionally adopting a new contract.
+The multi-language test image installs system tools as root, then switches to
+numeric UID/GID `10001:10001` before fetching contracts, copying source,
+compiling, or running tests. CI audits the TypeScript and both Rust lockfiles in
+addition to the language-specific test suites.
 
 ## Status
 

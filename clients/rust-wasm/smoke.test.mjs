@@ -2,7 +2,7 @@
 // compiled wasm against a stubbed global `fetch` (behavior that the compile and
 // .d.ts checks cannot catch: wire format, integer bodies, timeout, errors).
 //
-//   wasm-pack build clients/rust-wasm --target nodejs --dev
+//   wasm-pack build clients/rust-wasm --target nodejs --dev -- --locked
 //   node --test clients/rust-wasm/smoke.test.mjs
 //
 // Requires Node 18+ (global fetch/Request/Response) and 17.3+ for

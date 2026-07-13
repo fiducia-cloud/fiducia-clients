@@ -11,9 +11,9 @@
 # MATLAB is intentionally EXCLUDED (no CI runner / proprietary). This file is separate
 # from ci.yml and does not modify it.
 #
-# Every job is continue-on-error: several clients carry local path-deps on a sibling
-# fiducia-interfaces repo absent in single-repo CI, so one client must not gate the rest.
-# Network is allowed (not hermetic); timeouts are short.
+# Every supported artifact check is a required gate. Network-backed toolchain
+# resolution remains bounded by per-job timeouts; a broken client cannot be
+# published merely because another language passed.
 
 name: client-packaging
 
@@ -41,11 +41,10 @@ jobs:
   fsharp:
     name: "A · fsharp (nupkg → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: "8.0.x"
       - name: Pack (publishable .nupkg)
@@ -60,17 +59,16 @@ jobs:
         run: |
           cons="$RUNNER_TEMP/consumer"; mkdir -p "$cons"; cd "$cons"
           dotnet new console -lang "F#"
-          cat > nuget.config <<'XML'
+          cat > nuget.config <<XML
           <?xml version="1.0" encoding="utf-8"?>
           <configuration>
             <packageSources>
               <clear />
-              <add key="local" value="RUNNER_TEMP_NUPKGS" />
+              <add key="local" value="$RUNNER_TEMP/nupkgs" />
               <add key="nuget" value="https://api.nuget.org/v3/index.json" />
             </packageSources>
           </configuration>
           XML
-          sed -i "s#RUNNER_TEMP_NUPKGS#$RUNNER_TEMP/nupkgs#" nuget.config
           dotnet add package Fiducia.FSharp.Client --version 0.1.0
           cat > Program.fs <<'FS'
           open Fiducia
@@ -86,18 +84,17 @@ jobs:
   haskell:
     name: "A · haskell (cabal sdist → build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: haskell-actions/setup@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: haskell-actions/setup@cd0d9bdd65b20557f41bea4dbe43d0b5fbbfe553 # v2
         with:
           ghc-version: "9.10.3"
           cabal-version: "latest"
       - name: sdist (publishable tarball)
         working-directory: clients/haskell
         run: |
-          cabal check || true   # `cabal check` only emits PVP version-bound warnings here
+          cabal check
           cabal sdist -o "$RUNNER_TEMP/dist"
       - name: Assert artifact contents (must_contain)
         run: |
@@ -115,11 +112,10 @@ jobs:
   erlang:
     name: "A · erlang (rebar3 hex build → compile)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"          # OTP 27+ required (stdlib json module)
           rebar3-version: "3"
@@ -143,16 +139,15 @@ jobs:
   lua:
     name: "A · lua (luarocks make → require)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps for luasec
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
-      - uses: leafo/gh-actions-lua@v10
+      - uses: leafo/gh-actions-lua@6919171ccf181b826f44b9bca76307b577217377 # v13.0.0
         with:
           luaVersion: "5.4"
-      - uses: leafo/gh-actions-luarocks@v4
+      - uses: leafo/gh-actions-luarocks@35d062def313a7699a0d513e996bcf4352f05389 # v6.1.0
       - name: luarocks make into a temp tree (publishable artifact) + runtime deps
         working-directory: clients/lua
         run: |
@@ -173,13 +168,12 @@ jobs:
   nim:
     name: "A · nim (nimble install → import)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: jiro4989/setup-nim-action@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec # v2
         with:
-          nim-version: "2.2.x"
+          nim-version: "2.2.10"
       - name: nimble install into a temp (publishable artifact)
         working-directory: clients/nim
         run: nimble install -y --nimbleDir:"$RUNNER_TEMP/nimble"
@@ -201,16 +195,15 @@ jobs:
   scala:
     name: "A · scala (sbt publishLocal → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "17"
           cache: sbt
-      - uses: sbt/setup-sbt@v1
+      - uses: sbt/setup-sbt@66fb4376e81982c7d92a4074170846fff88e2e30 # v1
       - name: publishLocal (publishable artifact → ~/.ivy2/local)
         working-directory: clients/scala
         run: sbt publishLocal
@@ -219,32 +212,34 @@ jobs:
           jar=$(find "$HOME/.ivy2/local/cloud.fiducia" -name 'fiducia-client_2.13.jar' | head -1)
           echo "artifact: $jar"; test -n "$jar"
           unzip -l "$jar" | grep -q 'cloud/fiducia/FiduciaClient.class'
-      - uses: VirtusLab/scala-cli-setup@v1
       - name: Smoke — resolve + compile a consumer against the published artifact
         run: |
-          cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer
-          cat > consumer.sc <<'SCALA'
-          //> using dep cloud.fiducia::fiducia-client:0.1.0
+          cd "$RUNNER_TEMP" && mkdir -p consumer/src/main/scala && cd consumer
+          cat > build.sbt <<'SBT'
+          ThisBuild / scalaVersion := "2.13.14"
+          libraryDependencies += "cloud.fiducia" %% "fiducia-client" % "0.1.0"
+          SBT
+          cat > src/main/scala/Main.scala <<'SCALA'
           import cloud.fiducia.FiduciaClient
-          @main def run(): Unit =
+          object Main extends App {
             val _ = new FiduciaClient("https://api.fiducia.cloud")
             println("scala consumer OK")
+          }
           SCALA
-          scala-cli compile . --scala 2.13.14
+          sbt compile
 
   kotlin:
     name: "A · kotlin (gradle publishToMavenLocal → consumer)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "11"          # build.gradle.kts declares kotlin { jvmToolchain(11) }
           cache: gradle
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
         with:
           gradle-version: "8.10.2"    # no wrapper is committed; provide gradle on PATH
       - name: publishToMavenLocal (publishable artifact → ~/.m2)
@@ -276,15 +271,14 @@ jobs:
   clojure:
     name: "A · clojure (build jar → require)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "17"          # transport is JDK java.net.http (JDK 11+)
-      - uses: DeLaGuardo/setup-clojure@12
+      - uses: DeLaGuardo/setup-clojure@f556541eb28a9303896cee0679ba9f60b898300f # 13.5
         with:
           cli: "1.12.0.1488"
       - name: Build jar (publishable artifact → Clojars/Maven)
@@ -307,10 +301,9 @@ jobs:
   c:
     name: "A-compile · c (#include fiducia.h, link fiducia.c)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - name: Stage shipped artifact + assert must_contain
@@ -337,10 +330,9 @@ jobs:
   cpp:
     name: "A-compile · cpp (#include fiducia.hpp)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev
       - name: Stage shipped artifact + assert must_contain
@@ -365,11 +357,10 @@ jobs:
   zig:
     name: "A-compile · zig (tarball module → @import)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: "0.16.0"
       - name: Build the module tarball (publishable artifact) + assert must_contain
@@ -409,11 +400,10 @@ jobs:
   gleam:
     name: "B · gleam (archive integrity + gleam build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"
           gleam-version: "1.16.0"
@@ -430,13 +420,12 @@ jobs:
   swift:
     name: "B · swift (archive integrity + swift build)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: swift-actions/setup-swift@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         with:
-          swift-version: "5.10"
+          swift-version: "6.3.3"
       - name: Assert archive integrity (must_contain)
         run: |
           git archive --format=tar HEAD:clients/swift -o "$RUNNER_TEMP/swift.tar"
@@ -449,11 +438,10 @@ jobs:
   crystal:
     name: "B · crystal (archive integrity + compile)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: crystal-lang/install-crystal@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
           crystal: "1.20.3"
       - name: Assert archive integrity (must_contain)
@@ -471,11 +459,10 @@ jobs:
   julia:
     name: "B · julia (archive integrity)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
         with:
           version: "1.10"
       - name: Assert archive integrity (must_contain)
@@ -490,11 +477,12 @@ jobs:
   ocaml:
     name: "B · ocaml (opam lint + dune build + archive)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: ocaml/setup-ocaml@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Refresh system package indexes
+        run: sudo apt-get update
+      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
         with:
           ocaml-compiler: "5.2"
       - name: Assert archive integrity (must_contain)
@@ -512,11 +500,10 @@ jobs:
   r:
     name: "B · r (R CMD build → tarball must contain R/fiducia.R)"
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: r-lib/actions/setup-r@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
         with:
           r-version: "release"
       - name: R CMD build (publishable tarball)
