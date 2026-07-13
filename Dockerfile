@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # CI/test image for the multi-language Fiducia clients.
-FROM rust:1.95.0-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
+FROM rust:1.97.0-bookworm@sha256:7d0723df719e7f213b69dc7c8c595985c3f4b060cfbee4f7bc0e347a86fe3b6a
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates golang-go python3 nodejs npm
 RUN useradd --create-home --uid 10001 ci \
