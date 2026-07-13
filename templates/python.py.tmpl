@@ -159,7 +159,7 @@ class FiduciaClient:
         req = urllib.request.Request(self.base + path, method="GET")
         req.add_header("accept", "text/event-stream")
         try:
-            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
+            with _urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 event = {}
                 data = []
                 for raw_line in r:
