@@ -147,12 +147,11 @@ class FiduciaClient:
         if idempotency_key:
             req.add_header("Idempotency-Key", str(idempotency_key))
         try:
-            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
+            with _urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 text = r.read().decode()
                 return json.loads(text) if text else None
         except urllib.error.HTTPError as e:
-            text = e.read().decode()
-            raise FiduciaError(e.code, json.loads(text) if text else None)
+            raise _http_error_to_fiducia_error(e)
         except TimeoutError as e:
             raise FiduciaTimeoutError(str(e))
 
