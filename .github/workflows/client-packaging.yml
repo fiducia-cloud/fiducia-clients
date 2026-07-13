@@ -284,7 +284,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"          # transport is JDK java.net.http (JDK 11+)
-      - uses: DeLaGuardo/setup-clojure@c72ba59d25875f7523e06a671431b5f9f084992d # 12.6
+      - uses: DeLaGuardo/setup-clojure@f556541eb28a9303896cee0679ba9f60b898300f # 13.5
         with:
           cli: "1.12.0.1488"
       - name: Build jar (publishable artifact → Clojars/Maven)
