@@ -67,7 +67,7 @@ jobs:
         with:
           node-version: "22.22.1"
       - working-directory: fiducia-clients/clients/ts
-        run: npm ci
+        run: npm ci --ignore-scripts
       # npm test runs the suite and parser-checks the locking helper under Node 22.
       - working-directory: fiducia-clients/clients/ts
         run: npm test
