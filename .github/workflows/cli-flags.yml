@@ -4,6 +4,7 @@ name: CLI flags
 on:
   pull_request:
     paths:
+      - ".github/workflows/cli-flags.yml"
       - ".cli-flags.toml"
       - ".gitmodules"
       - "tools/flags-2-env"
@@ -11,6 +12,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/cli-flags.yml"
       - ".cli-flags.toml"
       - ".gitmodules"
       - "tools/flags-2-env"
