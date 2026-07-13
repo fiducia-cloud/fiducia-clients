@@ -185,6 +185,16 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 
 func (c *Client) requestWithControl(method, path string, body any, ctrl requestControl) (map[string]any, error) {
 	maxRetries := c.resolveRetryMax(ctrl)
+	// A retried non-idempotent (mutating) request that committed server-side but
+	// whose response was lost would otherwise be silently duplicated — e.g. a
+	// second lock/semaphore acquire, a double FIFO slot. When retries are enabled,
+	// pin one stable Idempotency-Key across every attempt so the server can dedup.
+	// A caller-supplied key wins; GET/HEAD and single-shot (maxRetries=0) calls
+	// are left untouched, so this never changes non-retrying behavior.
+	if maxRetries > 0 && !isIdempotentMethod(method) && ctrl.IdempotencyKey == "" {
+		ctrl.IdempotencyKey = genIdempotencyKey()
+	}
+	replaySafe := isIdempotentMethod(method) || ctrl.IdempotencyKey != ""
 	for attempt := 0; ; attempt++ {
 		data, err := c.requestOnce(method, path, body, ctrl)
 		if err == nil {
@@ -193,7 +203,7 @@ func (c *Client) requestWithControl(method, path string, body any, ctrl requestC
 		if ctrl.Context != nil && ctrl.Context.Err() != nil {
 			return nil, err
 		}
-		if attempt >= maxRetries || !retryable(err) {
+		if attempt >= maxRetries || !retryable(err, replaySafe) {
 			return nil, err
 		}
 		if ctrl.RetryDelay > 0 {
