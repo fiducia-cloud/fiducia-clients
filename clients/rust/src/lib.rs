@@ -184,6 +184,13 @@ impl FiduciaClient {
         if let Some(key) = control.idempotency_key.as_deref() {
             req = req.set("Idempotency-Key", key);
         }
+        // Internal-hop headers (only present on clients built via `internal()`).
+        if let Some(secret) = self.internal_auth.as_deref() {
+            req = req.set("x-fiducia-internal-auth", secret);
+        }
+        if let Some(org) = self.org_scope.as_deref() {
+            req = req.set("x-fiducia-org-id", org);
+        }
         let resp = match body {
             Some(b) => req.send_json(b),
             None => req.call(),
