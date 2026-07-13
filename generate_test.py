@@ -66,6 +66,18 @@ class RustWasmEmitter(unittest.TestCase):
         self.assertNotIn("web_sys::window()", self.src)
         self.assertIn('js_sys::Reflect::set(&o, &JsValue::from_str("status")', self.src)
 
+    def test_transport_hard_refuses_redirects(self):
+        # Security-critical, matching the go/python/ts transports: never auto-follow
+        # a 3xx, which would replay this (possibly mutating) request plus its auth /
+        # idempotency headers to an attacker-controlled Location (incl. an
+        # https->http downgrade). The wasm transport sets redirect:"manual" and
+        # rejects both the readable 3xx (Node/Deno) and the opaque redirect
+        # (browsers/workers) rather than following either.
+        self.assertIn("opts.set_redirect(RequestRedirect::Manual)", self.src)
+        self.assertIn("ResponseType::Opaqueredirect", self.src)
+        self.assertIn("resp.status() >= 300 && resp.status() < 400", self.src)
+        self.assertIn("refusing to follow redirect", self.src)
+
     def test_request_timeout_via_abort_signal(self):
         # Optional per-request timeout: constructor + setter + AbortSignal wiring.
         self.assertIn("timeout_ms: Option<f64>", self.src)
