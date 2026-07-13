@@ -238,6 +238,22 @@ election leadership changes, and service discovery changes. Production-tier
 clients also expose request timeout and bounded retry controls around blocking
 acquisition calls.
 
+## Security posture
+
+- **No embedded secrets.** Every client is a thin, dependency-light wrapper over
+  stdlib HTTP. Credentials are always supplied by the caller at runtime
+  (`FIDUCIA_BASE_URL`, `Authorization: Bearer <token>`, `setHeader(...)`); no
+  real API keys, tokens, or endpoints are baked into any client, example, or
+  test. Docs use placeholders like `Bearer <token>` only.
+- **Publish scripts don't leak secrets.** `scripts/publish-common.sh` and the
+  per-language `clients/*/publish.sh` handle version/tag plumbing and registry
+  commands; they never `echo` tokens, and registry credentials come from the
+  environment / the ecosystem's own credential store, not from this repo.
+- **Dependency footprint is minimal.** Clients lean on each language's standard
+  library (see the Languages table); the TypeScript client uses `fetch` with no
+  runtime dependencies. The `tools/flags-2-env` submodule is vendored tooling and
+  is out of scope for this repo's audit.
+
 ## Related
 
 - [`fiducia-load-balance.rs`](https://github.com/fiducia-cloud/fiducia-load-balance.rs) — the endpoint clients hit.
