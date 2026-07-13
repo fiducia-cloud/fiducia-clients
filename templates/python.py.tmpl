@@ -53,6 +53,38 @@ class FiduciaTimeoutError(Exception):
     pass
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Hard-reject redirects (like the TypeScript, Go, Rust, and wasm clients).
+
+    A coordination API never 3xxes, and following one would replay this
+    (possibly mutating) request — plus its Idempotency-Key header — to an
+    attacker-controlled Location, including an https->http downgrade.
+    Returning None makes urlopen raise the 3xx as an HTTPError instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects())
+
+
+def _urlopen(req, timeout):
+    """Single transport seam: every request goes through the no-redirect opener."""
+    return _OPENER.open(req, timeout=timeout)
+
+
+# Methods safe to retry without an idempotency key. Per RFC 7231 GET/HEAD/OPTIONS
+# and the idempotent-by-contract PUT/DELETE converge to the same server state when
+# replayed; only POST (lock/semaphore acquire, release) can duplicate on retry.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
+def _gen_idempotency_key():
+    """Collision-resistant key that lets the server dedup a retried mutation."""
+    return "cli_" + _uuid.uuid4().hex
+
+
 def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
