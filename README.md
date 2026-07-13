@@ -11,14 +11,18 @@ idempotency keys, reader-writer locks, rate limiting, cron/scheduling,
 
 ## The contract
 
-All clients implement [`PROTOCOL.md`](PROTOCOL.md) — the single source of truth
-for endpoints and method names. Read it once and you know every client.
+[`operations.json`](operations.json) is the machine-readable source for endpoint
+generation; [`PROTOCOL.md`](PROTOCOL.md) is the reviewed narrative contract.
+The production-tier templates under [`templates/`](templates/) retain transport
+hardening and language-idiomatic helpers while `generate.py` inserts newer
+manifest operations into explicit generated regions.
 
 ## Languages
 
-First production tier: TypeScript, Go, Rust, and Python. The remaining languages
+First hard-gated tier: TypeScript, Go, Rust, and Python. The remaining languages
 stay generated/thin so they can follow the same protocol without inventing a
-second API shape.
+second API shape. "Hard-gated" describes offline CI coverage, not uniform public
+authentication or hosted-service release readiness; see below.
 
 Each lives under [`clients/`](clients/):
 
@@ -215,7 +219,8 @@ parsed JSON, or the raw text when the response isn't JSON.
 ## CLI
 
 The Python client doubles as a dependency-free CLI for local smoke checks and
-operator scripts:
+operator scripts. The packaged `fiducia` entry point runs `fiducia.py:main` and
+reads `FIDUCIA_BASE_URL` plus optional `FIDUCIA_TIMEOUT_SECONDS`:
 
 ```sh
 FIDUCIA_BASE_URL=https://api.fiducia.cloud \
@@ -229,6 +234,10 @@ python3 clients/python/fiducia.py election campaign cron-main node-a --ttl-ms 15
 python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-ms 10000 --metadata az=a
 ```
 
+The CLI currently has no bearer-token or API-key flag. Use it only with an
+endpoint that intentionally permits unauthenticated access (for example a
+local development endpoint); it is not yet a hosted-customer login client.
+
 ## Status
 
 Clients track the live node endpoints for locks, semaphores, idempotency keys,
@@ -238,13 +247,33 @@ election leadership changes, and service discovery changes. Production-tier
 clients also expose request timeout and bounded retry controls around blocking
 acquisition calls.
 
+The TypeScript, Python, Go, and Rust jobs are required CI checks, as is generator
+drift. That verifies compilation and offline wire behavior. It does not by itself
+mean every client is ready to call an authentication-required public endpoint.
+
+## Authentication readiness
+
+Authentication support is currently uneven and must not be inferred from a
+placeholder in an example:
+
+- Rust-Wasm can attach `Authorization` with `setHeader`.
+- TypeScript callers can inject a `fetch` wrapper, and Go callers can provide a
+  custom `http.Client`/`RoundTripper`, to add public authentication headers.
+- The native Python and Rust clients do not yet expose a general public bearer
+  or API-key option. The Python CLI likewise has no auth flag.
+- Rust `FiduciaClient::internal(...)` is only for the trusted service-to-node
+  hop. It sends `x-fiducia-internal-auth` and tenant scope, rejects redirects,
+  and redacts those values from debug formatting. It is not customer auth.
+
+Until a native client has an explicit public-auth path, do not point it directly
+at an auth-required hosted endpoint and assume credentials will be attached.
+
 ## Security posture
 
-- **No embedded secrets.** Every client is a thin, dependency-light wrapper over
-  stdlib HTTP. Credentials are always supplied by the caller at runtime
-  (`FIDUCIA_BASE_URL`, `Authorization: Bearer <token>`, `setHeader(...)`); no
-  real API keys, tokens, or endpoints are baked into any client, example, or
-  test. Docs use placeholders like `Bearer <token>` only.
+- **No embedded secrets.** No real API keys, tokens, or private endpoints are
+  baked into any client, example, or test. Where a client supports
+  caller-supplied headers, docs use placeholders such as `Bearer <token>` only;
+  unsupported clients do not silently invent or discover credentials.
 - **Publish scripts don't leak secrets.** `scripts/publish-common.sh` and the
   per-language `clients/*/publish.sh` handle version/tag plumbing and registry
   commands; they never `echo` tokens, and registry credentials come from the

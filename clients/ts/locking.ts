@@ -21,17 +21,25 @@ import { FiduciaClient } from "./fiducia";
 
 /** Thrown by `lock`/`acquireSemaphore` when the wait budget elapses unacquired. */
 export class LockTimeoutError extends Error {
-  constructor(public keys: string[], public waitedMs: number) {
+  keys: string[];
+  waitedMs: number;
+
+  constructor(keys: string[], waitedMs: number) {
     super(`fiducia: timed out after ${waitedMs}ms waiting for lock on ${keys.join(", ")}`);
     this.name = "LockTimeoutError";
+    this.keys = keys;
+    this.waitedMs = waitedMs;
   }
 }
 
 /** Thrown when a wait is cancelled via an AbortSignal. */
 export class LockAbortedError extends Error {
-  constructor(public keys: string[]) {
+  keys: string[];
+
+  constructor(keys: string[]) {
     super(`fiducia: lock wait aborted for ${keys.join(", ")}`);
     this.name = "LockAbortedError";
+    this.keys = keys;
   }
 }
 

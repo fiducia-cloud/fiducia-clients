@@ -26,7 +26,7 @@ func TestTryLockAgainstDeadServerErrors(t *testing.T) {
 	c := New("http://127.0.0.1:1")
 	opts := DefaultLockOptions()
 	opts.MaxWait = 50 * time.Millisecond
-	if _, err := c.TryLock([]string{"k"}, opts); err == nil {
+	if _, err := c.TryLockHandle([]string{"k"}, opts); err == nil {
 		t.Fatal("expected transport error from dead server")
 	}
 }
