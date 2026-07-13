@@ -53,6 +53,19 @@ class FiduciaTimeoutError(Exception):
     pass
 
 
+def _http_error_to_fiducia_error(e):
+    """Map an HTTPError to a FiduciaError; a refused 3xx gets the shared
+    redirect_not_followed shape (matching the TypeScript and Go clients)."""
+    if 300 <= e.code < 400:
+        return FiduciaError(e.code, {
+            "error": "redirect_not_followed",
+            "message": "fiducia: refusing to follow redirect (%s)" % e.code,
+            "location": e.headers.get("location") if e.headers else None,
+        })
+    text = e.read().decode()
+    return FiduciaError(e.code, json.loads(text) if text else None)
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     """Hard-reject redirects (like the TypeScript, Go, Rust, and wasm clients).
 
