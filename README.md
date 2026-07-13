@@ -263,7 +263,7 @@ local development endpoint); it is not yet a hosted-customer login client.
 The Rust client lockfiles are committed, and CI/container Cargo commands use
 `--locked`. Languages that consume the sibling `fiducia-interfaces` checkout
 are tested against the reviewed full commit
-`5f2c5279ee19941024455b2843256872485bac82`, never the moving default branch.
+`487e470c45ab5851e8f6f3b1dc048fe067fbf408`, never the moving default branch.
 The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
 detached `HEAD`, and verifies it again; overrides that are branches, tags, short
 hashes, or a different object fail the build. Update all four CI checkout pins
