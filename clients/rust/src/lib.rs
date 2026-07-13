@@ -8,7 +8,8 @@
 //! ```
 
 use serde_json::{json, Value};
-use std::{thread, time::Duration};
+use std::{fmt, thread, time::Duration};
+use ureq::http::{self, header::HeaderValue};
 
 /// High-level blocking/try lock + semaphore acquisition (live-mutex-style).
 mod locking;
@@ -24,6 +25,16 @@ pub use fiducia_interfaces as types;
 pub enum Error {
     Http { status: u16, body: Option<Value> },
     Transport(String),
+}
+
+fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
+    let mut header = HeaderValue::from_str(value)
+        .map_err(|err| Error::Transport(format!("invalid trusted-hop header: {err}")))?;
+    // Defense in depth: ureq 3 redacts non-allowlisted headers from its debug
+    // logs, and http::HeaderValue also redacts values explicitly marked
+    // sensitive if another layer formats the request directly.
+    header.set_sensitive(true);
+    Ok(header)
 }
 
 /// Per-request controls for blocking lock/semaphore acquires.
@@ -96,17 +107,41 @@ pub struct FiduciaClient {
     /// Internal-hop secret (`x-fiducia-internal-auth`). Set only when calling a
     /// fiducia-node directly (bypassing the edge/LB) as a trusted internal
     /// service; leave `None` for customer-facing edge/LB calls.
-    pub internal_auth: Option<String>,
+    internal_auth: Option<String>,
     /// Org scope (`x-fiducia-org-id`) attached to internal-hop calls so the node
     /// can attribute/scope the request to a tenant.
-    pub org_scope: Option<String>,
+    org_scope: Option<String>,
+}
+
+impl fmt::Debug for FiduciaClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FiduciaClient")
+            .field("base", &self.base)
+            .field("request_timeout", &self.request_timeout)
+            .field("lock_request_timeout", &self.lock_request_timeout)
+            .field("retry_max", &self.retry_max)
+            .field("retry_delay", &self.retry_delay)
+            .field(
+                "internal_auth",
+                &self.internal_auth.as_ref().map(|_| "<redacted>"),
+            )
+            .field("org_scope", &self.org_scope.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl FiduciaClient {
     pub fn new(base_url: &str) -> Self {
+        // Coordination endpoints are not expected to redirect. Refusing every
+        // redirect prevents replaying mutations, idempotency keys, or trusted
+        // internal-hop headers to an attacker-controlled Location.
+        let config = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build();
         Self {
             base: base_url.trim_end_matches('/').to_string(),
-            agent: ureq::agent(),
+            agent: config.into(),
             request_timeout: None,
             lock_request_timeout: None,
             retry_max: 0,
@@ -177,30 +212,58 @@ impl FiduciaClient {
         lock_acquire: bool,
     ) -> Result<Value, Error> {
         let url = format!("{}{}", self.base, path);
-        let mut req = self.agent.request(method, &url);
-        if let Some(timeout) = self.resolve_timeout(&control, lock_acquire) {
-            req = req.timeout(timeout);
-        }
+        let mut builder = http::Request::builder().method(method).uri(&url);
         if let Some(key) = control.idempotency_key.as_deref() {
-            req = req.set("Idempotency-Key", key);
+            builder = builder.header("Idempotency-Key", key);
         }
         // Internal-hop headers (only present on clients built via `internal()`).
         if let Some(secret) = self.internal_auth.as_deref() {
-            req = req.set("x-fiducia-internal-auth", secret);
+            builder = builder.header("x-fiducia-internal-auth", sensitive_header_value(secret)?);
         }
         if let Some(org) = self.org_scope.as_deref() {
-            req = req.set("x-fiducia-org-id", org);
+            builder = builder.header("x-fiducia-org-id", sensitive_header_value(org)?);
         }
+        let timeout = self.resolve_timeout(&control, lock_acquire);
         let resp = match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
+            Some(value) => {
+                let bytes =
+                    serde_json::to_vec(&value).map_err(|err| Error::Transport(err.to_string()))?;
+                let request = builder
+                    .header("content-type", "application/json")
+                    .body(bytes)
+                    .map_err(|err| Error::Transport(err.to_string()))?;
+                let request = self
+                    .agent
+                    .configure_request(request)
+                    .timeout_global(timeout)
+                    .build();
+                self.agent.run(request)
+            }
+            None => {
+                let request = builder
+                    .body(())
+                    .map_err(|err| Error::Transport(err.to_string()))?;
+                let request = self
+                    .agent
+                    .configure_request(request)
+                    .timeout_global(timeout)
+                    .build();
+                self.agent.run(request)
+            }
         };
         match resp {
-            Ok(r) => Ok(r.into_json::<Value>().unwrap_or(Value::Null)),
-            Err(ureq::Error::Status(code, r)) => Err(Error::Http {
-                status: code,
-                body: r.into_json::<Value>().ok(),
-            }),
+            Ok(mut response) => {
+                let status = response.status().as_u16();
+                let parsed = response.body_mut().read_json::<Value>().ok();
+                if status >= 300 {
+                    Err(Error::Http {
+                        status,
+                        body: parsed,
+                    })
+                } else {
+                    Ok(parsed.unwrap_or(Value::Null))
+                }
+            }
             Err(e) => Err(Error::Transport(e.to_string())),
         }
     }
@@ -1414,6 +1477,34 @@ mod tests {
         (base, hits)
     }
 
+    fn redirecting_server(location: String) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0_u8; 1024];
+            while find_header_end(&buf).is_none() {
+                let n = stream.read(&mut tmp).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let header_end = find_header_end(&buf).unwrap();
+            tx.send(String::from_utf8_lossy(&buf[..header_end]).into_owned())
+                .unwrap();
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        (base, rx)
+    }
+
     fn find_header_end(buf: &[u8]) -> Option<usize> {
         buf.windows(4).position(|window| window == b"\r\n\r\n")
     }
@@ -1435,6 +1526,39 @@ mod tests {
             key.eq_ignore_ascii_case(name)
                 .then(|| value.trim().to_string())
         })
+    }
+
+    #[test]
+    fn trusted_hop_secret_is_redacted_and_never_crosses_a_redirect() {
+        let attacker = TcpListener::bind("127.0.0.1:0").unwrap();
+        attacker.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/steal", attacker.local_addr().unwrap());
+        let (base, origin_headers) = redirecting_server(location);
+        let secret = "internal-secret-must-not-leak";
+        let org = "org-sensitive";
+        let client = FiduciaClient::internal(&base, secret, org);
+
+        let err = client.health().unwrap_err();
+        assert!(matches!(err, Error::Http { status: 302, .. }));
+        let headers = origin_headers.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            header_value(&headers, "x-fiducia-internal-auth").as_deref(),
+            Some(secret)
+        );
+        assert_eq!(
+            header_value(&headers, "x-fiducia-org-id").as_deref(),
+            Some(org)
+        );
+        assert!(
+            matches!(attacker.accept(), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target received a trusted-hop request"
+        );
+
+        let debug = format!("{client:?}");
+        assert!(!debug.contains(secret));
+        assert!(!debug.contains(org));
+        assert!(debug.contains("<redacted>"));
+        assert!(!format!("{:?}", sensitive_header_value(secret).unwrap()).contains(secret));
     }
 
     fn assert_next(rx: &Receiver<RecordedRequest>, method: &str, path: &str, body: Value) {

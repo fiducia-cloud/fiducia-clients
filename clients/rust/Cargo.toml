@@ -9,7 +9,7 @@ repository = "https://github.com/fiducia-cloud/fiducia-clients"
 include = ["Cargo.toml", "LICENSE.txt", "src/**"]
 
 [dependencies]
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3.3", features = ["json"] }
 serde_json = "1"
 
 # Shared, generated payload/error contract — re-exported as `types` so callers

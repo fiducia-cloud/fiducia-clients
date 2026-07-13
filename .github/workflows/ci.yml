@@ -1,4 +1,4 @@
-# CI workflow: best-effort build/test of each language client on push and PR.
+# CI workflow: hard build/test gates for production-tier clients plus wasm.
 name: ci
 on:
   push:
@@ -14,25 +14,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Each language client is tested best-effort: several carry local path deps on
-# the sibling fiducia-interfaces repo (go `replace`, cargo `path`, npm registry
-# @fiducia/interfaces) that aren't present in single-repo CI, so a failure must
-# not gate the others. Mirrors the multi-language Dockerfile.
 jobs:
   go:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
+      # Preserve the same sibling layout used by the Go replace directive.
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: actions/setup-go@v6
         with:
-          go-version-file: clients/go/go.mod
-      - working-directory: clients/go
+          go-version-file: fiducia-clients/clients/go/go.mod
+      - working-directory: fiducia-clients/clients/go
         run: go test ./...
 
   python:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -45,29 +46,33 @@ jobs:
 
   ts:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
       - working-directory: clients/ts
-        run: npm ci || npm install
-      # npm test == node --test --experimental-strip-types fiducia.test.ts
+        run: npm ci
+      # npm test runs the suite and parser-checks the locking helper under Node 22.
       - working-directory: clients/ts
         run: npm test
 
   rust:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
+      # Preserve the same sibling layout used by the Rust path dependency.
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: dtolnay/rust-toolchain@stable
-      - working-directory: clients/rust
+      - working-directory: fiducia-clients/clients/rust
         run: cargo test
 
-  # clients/rust-wasm is generated from operations.json and self-contained (no
-  # sibling-repo path deps), so it is a HARD gate — not continue-on-error.
+  # clients/rust-wasm is generated from operations.json and self-contained.
   rust-wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -79,9 +84,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      # generator self-tests + drift check (committed lib.rs vs operations.json)
+      # Generator regression tests + drift check for every generated target.
       - run: python3 -m unittest generate_test
-      - run: python3 generate.py --check rust-wasm
+      - run: python3 generate.py --check
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

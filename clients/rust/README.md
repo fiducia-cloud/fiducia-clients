@@ -11,4 +11,9 @@ deserialized into typed structs.
 - `publish.sh` — `cargo package`/`publish` release entrypoint (see
   `clients/PUBLISHING.md`).
 
-This crate is also the source compiled to WebAssembly in `clients/rust-wasm`.
+The native client has no general public bearer-token option yet. Its
+`FiduciaClient::internal(...)` constructor is exclusively for trusted
+service-to-node calls: internal headers are debug-redacted and redirects are
+refused so the secret cannot be replayed cross-origin. The separate
+`clients/rust-wasm` client is generated for WebAssembly and supports explicit
+default headers.
