@@ -185,8 +185,7 @@ class FiduciaClient:
                 if decoded is not None:
                     yield decoded
         except urllib.error.HTTPError as e:
-            text = e.read().decode()
-            raise FiduciaError(e.code, json.loads(text) if text else None)
+            raise _http_error_to_fiducia_error(e)
         except TimeoutError as e:
             raise FiduciaTimeoutError(str(e))
 
