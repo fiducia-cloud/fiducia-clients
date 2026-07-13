@@ -212,7 +212,7 @@ camelCase, that resolves to the parsed JSON response (or rejects with
 
 ```sh
 python3 generate.py rust-wasm                 # (re)generate clients/rust-wasm/src/lib.rs
-wasm-pack build clients/rust-wasm --target web # -> pkg/ with .wasm + .d.ts
+wasm-pack build clients/rust-wasm --target web -- --locked # -> pkg/ with .wasm + .d.ts
 ```
 
 ```js
@@ -251,6 +251,21 @@ python3 clients/python/fiducia.py service register api i-1 10.0.0.1:9000 --ttl-m
 The CLI currently has no bearer-token or API-key flag. Use it only with an
 endpoint that intentionally permits unauthenticated access (for example a
 local development endpoint); it is not yet a hosted-customer login client.
+
+## Reproducible build inputs
+
+The Rust client lockfiles are committed, and CI/container Cargo commands use
+`--locked`. Languages that consume the sibling `fiducia-interfaces` checkout
+are tested against the reviewed full commit
+`bbd8b52ce729ec34b0a9bff4dda6d0a448181797`, never the moving default branch.
+The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
+detached `HEAD`, and verifies it again; overrides that are branches, tags, short
+hashes, or a different object fail the build. Update all four CI checkout pins
+and the Docker argument together when intentionally adopting a new contract.
+The multi-language test image installs system tools as root, then switches to
+numeric UID/GID `10001:10001` before fetching contracts, copying source,
+compiling, or running tests. CI audits the TypeScript and both Rust lockfiles in
+addition to the language-specific test suites.
 
 ## Status
 

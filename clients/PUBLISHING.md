@@ -35,8 +35,8 @@ are unaffected.
 | `java` | Maven Central and Artifactory | `FIDUCIA_MAVEN_TARGET` can be `central`, `artifactory`, or `both`; Artifactory releases require `ARTIFACTORY_URL`. |
 | `ruby` | RubyGems.org | Builds `fiducia-client.gemspec`, then pushes only the newly built gem. |
 | `go` | Go module proxy | Tags `clients/go/v${PACKAGE_VERSION}` and pushes the tag. |
-| `rust` | crates.io | Runs `cargo package`, then `cargo publish`. |
-| `rust-wasm` | npm | `wasm-pack build --target bundler --release` compiles the cdylib and emits an npm package under `pkg/` (with `.d.ts`); publishes it with `npm publish pkg --access public`. Needs `wasm-pack` + the `wasm32-unknown-unknown` target. |
+| `rust` | crates.io | Runs `cargo package --locked`, then `cargo publish --locked`. |
+| `rust-wasm` | npm | `wasm-pack build --target bundler --release -- --locked` compiles the cdylib and emits an npm package under `pkg/` (with `.d.ts`); publishes it with `npm publish pkg --access public`. Needs `wasm-pack` + the `wasm32-unknown-unknown` target. |
 | `csharp` | NuGet Gallery | Packs into a fresh temp dir and requires `NUGET_API_KEY`. |
 | `php` | Packagist | Composer validates and archives; if Packagist credentials are present, it triggers a package update. |
 | `powershell` | PowerShell Gallery | Requires `POWERSHELL_GALLERY_API_KEY`. |

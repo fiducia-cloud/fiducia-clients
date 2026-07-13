@@ -6,5 +6,5 @@ DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 publish_parse_mode "$@"
 cd "$DIR"
 publish_check_version Cargo.toml '^version'
-cargo package
-[ "$PUBLISH_MODE" = dry-run ] || { cargo publish; }
+cargo package --locked
+[ "$PUBLISH_MODE" = dry-run ] || { cargo publish --locked; }

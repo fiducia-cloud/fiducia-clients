@@ -266,7 +266,7 @@ RUST_WASM_PRE = BANNER_C + '''
 //! Fiducia client (Rust -> WebAssembly) — generated. Transport is the global
 //! `fetch` (browser main thread, Web Workers, and Node 18+/Deno).
 //!
-//! Build:  wasm-pack build clients/rust-wasm --target web
+//! Build:  wasm-pack build clients/rust-wasm --target web -- --locked
 //!
 //! Every operation is an `async` method (exported to JS as camelCase) that
 //! resolves to the parsed JSON response, or rejects with `{ status, body }` on a

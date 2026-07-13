@@ -49,7 +49,7 @@ up_cargo() {
   mkdir -p "$RUNTIME_DIR"
   local data_dir="$RUNTIME_DIR/data"
   echo "run-node: building release binary in $NODE_REPO (first build is slow: several minutes)"
-  ( cd "$NODE_REPO" && cargo build --release )
+  ( cd "$NODE_REPO" && cargo build --locked --release )
   echo "run-node: starting single node  node_id=node-a  peers=[]  data_dir=$data_dir"
   # SINGLE-NODE CONFIG:
   #   FIDUCIA_PEERS unset      -> empty peer set -> self-elects every shard at t=0
