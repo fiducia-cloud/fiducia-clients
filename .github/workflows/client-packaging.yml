@@ -434,7 +434,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: swift-actions/setup-swift@v2
+      - uses: swift-actions/setup-swift@v3
         with:
           swift-version: "5.10"
       - name: Assert archive integrity (must_contain)
