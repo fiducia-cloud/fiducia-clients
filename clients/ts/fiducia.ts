@@ -647,7 +647,8 @@ export class FiduciaClient {
   async counterGet(key: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("key", String(key));
-    const path = `/v1/counters` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/counters` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -662,7 +663,8 @@ export class FiduciaClient {
   async barrierGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/barriers` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/barriers` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -677,7 +679,8 @@ export class FiduciaClient {
   async taskGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/tasks` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/tasks` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -708,7 +711,8 @@ export class FiduciaClient {
   async effectGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/effects` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/effects` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -731,7 +735,8 @@ export class FiduciaClient {
   async handoffGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/handoffs` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/handoffs` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -750,7 +755,8 @@ export class FiduciaClient {
   async decisionGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/decisions` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/decisions` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -765,7 +771,8 @@ export class FiduciaClient {
   async budgetGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/budgets` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/budgets` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 
@@ -788,7 +795,8 @@ export class FiduciaClient {
   async claimGet(name: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("name", String(name));
-    const path = `/v1/claims` + (query.size ? `?${query.toString()}` : "");
+    const encodedQuery = query.toString();
+    const path = `/v1/claims` + (encodedQuery ? `?${encodedQuery}` : "");
     return this.request("GET", path, undefined, opts);
   }
 

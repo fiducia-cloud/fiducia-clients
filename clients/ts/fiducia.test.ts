@@ -376,3 +376,40 @@ test("request controls reject invalid timeout and retry values", () => {
     /retryDelayMs/,
   );
 });
+
+test("new coordination primitives remain layered onto the hardened transport", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+
+  await client.counterAdd("orders/42", 2, { prevRevision: 7 });
+  await client.barrierCreate("deploy", { kind: "quorum" }, { expected: 3 });
+  await client.taskProgress("index", "worker-a", 9, { percent: 50 });
+  await client.effectPrepare("charge", "payment", "payment-42", { requiredApprovals: 2 });
+  await client.handoffOffer("handoff-1", "orders", "worker-a", "worker-b", 11);
+  await client.decisionVote("release", "reviewer-a", { option: "ship", confidence: 0.9 });
+  await client.budgetReserve("root/team", "reservation-1", "worker-a", { usd: 10 });
+  await client.claimAssert("claim-1", "service", "healthy", "observer-a", { confidence: 0.8 });
+
+  assert.deepEqual(calls.map((call) => call.path), [
+    "/v1/counters/add",
+    "/v1/barriers/create",
+    "/v1/tasks/progress",
+    "/v1/effects/prepare",
+    "/v1/handoffs/offer",
+    "/v1/decisions/vote",
+    "/v1/budgets/reserve",
+    "/v1/claims/assert",
+  ]);
+  assert.deepEqual(calls[0]?.body, {
+    key: "orders/42",
+    delta: 2,
+    prev_revision: 7,
+  });
+  assert.deepEqual(calls[4]?.body, {
+    name: "handoff-1",
+    resource: "orders",
+    from: "worker-a",
+    to: "worker-b",
+    from_token: 11,
+  });
+});

@@ -151,7 +151,8 @@ def emit_ts(op):
                 lines.append('    if (%s !== undefined) query.set("%s", String(%s));' % (local, x["name"], local))
             else:
                 lines.append('    query.set("%s", String(%s));' % (x["name"], local))
-        lines.append('    const path = %s + (query.size ? `?${query.toString()}` : "");' % path_expr)
+        lines.append("    const encodedQuery = query.toString();")
+        lines.append('    const path = %s + (encodedQuery ? `?${encodedQuery}` : "");' % path_expr)
         path_expr = "path"
 
     call = 'this.request("%s", %s' % (op["method"], path_expr)

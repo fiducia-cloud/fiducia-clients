@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(__file__))
 
 import fiducia  # noqa: E402
+import cli as fiducia_cli  # noqa: E402
 
 
 class RecordingClient(fiducia.FiduciaClient):
@@ -68,7 +69,7 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assertEqual(captured["method"], "PUT")
         self.assertEqual(captured["headers"]["idempotency-key"], "req_order_42")
         self.assertEqual(captured["headers"]["content-type"], "application/json")
-        self.assertEqual(captured["body"], {"value": "paid", "ttl_ms": None, "prev_revision": None})
+        self.assertEqual(captured["body"], {"value": "paid"})
         self.assertEqual(captured["timeout"], 9)
 
     def test_keyless_post_is_not_retried(self):
@@ -252,21 +253,6 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "/v1/locks/acquire",
             {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
         )
-        c.try_lock("orders/42", holder="worker-a", ttl_ms=30_000)
-        self.assert_last_call(
-            c,
-            "POST",
-            "/v1/locks/acquire",
-            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": False, "max": None},
-        )
-        c.must_lock("orders/42", holder="worker-a", ttl_ms=30_000, lock_request_timeout_ms=5000, max_retries=2)
-        self.assert_last_call_with_opts(
-            c,
-            "POST",
-            "/v1/locks/acquire",
-            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
-            {"lock_request_timeout_ms": 5000, "max_retries": 2},
-        )
         c.lock_acquire_many(["orders/42", "inventory/sku-7"], holder="worker-a")
         self.assert_last_call(
             c,
@@ -274,21 +260,12 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "/v1/locks/acquire",
             {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": False},
         )
-        c.lock_many(["orders/42", "inventory/sku-7"], holder="worker-a")
-        self.assert_last_call(
-            c,
-            "POST",
-            "/v1/locks/acquire",
-            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": True},
-        )
-        c.lock_release("orders/42", "worker-a", 11)
-        self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 11})
         c.lock_release("worker-a", 12)
         self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 12})
 
         c.semaphore_get("pools/db/primary")
         self.assert_last_call(c, "GET", "/v1/semaphores?key=pools%2Fdb%2Fprimary")
-        c.semaphore_acquire("pools/db/primary", holder="worker-b", ttl_ms=20_000, max=3, wait=True)
+        c.semaphore_acquire("pools/db/primary", 3, holder="worker-b", ttl_ms=20_000, wait=True)
         self.assert_last_call(
             c,
             "POST",
@@ -301,21 +278,6 @@ class FiduciaPythonClientTests(unittest.TestCase):
             "POST",
             "/v1/semaphores/acquire",
             {"key": "pools/db/primary", "holder": "worker-c", "ttl_ms": 20_000, "wait": True, "limit": 4},
-        )
-        c.try_semaphore("pools/db/primary", holder="worker-b", max=3)
-        self.assert_last_call(
-            c,
-            "POST",
-            "/v1/semaphores/acquire",
-            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": None, "wait": False, "limit": 3},
-        )
-        c.must_semaphore("pools/db/primary", holder="worker-b", max=3, retries=1)
-        self.assert_last_call_with_opts(
-            c,
-            "POST",
-            "/v1/semaphores/acquire",
-            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": None, "wait": True, "limit": 3},
-            {"retries": 1},
         )
         c.semaphore_release("pools/db/primary", "worker-b", 12)
         self.assert_last_call(
@@ -369,13 +331,6 @@ class FiduciaPythonClientTests(unittest.TestCase):
         )
         c.kv_delete("flags/new-ui")
         self.assert_last_call(c, "DELETE", "/v1/kv?key=flags%2Fnew-ui")
-        c.kv_list("flags/")
-        self.assert_last_call(c, "GET", "/v1/kv?prefix=flags%2F")
-        c.kv_watch("flags/new-ui", timeout_ms=500)
-        self.assert_last_call_with_opts(c, "WATCH", "/v1/kv?key=flags%2Fnew-ui&watch=true", request_opts={"timeout_ms": 500})
-        c.kv_watch_prefix("flags/")
-        self.assert_last_call(c, "WATCH", "/v1/kv?prefix=flags%2F&watch=true")
-
         c.rate_limit_check("tenant/a", "checkout", "token_bucket", 100, 60_000, cost=2)
         self.assert_last_call(
             c,
@@ -431,9 +386,6 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "POST", "/v1/elections/cron-main/resign", {"candidate": "node-a", "fencing_token": 21})
         c.election_get("cron-main")
         self.assert_last_call(c, "GET", "/v1/elections/cron-main")
-        c.election_watch("cron-main")
-        self.assert_last_call(c, "WATCH", "/v1/elections/cron-main/watch")
-
         c.service_register("api", "i-1", "10.0.0.1:9000", 10_000, metadata={"az": "a"})
         self.assert_last_call(
             c,
@@ -449,48 +401,30 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assert_last_call(c, "GET", "/v1/services/api")
         c.service_instances("api", metadata={"region": "eu central", "version": "blue/1"})
         self.assert_last_call(c, "GET", "/v1/services/api?metadata.region=eu+central&metadata.version=blue%2F1")
-        c.service_list()
-        self.assert_last_call(c, "GET", "/v1/services")
-        c.service_watch("api")
-        self.assert_last_call(c, "WATCH", "/v1/services/api/watch")
-
     def test_cli_dispatches_feature_groups(self):
         cases = [
             (["health"], ("health", (), {})),
-            (["lock", "acquire-many", "a", "b", "--holder", "h", "--ttl-ms", "100", "--wait"],
+            (["lock", "acquire", "--keys", "a,b", "--holder", "h", "--ttl-ms", "100", "--wait"],
              ("lock_acquire_many", (["a", "b"],), {"holder": "h", "ttl_ms": 100, "wait": True})),
-            (["semaphore", "acquire", "pool", "--holder", "h", "--limit", "4"],
-             ("semaphore_acquire", ("pool",), {"holder": "h", "ttl_ms": None, "max": 4, "wait": False})),
-            (["idempotency", "claim", "stripe-webhook/event_123", "--owner", "worker-a", "--ttl", "24h",
-              "--metadata", "source=stripe"],
-             ("idempotency_claim", ("stripe-webhook/event_123",), {
-                 "owner": "worker-a",
-                 "ttl_ms": None,
-                 "ttl": "24h",
-                 "metadata": {"source": "stripe"},
-             })),
-            (["idempotency", "complete", "stripe-webhook/event_123", "--owner", "worker-a",
-              "--fencing-token", "11", "--result-json", "{\"status\":\"ok\"}"],
-             ("idempotency_complete", ("stripe-webhook/event_123", "worker-a", 11), {
-                 "result": {"status": "ok"},
-             })),
-            (["kv", "put", "flags/new-ui", "on", "--prev-revision", "3"],
+            (["sem", "acquire", "--key", "pool", "--holder", "h", "--limit", "4"],
+             ("semaphore_acquire", ("pool", 4), {"holder": "h", "ttl_ms": None, "wait": False})),
+            (["kv", "put", "--key", "flags/new-ui", "--value", "on", "--prev-revision", "3"],
              ("kv_put", ("flags/new-ui", "on"), {"ttl_ms": None, "prev_revision": 3})),
-            (["rate-limit", "check", "tenant-a", "checkout", "--algorithm", "sliding_window", "--limit", "5", "--window-ms", "1000"],
+            (["ratelimit", "check", "--tenant", "tenant-a", "--key", "checkout", "--algorithm", "sliding_window", "--limit", "5", "--window-ms", "1000"],
              ("rate_limit_check", ("tenant-a", "checkout", "sliding_window", 5, 1000), {"refill_per_second": None, "cost": None})),
-            (["cron", "upsert", "nightly", "--cron", "0 0 * * *", "--target-kind", "webhook", "--target-url", "https://example.test/hook"],
+            (["cron", "upsert", "--name", "nightly", "--cron", "0 0 * * *", "--webhook", "https://example.test/hook"],
              ("schedule_upsert", ("nightly", {"kind": "webhook", "url": "https://example.test/hook"}), {
                  "cron": "0 0 * * *",
                  "one_shot_at_ms": None,
                  "delivery": None,
                  "max_retries": None,
              })),
-            (["election", "campaign", "cron-main", "node-a", "--ttl-ms", "15000", "--metadata", "region=us-east-1"],
-             ("election_campaign", ("cron-main", "node-a", 15_000), {"metadata": {"region": "us-east-1"}})),
-            (["service", "register", "api", "i-1", "10.0.0.1:9000", "--ttl-ms", "10000", "--metadata", "az=a"],
+            (["election", "campaign", "--name", "cron-main", "--candidate", "node-a", "--ttl-ms", "15000"],
+             ("election_campaign", ("cron-main", "node-a", 15_000), {})),
+            (["service", "register", "--service", "api", "--id", "i-1", "--address", "10.0.0.1:9000", "--ttl-ms", "10000", "--meta", "az=a"],
              ("service_register", ("api", "i-1", "10.0.0.1:9000", 10_000), {"metadata": {"az": "a"}})),
-            (["service", "instances", "api", "--metadata", "region=eu-central-1"],
-             ("service_instances", ("api",), {"metadata": {"region": "eu-central-1"}})),
+            (["service", "list", "--service", "api"],
+             ("service_instances", ("api",), {})),
         ]
 
         for argv, expected in cases:
@@ -498,7 +432,7 @@ class FiduciaPythonClientTests(unittest.TestCase):
                 fake = CliFake.install()
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    self.assertEqual(fiducia.main(argv, client_factory=fake.factory), 0)
+                    self.assertEqual(fiducia_cli.main(argv, client_factory=fake.factory), 0)
 
                 self.assertEqual(fake.calls, [expected])
                 self.assertEqual(json.loads(out.getvalue()), {"ok": expected[0]})

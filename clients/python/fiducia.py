@@ -152,6 +152,8 @@ class FiduciaClient:
 
     def _request_once(self, method, path, body=None, request_opts=None):
         request_opts = request_opts or {}
+        body = ({key: value for key, value in body.items() if value is not None}
+                if isinstance(body, dict) else body)
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
