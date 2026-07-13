@@ -176,6 +176,20 @@ customer retry idempotency keys: TypeScript `idempotencyKey`, Python
 `idempotency_key`, Go `IdempotencyKey`, and Rust
 `RequestControl.idempotency_key`.
 
+TypeScript, Python, and Go retry non-idempotent requests only when the caller
+supplies one stable `Idempotency-Key`; they never invent a header that could
+falsely imply replay safety at a direct node. That header is consumed by the
+hosted edge/load-balancer path. Callers pointed straight at a fiducia-node must
+rely on the primitive's documented idempotence or avoid ambiguous mutation
+retries because the node does not provide the customer HTTP-header replay
+ledger. Retrying GET/HEAD and single-shot mutations remain keyless.
+The Rust client never invents a customer key: ambiguous transport/5xx retries
+there require `RequestControl.idempotency_key` (broker-style `429`/`503`
+rejections remain retryable because the server rejected them before applying
+the operation). First-tier default transports also refuse HTTP redirects so a
+mutation and its credentials cannot be replayed to `Location`; injected custom
+Go/TypeScript transports must preserve that no-redirect policy themselves.
+
 For the hosted B2B flow, each service replica registers itself, campaigns for a
 named role, renews before its lease expires, and stops leader-only work if renew
 fails or returns `not_leader`. The winning replica gets a monotonic

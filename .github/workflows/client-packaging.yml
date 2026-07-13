@@ -44,8 +44,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "8.0.x"
       - name: Pack (publishable .nupkg)
@@ -89,8 +89,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: haskell-actions/setup@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: haskell-actions/setup@cd0d9bdd65b20557f41bea4dbe43d0b5fbbfe553 # v2
         with:
           ghc-version: "9.10.3"
           cabal-version: "latest"
@@ -118,8 +118,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"          # OTP 27+ required (stdlib json module)
           rebar3-version: "3"
@@ -146,13 +146,13 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps for luasec
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
-      - uses: leafo/gh-actions-lua@v10
+      - uses: leafo/gh-actions-lua@35bcb06abec04ec87df82e08caa84d545348536e # v10
         with:
           luaVersion: "5.4"
-      - uses: leafo/gh-actions-luarocks@v4
+      - uses: leafo/gh-actions-luarocks@e65774a6386cb4f24e293dca7fc4ff89165b64c5 # v4
       - name: luarocks make into a temp tree (publishable artifact) + runtime deps
         working-directory: clients/lua
         run: |
@@ -176,8 +176,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: jiro4989/setup-nim-action@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec # v2
         with:
           nim-version: "2.2.x"
       - name: nimble install into a temp (publishable artifact)
@@ -204,13 +204,13 @@ jobs:
     continue-on-error: true
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "17"
           cache: sbt
-      - uses: sbt/setup-sbt@v1
+      - uses: sbt/setup-sbt@66fb4376e81982c7d92a4074170846fff88e2e30 # v1
       - name: publishLocal (publishable artifact → ~/.ivy2/local)
         working-directory: clients/scala
         run: sbt publishLocal
@@ -219,7 +219,7 @@ jobs:
           jar=$(find "$HOME/.ivy2/local/cloud.fiducia" -name 'fiducia-client_2.13.jar' | head -1)
           echo "artifact: $jar"; test -n "$jar"
           unzip -l "$jar" | grep -q 'cloud/fiducia/FiduciaClient.class'
-      - uses: VirtusLab/scala-cli-setup@v1
+      - uses: VirtusLab/scala-cli-setup@42e5f90b7aed2c0478e8074e5c25a030e1db3af6 # v1
       - name: Smoke — resolve + compile a consumer against the published artifact
         run: |
           cd "$RUNNER_TEMP" && mkdir -p consumer && cd consumer
@@ -238,13 +238,13 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "11"          # build.gradle.kts declares kotlin { jvmToolchain(11) }
           cache: gradle
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
         with:
           gradle-version: "8.10.2"    # no wrapper is committed; provide gradle on PATH
       - name: publishToMavenLocal (publishable artifact → ~/.m2)
@@ -279,12 +279,12 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "17"          # transport is JDK java.net.http (JDK 11+)
-      - uses: DeLaGuardo/setup-clojure@12
+      - uses: DeLaGuardo/setup-clojure@c72ba59d25875f7523e06a671431b5f9f084992d # 12.6
         with:
           cli: "1.12.0.1488"
       - name: Build jar (publishable artifact → Clojars/Maven)
@@ -310,7 +310,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - name: Stage shipped artifact + assert must_contain
@@ -340,7 +340,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev
       - name: Stage shipped artifact + assert must_contain
@@ -368,8 +368,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: "0.16.0"
       - name: Build the module tarball (publishable artifact) + assert must_contain
@@ -412,8 +412,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: erlef/setup-beam@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"
           gleam-version: "1.16.0"
@@ -433,8 +433,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: swift-actions/setup-swift@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         with:
           swift-version: "5.10"
       - name: Assert archive integrity (must_contain)
@@ -452,8 +452,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: crystal-lang/install-crystal@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
           crystal: "1.20.3"
       - name: Assert archive integrity (must_contain)
@@ -474,8 +474,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
         with:
           version: "1.10"
       - name: Assert archive integrity (must_contain)
@@ -493,8 +493,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: ocaml/setup-ocaml@v3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
         with:
           ocaml-compiler: "5.2"
       - name: Assert archive integrity (must_contain)
@@ -515,8 +515,8 @@ jobs:
     continue-on-error: true
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: r-lib/actions/setup-r@v2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
         with:
           r-version: "release"
       - name: R CMD build (publishable tarball)

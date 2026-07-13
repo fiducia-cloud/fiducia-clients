@@ -160,9 +160,21 @@ type Client struct {
 	RetryDelay         time.Duration
 }
 
-// New returns a client for the given base URL.
+// New returns a client for the given base URL. Its transport hard-refuses
+// redirects (like the TypeScript, Rust, and wasm clients): a coordination API
+// never 3xxes, and following one would replay this (possibly mutating) request
+// — plus its Idempotency-Key header — to an attacker-controlled Location,
+// including an https->http downgrade. A 3xx surfaces as *Error instead.
 func New(baseURL string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: http.DefaultClient}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: noRedirectHTTPClient()}
+}
+
+func noRedirectHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func (c *Client) request(method, path string, body any) (map[string]any, error) {
@@ -171,6 +183,10 @@ func (c *Client) request(method, path string, body any) (map[string]any, error) 
 
 func (c *Client) requestWithControl(method, path string, body any, ctrl requestControl) (map[string]any, error) {
 	maxRetries := c.resolveRetryMax(ctrl)
+	// Non-idempotent requests are retried only when the caller explicitly binds
+	// them to a durable Idempotency-Key. Inventing a header here would be unsafe:
+	// hosted gateways consume it, but a direct node endpoint does not.
+	replaySafe := isIdempotentMethod(method) || ctrl.IdempotencyKey != ""
 	for attempt := 0; ; attempt++ {
 		data, err := c.requestOnce(method, path, body, ctrl)
 		if err == nil {
@@ -179,7 +195,7 @@ func (c *Client) requestWithControl(method, path string, body any, ctrl requestC
 		if ctrl.Context != nil && ctrl.Context.Err() != nil {
 			return nil, err
 		}
-		if attempt >= maxRetries || !retryable(err) {
+		if attempt >= maxRetries || !retryable(err, replaySafe) {
 			return nil, err
 		}
 		if ctrl.RetryDelay > 0 {
@@ -228,13 +244,36 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 		return nil, err
 	}
 	defer res.Body.Close()
-	raw, _ := io.ReadAll(res.Body)
+	raw, readErr := io.ReadAll(res.Body)
+	if readErr != nil {
+		if res.StatusCode >= 300 {
+			return nil, &Error{Status: res.StatusCode, Body: map[string]any{
+				"error": "truncated_error_response",
+			}}
+		}
+		return nil, fmt.Errorf("fiducia: reading HTTP %d response: %w", res.StatusCode, readErr)
+	}
 	var data map[string]any
+	var decodeErr error
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &data)
+		decodeErr = json.Unmarshal(raw, &data)
+	}
+	// Hard-reject redirects (the transport never follows them; see New). Match
+	// the TypeScript client's error shape so callers can detect it uniformly.
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return nil, &Error{Status: res.StatusCode, Body: map[string]any{
+			"error":    "redirect_not_followed",
+			"location": res.Header.Get("Location"),
+		}}
 	}
 	if res.StatusCode >= 300 {
+		if decodeErr != nil {
+			data = map[string]any{"error": "invalid_error_response"}
+		}
 		return nil, &Error{Status: res.StatusCode, Body: data}
+	}
+	if decodeErr != nil {
+		return nil, fmt.Errorf("fiducia: decoding HTTP %d JSON response: %w", res.StatusCode, decodeErr)
 	}
 	return data, nil
 }
@@ -264,7 +303,27 @@ func (c *Client) resolveRetryMax(ctrl requestControl) int {
 	return 0
 }
 
-func retryable(err error) bool {
+// isIdempotentMethod reports whether a method is safe to retry without an
+// idempotency key. Per RFC 7231 GET/HEAD/OPTIONS and the idempotent-by-contract
+// PUT/DELETE converge to the same server state when replayed; only POST
+// (lock/semaphore acquire, release) can duplicate on retry.
+func isIdempotentMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryable(err error, replaySafe bool) bool {
+	// Never retry a non-idempotent mutation that carries no idempotency key —
+	// replaying it could duplicate a committed-but-unacked effect.
+	// The caller must opt into the hosted gateway's replay ledger by supplying
+	// one key; direct nodes intentionally ignore the customer HTTP header.
+	if !replaySafe {
+		return false
+	}
 	if errors.Is(err, context.Canceled) {
 		return false
 	}

@@ -53,6 +53,58 @@ class FiduciaTimeoutError(Exception):
     pass
 
 
+def _http_error_to_fiducia_error(e):
+    """Map an HTTPError to a FiduciaError; a refused 3xx gets the shared
+    redirect_not_followed shape (matching the TypeScript and Go clients)."""
+    if 300 <= e.code < 400:
+        return FiduciaError(e.code, {
+            "error": "redirect_not_followed",
+            "message": "fiducia: refusing to follow redirect (%s)" % e.code,
+            "location": e.headers.get("location") if e.headers else None,
+        })
+    raw = e.read()
+    if not raw:
+        return FiduciaError(e.code, None)
+    try:
+        text = raw.decode()
+    except UnicodeDecodeError:
+        return FiduciaError(e.code, {"error": "non_utf8_error_response"})
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError:
+        # Proxies commonly emit plain-text/HTML 5xx responses. Preserve the HTTP
+        # status so retry policy still works, while bounding diagnostic content.
+        body = {"error": "non_json_error_response", "message": text[:1024]}
+    return FiduciaError(e.code, body)
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Hard-reject redirects (like the TypeScript, Go, Rust, and wasm clients).
+
+    A coordination API never 3xxes, and following one would replay this
+    (possibly mutating) request — plus its Idempotency-Key header — to an
+    attacker-controlled Location, including an https->http downgrade.
+    Returning None makes urlopen raise the 3xx as an HTTPError instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects())
+
+
+def _urlopen(req, timeout):
+    """Single transport seam: every request goes through the no-redirect opener."""
+    return _OPENER.open(req, timeout=timeout)
+
+
+# Methods safe to retry without an idempotency key. Per RFC 7231 GET/HEAD/OPTIONS
+# and the idempotent-by-contract PUT/DELETE converge to the same server state when
+# replayed; only POST (lock/semaphore acquire, release) can duplicate on retry.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
 def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
@@ -83,11 +135,17 @@ class FiduciaClient:
     def _request(self, method, path, body=None, **request_opts):
         max_retries = self._resolve_retries(request_opts)
         retry_delay = self._resolve_retry_delay(request_opts)
+        # A non-idempotent request is retried only when the caller explicitly
+        # supplies one stable key for the hosted gateway replay ledger. Direct
+        # node endpoints do not consume the customer Idempotency-Key header.
+        idempotent = method.upper() in _IDEMPOTENT_METHODS
+        has_key = bool(request_opts.get("idempotency_key") or request_opts.get("idempotencyKey"))
+        replay_safe = idempotent or has_key
         for attempt in range(max_retries + 1):
             try:
                 return self._request_once(method, path, body, request_opts)
             except Exception as exc:
-                if attempt >= max_retries or not self._retryable(exc):
+                if attempt >= max_retries or not self._retryable(exc, replay_safe):
                     raise
                 if retry_delay:
                     time.sleep(retry_delay)
@@ -102,12 +160,11 @@ class FiduciaClient:
         if idempotency_key:
             req.add_header("Idempotency-Key", str(idempotency_key))
         try:
-            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
+            with _urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 text = r.read().decode()
                 return json.loads(text) if text else None
         except urllib.error.HTTPError as e:
-            text = e.read().decode()
-            raise FiduciaError(e.code, json.loads(text) if text else None)
+            raise _http_error_to_fiducia_error(e)
         except TimeoutError as e:
             raise FiduciaTimeoutError(str(e))
 
@@ -115,7 +172,7 @@ class FiduciaClient:
         req = urllib.request.Request(self.base + path, method="GET")
         req.add_header("accept", "text/event-stream")
         try:
-            with urllib.request.urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
+            with _urlopen(req, timeout=self._resolve_timeout(request_opts)) as r:
                 event = {}
                 data = []
                 for raw_line in r:
@@ -141,8 +198,7 @@ class FiduciaClient:
                 if decoded is not None:
                     yield decoded
         except urllib.error.HTTPError as e:
-            text = e.read().decode()
-            raise FiduciaError(e.code, json.loads(text) if text else None)
+            raise _http_error_to_fiducia_error(e)
         except TimeoutError as e:
             raise FiduciaTimeoutError(str(e))
 
@@ -173,7 +229,12 @@ class FiduciaClient:
             return opts["retry_delay"]
         return self.retry_delay or 0
 
-    def _retryable(self, exc):
+    def _retryable(self, exc, replay_safe):
+        # Never retry a non-idempotent mutation that carries no idempotency key —
+        # replaying it could duplicate a committed-but-unacked effect. The
+        # caller must explicitly opt into the hosted gateway replay ledger.
+        if not replay_safe:
+            return False
         if isinstance(exc, FiduciaError):
             return exc.status in (408, 425, 429, 500, 502, 503, 504)
         return isinstance(exc, (FiduciaTimeoutError, TimeoutError, urllib.error.URLError))

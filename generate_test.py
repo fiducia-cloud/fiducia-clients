@@ -182,6 +182,35 @@ class FirstTierEmitterRegression(unittest.TestCase):
         for src in (g.gen_python(), g.gen_ts(), g.gen_go()):
             self.assertNotIn("{{GENERATED_OPERATIONS}}", src)
 
+    def test_go_and_python_default_transports_refuse_redirects(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertIn("CheckRedirect", go)
+        self.assertIn("http.ErrUseLastResponse", go)
+        self.assertIn('"error":    "redirect_not_followed"', go)
+        self.assertIn("class _RefuseRedirects", python)
+        self.assertIn("_OPENER.open", python)
+        self.assertIn('"error": "redirect_not_followed"', python)
+
+    def test_go_and_python_require_explicit_keys_for_mutation_retries(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertNotIn("genIdempotencyKey", go)
+        self.assertIn('replaySafe := isIdempotentMethod(method) || ctrl.IdempotencyKey != ""', go)
+        self.assertIn('req.Header.Set("Idempotency-Key", ctrl.IdempotencyKey)', go)
+        self.assertNotIn("_gen_idempotency_key", python)
+        self.assertIn("replay_safe = idempotent or has_key", python)
+        self.assertIn('req.add_header("Idempotency-Key", str(idempotency_key))', python)
+
+    def test_go_and_python_preserve_retryable_response_failures(self):
+        go = g.gen_go()
+        python = g.gen_python()
+        self.assertIn("raw, readErr := io.ReadAll(res.Body)", go)
+        self.assertIn('"error": "truncated_error_response"', go)
+        self.assertIn("if decodeErr != nil", go)
+        self.assertIn('"error": "non_json_error_response"', python)
+        self.assertIn("except json.JSONDecodeError", python)
+
 
 def _method_body(src, op_name):
     """Return the source of one `pub async fn <op_name>(...) { ... }` block."""

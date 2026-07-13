@@ -6,8 +6,11 @@ import os
 import pathlib
 import re
 import sys
+import threading
 import unittest
 import unittest.mock
+import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -56,7 +59,7 @@ class FiduciaPythonClientTests(unittest.TestCase):
             return Response()
 
         client = fiducia.FiduciaClient("https://fiducia.test", timeout=9)
-        with unittest.mock.patch.object(fiducia.urllib.request, "urlopen", fake_urlopen):
+        with unittest.mock.patch.object(fiducia, "_urlopen", fake_urlopen):
             self.assertEqual(
                 client.kv_put("orders/42", "paid", idempotency_key="req_order_42"),
                 {"ok": True},
@@ -67,6 +70,149 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assertEqual(captured["headers"]["content-type"], "application/json")
         self.assertEqual(captured["body"], {"value": "paid", "ttl_ms": None, "prev_revision": None})
         self.assertEqual(captured["timeout"], 9)
+
+    def test_keyless_post_is_not_retried(self):
+        calls = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def flaky_urlopen(req, timeout):
+            del timeout
+            headers = {key.lower(): value for key, value in req.header_items()}
+            calls.append(headers.get("idempotency-key"))
+            if len(calls) == 1:
+                raise urllib.error.URLError("response lost")
+            return Response()
+
+        client = fiducia.FiduciaClient("https://fiducia.test", max_retries=1)
+        with unittest.mock.patch.object(fiducia, "_urlopen", flaky_urlopen), self.assertRaises(urllib.error.URLError):
+            client.try_lock("orders/42", holder="worker-a")
+
+        self.assertEqual(calls, [None])
+
+    def test_retry_keeps_caller_key_but_leaves_get_and_single_shot_post_keyless(self):
+        calls = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def record(req, timeout):
+            del timeout
+            headers = {key.lower(): value for key, value in req.header_items()}
+            calls.append((req.get_method(), headers.get("idempotency-key")))
+            return Response()
+
+        with unittest.mock.patch.object(fiducia, "_urlopen", record):
+            retrying = fiducia.FiduciaClient("https://fiducia.test", max_retries=1)
+            retrying.try_lock(
+                "orders/42",
+                holder="worker-a",
+                idempotency_key="caller-key",
+            )
+            retrying.lock_get("orders/42")
+            fiducia.FiduciaClient("https://fiducia.test").try_lock(
+                "orders/43",
+                holder="worker-a",
+            )
+
+        self.assertEqual(
+            calls,
+            [("POST", "caller-key"), ("GET", None), ("POST", None)],
+        )
+
+    def test_redirect_is_not_followed_or_retried(self):
+        hits = {"source": 0, "target": 0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                hits["source"] += 1
+                self.send_response(302)
+                self.send_header("location", "/stolen")
+                self.end_headers()
+
+            def do_GET(self):
+                hits["target"] += 1
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"stolen": true}')
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = fiducia.FiduciaClient(
+                "http://127.0.0.1:%d" % server.server_port,
+                max_retries=3,
+            )
+            with self.assertRaises(fiducia.FiduciaError) as raised:
+                client.try_lock("orders/42", holder="worker-a")
+            self.assertEqual(raised.exception.status, 302)
+            self.assertEqual(raised.exception.body["error"], "redirect_not_followed")
+            self.assertEqual(raised.exception.body["location"], "/stolen")
+            self.assertEqual(hits, {"source": 1, "target": 0})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_plain_text_503_preserves_status_and_retries_with_one_key(self):
+        calls = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def flaky(req, timeout):
+            del timeout
+            headers = {key.lower(): value for key, value in req.header_items()}
+            calls.append(headers.get("idempotency-key"))
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(
+                    req.full_url,
+                    503,
+                    "unavailable",
+                    {},
+                    io.BytesIO(b"proxy temporarily unavailable"),
+                )
+            return Response()
+
+        client = fiducia.FiduciaClient("https://fiducia.test", max_retries=1)
+        with unittest.mock.patch.object(fiducia, "_urlopen", flaky):
+            self.assertEqual(
+                client.try_lock(
+                    "orders/42",
+                    holder="worker-a",
+                    idempotency_key="caller-key",
+                ),
+                {"ok": True},
+            )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, ["caller-key", "caller-key"])
 
     def test_sdk_sources_use_live_lock_semaphore_and_kv_routes(self):
         repo = pathlib.Path(__file__).resolve().parents[2]

@@ -242,23 +242,24 @@ function flakyFetch(calls: RecordedCall[], failFirst: number): typeof fetch {
   }) as typeof fetch;
 }
 
-test("retried POST mutations pin one stable idempotency key across attempts", async () => {
+test("keyless POST mutations are not retried", async () => {
   const calls: RecordedCall[] = [];
   const client = new FiduciaClient("https://fiducia.test", {
     fetch: flakyFetch(calls, 1),
     maxRetries: 2,
   });
 
-  await client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 });
+  await assert.rejects(
+    () => client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 }),
+    TypeError,
+  );
 
-  // two attempts (first failed, second succeeded), both to the mutating route
-  assert.equal(calls.length, 2);
+  // A generated header would falsely imply safety at a direct node, which does
+  // not consume the hosted gateway's customer replay key.
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].path, "/v1/locks/acquire");
-  // both attempts carry a key, and it is the SAME key — so the server dedups the
-  // committed-but-lost first attempt instead of granting a second acquire.
-  assert.ok(calls[0].idempotencyKey, "first attempt must carry an idempotency key");
-  assert.equal(calls[1].idempotencyKey, calls[0].idempotencyKey);
+  assert.equal(calls[0].idempotencyKey, undefined);
 });
 
 test("caller-supplied idempotency key is reused, not overwritten, on retry", async () => {
