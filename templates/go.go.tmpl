@@ -162,9 +162,21 @@ type Client struct {
 	RetryDelay         time.Duration
 }
 
-// New returns a client for the given base URL.
+// New returns a client for the given base URL. Its transport hard-refuses
+// redirects (like the TypeScript, Rust, and wasm clients): a coordination API
+// never 3xxes, and following one would replay this (possibly mutating) request
+// — plus its Idempotency-Key header — to an attacker-controlled Location,
+// including an https->http downgrade. A 3xx surfaces as *Error instead.
 func New(baseURL string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: http.DefaultClient}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: noRedirectHTTPClient()}
+}
+
+func noRedirectHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func (c *Client) request(method, path string, body any) (map[string]any, error) {
