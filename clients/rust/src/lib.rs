@@ -93,6 +93,13 @@ pub struct FiduciaClient {
     pub lock_request_timeout: Option<Duration>,
     pub retry_max: usize,
     pub retry_delay: Duration,
+    /// Internal-hop secret (`x-fiducia-internal-auth`). Set only when calling a
+    /// fiducia-node directly (bypassing the edge/LB) as a trusted internal
+    /// service; leave `None` for customer-facing edge/LB calls.
+    pub internal_auth: Option<String>,
+    /// Org scope (`x-fiducia-org-id`) attached to internal-hop calls so the node
+    /// can attribute/scope the request to a tenant.
+    pub org_scope: Option<String>,
 }
 
 impl FiduciaClient {
@@ -104,7 +111,20 @@ impl FiduciaClient {
             lock_request_timeout: None,
             retry_max: 0,
             retry_delay: Duration::ZERO,
+            internal_auth: None,
+            org_scope: None,
         }
+    }
+
+    /// A client for the trusted internal hop straight to a fiducia-node: attaches
+    /// the internal-auth secret and org scope to every request. Use this from a
+    /// service (never from an untrusted client) to read/write a tenant's
+    /// coordination state.
+    pub fn internal(base_url: &str, internal_secret: &str, org_id: &str) -> Self {
+        let mut client = Self::new(base_url);
+        client.internal_auth = Some(internal_secret.to_string());
+        client.org_scope = Some(org_id.to_string());
+        client
     }
 
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
@@ -163,6 +183,13 @@ impl FiduciaClient {
         }
         if let Some(key) = control.idempotency_key.as_deref() {
             req = req.set("Idempotency-Key", key);
+        }
+        // Internal-hop headers (only present on clients built via `internal()`).
+        if let Some(secret) = self.internal_auth.as_deref() {
+            req = req.set("x-fiducia-internal-auth", secret);
+        }
+        if let Some(org) = self.org_scope.as_deref() {
+            req = req.set("x-fiducia-org-id", org);
         }
         let resp = match body {
             Some(b) => req.send_json(b),
