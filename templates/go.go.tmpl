@@ -257,6 +257,14 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &data)
 	}
+	// Hard-reject redirects (the transport never follows them; see New). Match
+	// the TypeScript client's error shape so callers can detect it uniformly.
+	if res.StatusCode >= 300 && res.StatusCode < 400 {
+		return nil, &Error{Status: res.StatusCode, Body: map[string]any{
+			"error":    "redirect_not_followed",
+			"location": res.Header.Get("Location"),
+		}}
+	}
 	if res.StatusCode >= 300 {
 		return nil, &Error{Status: res.StatusCode, Body: data}
 	}
