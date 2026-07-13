@@ -14,57 +14,78 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Each language client is tested best-effort: several carry local path deps on
-# the sibling fiducia-interfaces repo (go `replace`, cargo `path`, npm registry
-# @fiducia/interfaces) that aren't present in single-repo CI, so a failure must
-# not gate the others. Mirrors the multi-language Dockerfile.
+# Language clients with sibling path dependencies check out fiducia-interfaces
+# beside this repository, matching the local workspace layout. These jobs are
+# release gates: a generated SDK that does not compile must fail CI.
 jobs:
   go:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: actions/setup-go@v6
         with:
-          go-version-file: clients/go/go.mod
-      - working-directory: clients/go
+          go-version-file: fiducia-clients/clients/go/go.mod
+      - working-directory: fiducia-clients/clients/go
         run: go test ./...
 
   python:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - working-directory: clients/python
+      - working-directory: fiducia-clients/clients/python
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m unittest fiducia_test.py
 
   ts:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm ci || npm install
       # npm test == node --test --experimental-strip-types fiducia.test.ts
-      - working-directory: clients/ts
+      - working-directory: fiducia-clients/clients/ts
         run: npm test
 
   rust:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: fiducia-clients
+      - uses: actions/checkout@v7
+        with:
+          repository: fiducia-cloud/fiducia-interfaces
+          path: fiducia-interfaces
       - uses: dtolnay/rust-toolchain@stable
-      - working-directory: clients/rust
-        run: cargo test
+        with:
+          components: rustfmt, clippy
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo fmt --check
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - working-directory: fiducia-clients/clients/rust
+        run: cargo test --all-targets --locked
 
   # clients/rust-wasm is generated from operations.json and self-contained (no
   # sibling-repo path deps), so it is a HARD gate — not continue-on-error.

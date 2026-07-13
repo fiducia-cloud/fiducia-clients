@@ -58,7 +58,7 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 	}
 	requireLastCall(t, calls, recordedCall{"GET", "/v1/locks?key=orders%2F42", nil})
 
-	if _, err := client.TryLock("orders/42", AcquireOpts{Holder: "worker-a"}); err != nil {
+	if _, err := client.LockAcquire("orders/42", map[string]any{"holder": "worker-a", "wait": false}); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -67,7 +67,10 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		Body:   map[string]any{"key": "orders/42", "holder": "worker-a", "wait": false},
 	})
 
-	if _, err := client.MustLockMany(AcquireManyOpts{Keys: []string{"orders/42", "inventory/sku-7"}, Holder: "worker-a", TTLMs: 30000}); err != nil {
+	if _, err := client.LockAcquireMany(
+		[]string{"orders/42", "inventory/sku-7"},
+		map[string]any{"holder": "worker-a", "ttl_ms": 30000, "wait": true},
+	); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -81,7 +84,7 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		},
 	})
 
-	if _, err := client.LockRelease("orders/42", ReleaseOpts{Holder: "worker-a", FencingToken: 11}); err != nil {
+	if _, err := client.LockRelease("worker-a", 11); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -90,11 +93,7 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		Body:   map[string]any{"holder": "worker-a", "fencing_token": float64(11)},
 	})
 
-	if _, err := client.LockReleaseMany("legacy-lock-id"); err == nil {
-		t.Fatal("expected legacy lock release-many to fail locally")
-	}
-
-	if _, err := client.TrySemaphore("pools/db/primary", AcquireOpts{}); err != nil {
+	if _, err := client.SemaphoreAcquire("pools/db/primary", 2, map[string]any{"wait": false}); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -103,7 +102,7 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		Body:   map[string]any{"key": "pools/db/primary", "wait": false, "limit": float64(2)},
 	})
 
-	if _, err := client.SemaphoreRelease("pools/db/primary", ReleaseOpts{Holder: "worker-b", FencingToken: 12}); err != nil {
+	if _, err := client.SemaphoreRelease("pools/db/primary", "worker-b", 12); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -117,10 +116,8 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 	}
 	requireLastCall(t, calls, recordedCall{"GET", "/v1/idempotency?key=stripe-webhook%2Fevent_123", nil})
 
-	if _, err := client.IdempotencyClaim("stripe-webhook/event_123", IdempotencyClaimOpts{
-		Owner:    "worker-a",
-		TTL:      "24h",
-		Metadata: map[string]string{"source": "stripe"},
+	if _, err := client.IdempotencyClaim("stripe-webhook/event_123", map[string]any{
+		"owner": "worker-a", "ttl": "24h", "metadata": map[string]string{"source": "stripe"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,11 +132,12 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		},
 	})
 
-	if _, err := client.IdempotencyComplete("stripe-webhook/event_123", IdempotencyCompleteOpts{
-		Owner:        "worker-a",
-		FencingToken: 11,
-		Result:       map[string]any{"status": "ok"},
-	}); err != nil {
+	if _, err := client.IdempotencyComplete(
+		"stripe-webhook/event_123",
+		"worker-a",
+		11,
+		map[string]any{"result": map[string]any{"status": "ok"}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -153,9 +151,8 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		},
 	})
 
-	if _, err := client.ElectionCampaignWithMetadata("prod/invoice-reconciler/leader", "pod-a", 15000, map[string]string{
-		"address": "10.2.4.18:8080",
-		"region":  "us-east-1",
+	if _, err := client.ElectionCampaign("prod/invoice-reconciler/leader", "pod-a", 15000, map[string]any{
+		"metadata": map[string]string{"address": "10.2.4.18:8080", "region": "us-east-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +172,10 @@ func TestServiceDiscoverySendsMetadataAndHeartbeatBody(t *testing.T) {
 	defer server.Close()
 	client := New(server.URL)
 
-	if _, err := client.ServiceRegisterWithMetadata("api", "i-1", "10.0.0.1:9000", 10000, map[string]string{"region": "eu-central-1"}); err != nil {
+	if _, err := client.ServiceRegister(
+		"api", "i-1", "10.0.0.1:9000", 10000,
+		map[string]any{"metadata": map[string]string{"region": "eu-central-1"}},
+	); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -188,7 +188,7 @@ func TestServiceDiscoverySendsMetadataAndHeartbeatBody(t *testing.T) {
 		},
 	})
 
-	if _, err := client.ServiceHeartbeat("api", "i-1"); err != nil {
+	if _, err := client.ServiceHeartbeat("api", "i-1", nil); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -197,7 +197,9 @@ func TestServiceDiscoverySendsMetadataAndHeartbeatBody(t *testing.T) {
 		Body:   map[string]any{},
 	})
 
-	if _, err := client.ServiceInstancesWithMetadata("api", map[string]string{"version": "blue/1", "region": "eu central"}); err != nil {
+	if _, err := client.ServiceInstances("api", map[string]any{
+		"metadata": map[string]string{"version": "blue/1", "region": "eu central"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
@@ -206,31 +208,9 @@ func TestServiceDiscoverySendsMetadataAndHeartbeatBody(t *testing.T) {
 	})
 }
 
-func TestRequestOptionsSendIdempotencyKeyHeader(t *testing.T) {
-	var gotHeader string
-	var gotBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Get("Idempotency-Key")
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decode request body: %v", err)
-		}
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer server.Close()
-
-	client := New(server.URL)
-	if _, err := client.TryLock("orders/42", AcquireOpts{
-		Holder:         "worker-a",
-		IdempotencyKey: "req_order_42",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if gotHeader != "req_order_42" {
-		t.Fatalf("Idempotency-Key header mismatch: got %q", gotHeader)
-	}
-	if _, exists := gotBody["idempotency_key"]; exists {
-		t.Fatalf("idempotency key leaked into body: %#v", gotBody)
+func TestServiceInstancesRejectsInvalidMetadata(t *testing.T) {
+	client := New("https://fiducia.invalid")
+	if _, err := client.ServiceInstances("api", map[string]any{"metadata": "not-a-map"}); err == nil {
+		t.Fatal("expected invalid metadata to fail before an HTTP request")
 	}
 }

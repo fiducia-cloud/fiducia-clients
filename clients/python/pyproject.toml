@@ -21,7 +21,7 @@ classifiers = [
 Repository = "https://github.com/fiducia-cloud/fiducia-clients"
 
 [project.scripts]
-fiducia = "fiducia:main"
+fiducia = "cli:main"
 
 [tool.setuptools]
-py-modules = ["fiducia"]
+py-modules = ["fiducia", "cli"]

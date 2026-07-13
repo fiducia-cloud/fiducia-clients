@@ -131,6 +131,30 @@ class QueryAndPathEncoding(unittest.TestCase):
         self.assertIn('_q.push(format!("key={}"', lines[0])
 
 
+class HostLanguageRegression(unittest.TestCase):
+    def test_python_escapes_reserved_parameter_names(self):
+        generated = g.gen_python()
+        compile(generated, "generated-fiducia.py", "exec")
+        self.assertIn("def handoff_offer(self, name, resource, from_, to, from_token", generated)
+        self.assertIn('"from": from_', generated)
+
+    def test_typescript_uses_node_strip_safe_constructors(self):
+        generated = g.gen_ts()
+        self.assertNotIn("constructor(public ", generated)
+        self.assertNotIn("constructor(private ", generated)
+        self.assertIn("this.status = status", generated)
+        self.assertIn("this.base = base", generated)
+
+    def test_optional_metadata_query_is_built_from_options(self):
+        generated_go = g.gen_go()
+        self.assertIn('addMetadataQuery(path, opts["metadata"])', generated_go)
+        self.assertNotIn("enc(metadata)", generated_go)
+        generated_ts = g.gen_ts()
+        self.assertIn("Object.entries(opts.metadata)", generated_ts)
+        generated_python = g.gen_python()
+        self.assertIn("_metadata_query(path, metadata)", generated_python)
+
+
 class AllTargetsSmoke(unittest.TestCase):
     def test_all_generators_produce_nonempty_output(self):
         for name, (_rel, gen) in g.TARGETS.items():

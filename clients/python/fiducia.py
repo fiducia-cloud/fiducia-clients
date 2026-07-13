@@ -21,15 +21,24 @@ def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
 
+def _metadata_query(path, metadata):
+    if not metadata:
+        return path
+    pairs = [("metadata.%s" % key, str(value)) for key, value in metadata.items()]
+    return path + ("&" if "?" in path else "?") + urllib.parse.urlencode(sorted(pairs))
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30):
         self.base, self.timeout = base_url.rstrip("/"), timeout
 
-    def _request(self, method, path, body=None):
+    def _request(self, method, path, body=None, idempotency_key=None):
         data = _json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
             req.add_header("content-type", "application/json")
+        if idempotency_key is not None:
+            req.add_header("idempotency-key", idempotency_key)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 text = r.read().decode()
@@ -38,262 +47,500 @@ class FiduciaClient:
             text = e.read().decode()
             raise FiduciaError(e.code, _json.loads(text) if text else None)
 
-    def health(self):
+    def health(self, idempotency_key=None):
         """Liveness probe."""
-        return self._request("GET", "/healthz")
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/healthz", **request_opts)
 
-    def status(self):
+    def status(self, idempotency_key=None):
         """Per-shard consensus status."""
-        return self._request("GET", "/v1/status")
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/status", **request_opts)
 
-    def lock_get(self, key):
+    def lock_get(self, key, idempotency_key=None):
         """Inspect a lock member key: holder, the held union, and the FIFO wait queue."""
-        return self._request("GET", "/v1/locks?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/locks?key=%s" % _enc(key), **request_opts)
 
-    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=None):
+    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=None, idempotency_key=None):
         """Acquire a single-key lock (try-lock unless wait)."""
-        return self._request("POST", "/v1/locks/acquire", {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait}
+        return self._request("POST", "/v1/locks/acquire", body, **request_opts)
 
-    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=None):
+    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=None, idempotency_key=None):
         """Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key."""
-        return self._request("POST", "/v1/locks/acquire", {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait}
+        return self._request("POST", "/v1/locks/acquire", body, **request_opts)
 
-    def lock_release(self, holder, fencing_token):
+    def lock_release(self, holder, fencing_token, idempotency_key=None):
         """Release the whole grant (every member key) by its fencing token."""
-        return self._request("POST", "/v1/locks/release", {"holder": holder, "fencing_token": fencing_token})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"holder": holder, "fencing_token": fencing_token}
+        return self._request("POST", "/v1/locks/release", body, **request_opts)
 
-    def semaphore_get(self, key):
+    def semaphore_get(self, key, idempotency_key=None):
         """Inspect a semaphore: limit, holders, free permits, queue."""
-        return self._request("GET", "/v1/semaphores?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/semaphores?key=%s" % _enc(key), **request_opts)
 
-    def semaphore_acquire(self, key, limit, holder=None, ttl_ms=None, wait=None):
+    def semaphore_acquire(self, key, limit, holder=None, ttl_ms=None, wait=None, idempotency_key=None):
         """Take a permit of a counting semaphore (up to limit holders)."""
-        return self._request("POST", "/v1/semaphores/acquire", {"key": key, "limit": limit, "holder": holder, "ttl_ms": ttl_ms, "wait": wait})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "limit": limit, "holder": holder, "ttl_ms": ttl_ms, "wait": wait}
+        return self._request("POST", "/v1/semaphores/acquire", body, **request_opts)
 
-    def semaphore_release(self, key, holder, fencing_token):
+    def semaphore_release(self, key, holder, fencing_token, idempotency_key=None):
         """Return one permit (admits the next FIFO waiter)."""
-        return self._request("POST", "/v1/semaphores/release", {"key": key, "holder": holder, "fencing_token": fencing_token})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "holder": holder, "fencing_token": fencing_token}
+        return self._request("POST", "/v1/semaphores/release", body, **request_opts)
 
-    def idempotency_get(self, key):
+    def idempotency_get(self, key, idempotency_key=None):
         """Inspect an active idempotency record."""
-        return self._request("GET", "/v1/idempotency?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/idempotency?key=%s" % _enc(key), **request_opts)
 
-    def idempotency_claim(self, key, owner=None, ttl_ms=None, ttl=None, metadata=None):
+    def idempotency_claim(self, key, owner=None, ttl_ms=None, ttl=None, metadata=None, idempotency_key=None):
         """Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record."""
-        return self._request("POST", "/v1/idempotency/claim", {"key": key, "owner": owner, "ttl_ms": ttl_ms, "ttl": ttl, "metadata": metadata})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "owner": owner, "ttl_ms": ttl_ms, "ttl": ttl, "metadata": metadata}
+        return self._request("POST", "/v1/idempotency/claim", body, **request_opts)
 
-    def idempotency_complete(self, key, owner, fencing_token, result=None):
+    def idempotency_complete(self, key, owner, fencing_token, result=None, idempotency_key=None):
         """Mark a claimed idempotency key complete and optionally store a replayable result."""
-        return self._request("POST", "/v1/idempotency/complete", {"key": key, "owner": owner, "fencing_token": fencing_token, "result": result})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "owner": owner, "fencing_token": fencing_token, "result": result}
+        return self._request("POST", "/v1/idempotency/complete", body, **request_opts)
 
-    def kv_get(self, key):
+    def kv_get(self, key, idempotency_key=None):
         """Read a config key."""
-        return self._request("GET", "/v1/kv?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/kv?key=%s" % _enc(key), **request_opts)
 
-    def kv_put(self, key, value, ttl_ms=None, prev_revision=None):
+    def kv_put(self, key, value, ttl_ms=None, prev_revision=None, idempotency_key=None):
         """Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist)."""
-        return self._request("PUT", "/v1/kv?key=%s" % _enc(key), {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision}
+        return self._request("PUT", "/v1/kv?key=%s" % _enc(key), body, **request_opts)
 
-    def kv_delete(self, key):
+    def kv_delete(self, key, idempotency_key=None):
         """Delete a config key."""
-        return self._request("DELETE", "/v1/kv?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("DELETE", "/v1/kv?key=%s" % _enc(key), **request_opts)
 
-    def counter_get(self, key):
+    def counter_get(self, key, idempotency_key=None):
         """Read a counter's value and revision; absent reads as found=false (treat as 0)."""
-        return self._request("GET", "/v1/counters?key=%s" % _enc(key))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/counters?key=%s" % _enc(key), **request_opts)
 
-    def counter_add(self, key, delta, prev_revision=None):
+    def counter_add(self, key, delta, prev_revision=None, idempotency_key=None):
         """Atomically add delta (may be negative); prev_revision makes it a compare-and-set."""
-        return self._request("POST", "/v1/counters/add", {"key": key, "delta": delta, "prev_revision": prev_revision})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "delta": delta, "prev_revision": prev_revision}
+        return self._request("POST", "/v1/counters/add", body, **request_opts)
 
-    def counter_set(self, key, value, prev_revision=None):
+    def counter_set(self, key, value, prev_revision=None, idempotency_key=None):
         """Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set."""
-        return self._request("POST", "/v1/counters/set", {"key": key, "value": value, "prev_revision": prev_revision})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"key": key, "value": value, "prev_revision": prev_revision}
+        return self._request("POST", "/v1/counters/set", body, **request_opts)
 
-    def barrier_get(self, name):
+    def barrier_get(self, name, idempotency_key=None):
         """Read a barrier's arrivals and resolution status; absent reads as found=false."""
-        return self._request("GET", "/v1/barriers?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/barriers?name=%s" % _enc(name), **request_opts)
 
-    def barrier_create(self, name, policy, expected=None, deadline_ms=None):
+    def barrier_create(self, name, policy, expected=None, deadline_ms=None, idempotency_key=None):
         """Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum)."""
-        return self._request("POST", "/v1/barriers/create", {"name": name, "policy": policy, "expected": expected, "deadline_ms": deadline_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "policy": policy, "expected": expected, "deadline_ms": deadline_ms}
+        return self._request("POST", "/v1/barriers/create", body, **request_opts)
 
-    def barrier_arrive(self, name, participant, weight=None, veto=None):
+    def barrier_arrive(self, name, participant, weight=None, veto=None, idempotency_key=None):
         """Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent."""
-        return self._request("POST", "/v1/barriers/arrive", {"name": name, "participant": participant, "weight": weight, "veto": veto})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "participant": participant, "weight": weight, "veto": veto}
+        return self._request("POST", "/v1/barriers/arrive", body, **request_opts)
 
-    def task_get(self, name):
+    def task_get(self, name, idempotency_key=None):
         """Read a task's status, owner, and fencing token; absent reads as found=false."""
-        return self._request("GET", "/v1/tasks?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/tasks?name=%s" % _enc(name), **request_opts)
 
-    def task_create(self, name, task_type, payload=None, deadline_ms=None):
+    def task_create(self, name, task_type, payload=None, deadline_ms=None, idempotency_key=None):
         """Create a durable task if it does not exist (idempotent)."""
-        return self._request("POST", "/v1/tasks/create", {"name": name, "task_type": task_type, "payload": payload, "deadline_ms": deadline_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "task_type": task_type, "payload": payload, "deadline_ms": deadline_ms}
+        return self._request("POST", "/v1/tasks/create", body, **request_opts)
 
-    def task_claim(self, name, worker, ttl_ms=None):
+    def task_claim(self, name, worker, ttl_ms=None, idempotency_key=None):
         """Claim a pending or lease-expired task; the grant carries a fencing token."""
-        return self._request("POST", "/v1/tasks/claim", {"name": name, "worker": worker, "ttl_ms": ttl_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "worker": worker, "ttl_ms": ttl_ms}
+        return self._request("POST", "/v1/tasks/claim", body, **request_opts)
 
-    def task_progress(self, name, worker, fencing_token, percent=None, checkpoint=None):
+    def task_progress(self, name, worker, fencing_token, percent=None, checkpoint=None, idempotency_key=None):
         """Report progress and a checkpoint under the current fencing token."""
-        return self._request("POST", "/v1/tasks/progress", {"name": name, "worker": worker, "fencing_token": fencing_token, "percent": percent, "checkpoint": checkpoint})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "worker": worker, "fencing_token": fencing_token, "percent": percent, "checkpoint": checkpoint}
+        return self._request("POST", "/v1/tasks/progress", body, **request_opts)
 
-    def task_complete(self, name, worker, fencing_token, result=None):
+    def task_complete(self, name, worker, fencing_token, result=None, idempotency_key=None):
         """Complete a task with a durable result under the current fencing token."""
-        return self._request("POST", "/v1/tasks/complete", {"name": name, "worker": worker, "fencing_token": fencing_token, "result": result})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "worker": worker, "fencing_token": fencing_token, "result": result}
+        return self._request("POST", "/v1/tasks/complete", body, **request_opts)
 
-    def task_fail(self, name, worker, fencing_token, retryable=None):
+    def task_fail(self, name, worker, fencing_token, retryable=None, idempotency_key=None):
         """Fail a task; retryable requeues it for another worker."""
-        return self._request("POST", "/v1/tasks/fail", {"name": name, "worker": worker, "fencing_token": fencing_token, "retryable": retryable})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "worker": worker, "fencing_token": fencing_token, "retryable": retryable}
+        return self._request("POST", "/v1/tasks/fail", body, **request_opts)
 
-    def task_cancel(self, name):
+    def task_cancel(self, name, idempotency_key=None):
         """Cancel a task (terminal), regardless of owner."""
-        return self._request("POST", "/v1/tasks/cancel", {"name": name})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name}
+        return self._request("POST", "/v1/tasks/cancel", body, **request_opts)
 
-    def effect_get(self, name):
+    def effect_get(self, name, idempotency_key=None):
         """Read an effect's status, approvals, and result; absent reads as found=false."""
-        return self._request("GET", "/v1/effects?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/effects?name=%s" % _enc(name), **request_opts)
 
     def effect_prepare(self, name, effect_type, idempotency_key, payload=None, risk=None, required_approvals=None):
         """Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved."""
-        return self._request("POST", "/v1/effects/prepare", {"name": name, "effect_type": effect_type, "payload": payload, "risk": risk, "idempotency_key": idempotency_key, "required_approvals": required_approvals})
+        body = {"name": name, "effect_type": effect_type, "payload": payload, "risk": risk, "idempotency_key": idempotency_key, "required_approvals": required_approvals}
+        return self._request("POST", "/v1/effects/prepare", body)
 
-    def effect_approve(self, name, principal):
+    def effect_approve(self, name, principal, idempotency_key=None):
         """Record one principal's approval; duplicate approvals count once."""
-        return self._request("POST", "/v1/effects/approve", {"name": name, "principal": principal})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "principal": principal}
+        return self._request("POST", "/v1/effects/approve", body, **request_opts)
 
-    def effect_commit(self, name, result=None):
+    def effect_commit(self, name, result=None, idempotency_key=None):
         """Commit an approved effect exactly once, recording the result; a repeat commit replays."""
-        return self._request("POST", "/v1/effects/commit", {"name": name, "result": result})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "result": result}
+        return self._request("POST", "/v1/effects/commit", body, **request_opts)
 
-    def effect_abort(self, name):
+    def effect_abort(self, name, idempotency_key=None):
         """Abort a prepared/approved effect (terminal)."""
-        return self._request("POST", "/v1/effects/abort", {"name": name})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name}
+        return self._request("POST", "/v1/effects/abort", body, **request_opts)
 
-    def handoff_get(self, name):
+    def handoff_get(self, name, idempotency_key=None):
         """Read a handoff's status, counterparties, and tokens; absent reads as found=false."""
-        return self._request("GET", "/v1/handoffs?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/handoffs?name=%s" % _enc(name), **request_opts)
 
-    def handoff_offer(self, name, resource, from, to, from_token, context=None, ttl_ms=None):
+    def handoff_offer(self, name, resource, from_, to, from_token, context=None, ttl_ms=None, idempotency_key=None):
         """Offer to transfer ownership of a resource; the original owner keeps authority until accepted."""
-        return self._request("POST", "/v1/handoffs/offer", {"name": name, "resource": resource, "from": from, "to": to, "from_token": from_token, "context": context, "ttl_ms": ttl_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "resource": resource, "from": from_, "to": to, "from_token": from_token, "context": context, "ttl_ms": ttl_ms}
+        return self._request("POST", "/v1/handoffs/offer", body, **request_opts)
 
-    def handoff_accept(self, name, to):
+    def handoff_accept(self, name, to, idempotency_key=None):
         """Accept an offered handoff; the new owner receives a strictly higher fencing token."""
-        return self._request("POST", "/v1/handoffs/accept", {"name": name, "to": to})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "to": to}
+        return self._request("POST", "/v1/handoffs/accept", body, **request_opts)
 
-    def handoff_reject(self, name, to):
+    def handoff_reject(self, name, to, idempotency_key=None):
         """Reject an offered handoff; ownership stays with the original owner."""
-        return self._request("POST", "/v1/handoffs/reject", {"name": name, "to": to})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "to": to}
+        return self._request("POST", "/v1/handoffs/reject", body, **request_opts)
 
-    def decision_get(self, name):
+    def decision_get(self, name, idempotency_key=None):
         """Read a decision's options, tallies, votes, and resolution; absent reads as found=false."""
-        return self._request("GET", "/v1/decisions?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/decisions?name=%s" % _enc(name), **request_opts)
 
-    def decision_propose(self, name, question, options, policy, deadline_ms=None):
+    def decision_propose(self, name, question, options, policy, deadline_ms=None, idempotency_key=None):
         """Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous)."""
-        return self._request("POST", "/v1/decisions/propose", {"name": name, "question": question, "options": options, "policy": policy, "deadline_ms": deadline_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "question": question, "options": options, "policy": policy, "deadline_ms": deadline_ms}
+        return self._request("POST", "/v1/decisions/propose", body, **request_opts)
 
-    def decision_vote(self, name, voter, option=None, confidence=None, weight=None, veto=None, evidence=None):
+    def decision_vote(self, name, voter, option=None, confidence=None, weight=None, veto=None, evidence=None, idempotency_key=None):
         """Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution."""
-        return self._request("POST", "/v1/decisions/vote", {"name": name, "voter": voter, "option": option, "confidence": confidence, "weight": weight, "veto": veto, "evidence": evidence})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "voter": voter, "option": option, "confidence": confidence, "weight": weight, "veto": veto, "evidence": evidence}
+        return self._request("POST", "/v1/decisions/vote", body, **request_opts)
 
-    def budget_get(self, name):
+    def budget_get(self, name, idempotency_key=None):
         """Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false."""
-        return self._request("GET", "/v1/budgets?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/budgets?name=%s" % _enc(name), **request_opts)
 
-    def budget_set(self, name, limit):
+    def budget_set(self, name, limit, idempotency_key=None):
         """Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited."""
-        return self._request("POST", "/v1/budgets/set", {"name": name, "limit": limit})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "limit": limit}
+        return self._request("POST", "/v1/budgets/set", body, **request_opts)
 
-    def budget_reserve(self, name, reservation_id, holder, amount):
+    def budget_reserve(self, name, reservation_id, holder, amount, idempotency_key=None):
         """Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription)."""
-        return self._request("POST", "/v1/budgets/reserve", {"name": name, "reservation_id": reservation_id, "holder": holder, "amount": amount})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "reservation_id": reservation_id, "holder": holder, "amount": amount}
+        return self._request("POST", "/v1/budgets/reserve", body, **request_opts)
 
-    def budget_commit(self, name, reservation_id, actual):
+    def budget_commit(self, name, reservation_id, actual, idempotency_key=None):
         """Commit a reservation with the actual spend (capped at reserved); frees the difference."""
-        return self._request("POST", "/v1/budgets/commit", {"name": name, "reservation_id": reservation_id, "actual": actual})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "reservation_id": reservation_id, "actual": actual}
+        return self._request("POST", "/v1/budgets/commit", body, **request_opts)
 
-    def budget_release(self, name, reservation_id):
+    def budget_release(self, name, reservation_id, idempotency_key=None):
         """Release a still-held reservation, returning its full headroom."""
-        return self._request("POST", "/v1/budgets/release", {"name": name, "reservation_id": reservation_id})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "reservation_id": reservation_id}
+        return self._request("POST", "/v1/budgets/release", body, **request_opts)
 
-    def claim_get(self, name):
+    def claim_get(self, name, idempotency_key=None):
         """Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false."""
-        return self._request("GET", "/v1/claims?name=%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/claims?name=%s" % _enc(name), **request_opts)
 
-    def claim_assert(self, name, subject, predicate, author, value=None, confidence=None, evidence=None, valid_until_ms=None):
+    def claim_assert(self, name, subject, predicate, author, value=None, confidence=None, evidence=None, valid_until_ms=None, idempotency_key=None):
         """Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests."""
-        return self._request("POST", "/v1/claims/assert", {"name": name, "subject": subject, "predicate": predicate, "value": value, "confidence": confidence, "author": author, "evidence": evidence, "valid_until_ms": valid_until_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "subject": subject, "predicate": predicate, "value": value, "confidence": confidence, "author": author, "evidence": evidence, "valid_until_ms": valid_until_ms}
+        return self._request("POST", "/v1/claims/assert", body, **request_opts)
 
-    def claim_support(self, name, agent):
+    def claim_support(self, name, agent, idempotency_key=None):
         """Record an agent's support for a claim."""
-        return self._request("POST", "/v1/claims/support", {"name": name, "agent": agent})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "agent": agent}
+        return self._request("POST", "/v1/claims/support", body, **request_opts)
 
-    def claim_contest(self, name, agent, reason=None):
+    def claim_contest(self, name, agent, reason=None, idempotency_key=None):
         """Record an agent's contest of a claim, moving it to contested."""
-        return self._request("POST", "/v1/claims/contest", {"name": name, "agent": agent, "reason": reason})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "agent": agent, "reason": reason}
+        return self._request("POST", "/v1/claims/contest", body, **request_opts)
 
-    def claim_resolve(self, name, accepted):
+    def claim_resolve(self, name, accepted, idempotency_key=None):
         """Authoritatively accept or reject a claim (terminal)."""
-        return self._request("POST", "/v1/claims/resolve", {"name": name, "accepted": accepted})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "accepted": accepted}
+        return self._request("POST", "/v1/claims/resolve", body, **request_opts)
 
-    def claim_supersede(self, name, superseded_by):
+    def claim_supersede(self, name, superseded_by, idempotency_key=None):
         """Supersede a claim with a newer one (terminal)."""
-        return self._request("POST", "/v1/claims/supersede", {"name": name, "superseded_by": superseded_by})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"name": name, "superseded_by": superseded_by}
+        return self._request("POST", "/v1/claims/supersede", body, **request_opts)
 
-    def election_get(self, name):
+    def election_get(self, name, idempotency_key=None):
         """Observe the current holder of a named election."""
-        return self._request("GET", "/v1/elections/%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/elections/%s" % _enc(name), **request_opts)
 
-    def election_campaign(self, name, candidate, ttl_ms, metadata=None):
+    def election_campaign(self, name, candidate, ttl_ms, metadata=None, idempotency_key=None):
         """Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win."""
-        return self._request("POST", "/v1/elections/%s/campaign" % _enc(name), {"candidate": candidate, "ttl_ms": ttl_ms, "metadata": metadata})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"candidate": candidate, "ttl_ms": ttl_ms, "metadata": metadata}
+        return self._request("POST", "/v1/elections/%s/campaign" % _enc(name), body, **request_opts)
 
-    def election_renew(self, name, candidate, fencing_token):
+    def election_renew(self, name, candidate, fencing_token, idempotency_key=None):
         """Extend the lease; requires the held fencing token."""
-        return self._request("POST", "/v1/elections/%s/renew" % _enc(name), {"candidate": candidate, "fencing_token": fencing_token})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"candidate": candidate, "fencing_token": fencing_token}
+        return self._request("POST", "/v1/elections/%s/renew" % _enc(name), body, **request_opts)
 
-    def election_resign(self, name, candidate, fencing_token):
+    def election_resign(self, name, candidate, fencing_token, idempotency_key=None):
         """Step down; requires the held fencing token."""
-        return self._request("POST", "/v1/elections/%s/resign" % _enc(name), {"candidate": candidate, "fencing_token": fencing_token})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"candidate": candidate, "fencing_token": fencing_token}
+        return self._request("POST", "/v1/elections/%s/resign" % _enc(name), body, **request_opts)
 
-    def service_instances(self, service, metadata=None):
+    def service_instances(self, service, metadata=None, idempotency_key=None):
         """List live instances of a service, optionally filtered by exact metadata matches."""
-        return self._request("GET", "/v1/services/%s?metadata=%s" % (_enc(service), _enc(metadata)))
+        path = "/v1/services/%s" % _enc(service)
+        path = _metadata_query(path, metadata)
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", path, **request_opts)
 
-    def service_register(self, service, instance_id, address, ttl_ms, metadata=None):
+    def service_register(self, service, instance_id, address, ttl_ms, metadata=None, idempotency_key=None):
         """Register/refresh an instance with a TTL lease and optional metadata."""
-        return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)), {"address": address, "ttl_ms": ttl_ms, "metadata": metadata})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"address": address, "ttl_ms": ttl_ms, "metadata": metadata}
+        return self._request("PUT", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)), body, **request_opts)
 
-    def service_heartbeat(self, service, instance_id, ttl_ms=None):
+    def service_heartbeat(self, service, instance_id, ttl_ms=None, idempotency_key=None):
         """Renew an instance lease before it expires."""
-        return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)), {"ttl_ms": ttl_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"ttl_ms": ttl_ms}
+        return self._request("POST", "/v1/services/%s/instances/%s/heartbeat" % (_enc(service), _enc(instance_id)), body, **request_opts)
 
-    def service_deregister(self, service, instance_id):
+    def service_deregister(self, service, instance_id, idempotency_key=None):
         """Remove an instance from the registry."""
-        return self._request("DELETE", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("DELETE", "/v1/services/%s/instances/%s" % (_enc(service), _enc(instance_id)), **request_opts)
 
-    def rate_limit_get(self, tenant, key):
+    def rate_limit_get(self, tenant, key, idempotency_key=None):
         """Current limiter state for a tenant/key."""
-        return self._request("GET", "/v1/rate-limit/%s/%s" % (_enc(tenant), _enc(key)))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/rate-limit/%s/%s" % (_enc(tenant), _enc(key)), **request_opts)
 
-    def rate_limit_check(self, tenant, key, algorithm, limit, window_ms, refill_per_second=None, cost=None):
+    def rate_limit_check(self, tenant, key, algorithm, limit, window_ms, refill_per_second=None, cost=None, idempotency_key=None):
         """Atomic check-and-decrement (token_bucket | sliding_window). Returns {allowed, remaining}."""
-        return self._request("POST", "/v1/rate-limit/%s/%s/check" % (_enc(tenant), _enc(key)), {"algorithm": algorithm, "limit": limit, "window_ms": window_ms, "refill_per_second": refill_per_second, "cost": cost})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"algorithm": algorithm, "limit": limit, "window_ms": window_ms, "refill_per_second": refill_per_second, "cost": cost}
+        return self._request("POST", "/v1/rate-limit/%s/%s/check" % (_enc(tenant), _enc(key)), body, **request_opts)
 
-    def schedule_get(self, name):
+    def schedule_get(self, name, idempotency_key=None):
         """Read a schedule definition."""
-        return self._request("GET", "/v1/cron/schedules/%s" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/cron/schedules/%s" % _enc(name), **request_opts)
 
-    def schedule_upsert(self, name, target, cron=None, one_shot_at_ms=None, delivery=None, max_retries=None):
+    def schedule_upsert(self, name, target, cron=None, one_shot_at_ms=None, delivery=None, max_retries=None, idempotency_key=None):
         """Create/update a schedule. target = {kind: webhook|queue|grpc, ...}. Exactly one of cron / one_shot_at_ms."""
-        return self._request("PUT", "/v1/cron/schedules/%s" % _enc(name), {"target": target, "cron": cron, "one_shot_at_ms": one_shot_at_ms, "delivery": delivery, "max_retries": max_retries})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"target": target, "cron": cron, "one_shot_at_ms": one_shot_at_ms, "delivery": delivery, "max_retries": max_retries}
+        return self._request("PUT", "/v1/cron/schedules/%s" % _enc(name), body, **request_opts)
 
-    def schedule_record_run(self, name, fire_id, fired_at_ms=None):
+    def schedule_record_run(self, name, fire_id, fired_at_ms=None, idempotency_key=None):
         """Record a fire; duplicate fire_id is deduped (exactly-once)."""
-        return self._request("POST", "/v1/cron/schedules/%s/runs" % _enc(name), {"fire_id": fire_id, "fired_at_ms": fired_at_ms})
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        body = {"fire_id": fire_id, "fired_at_ms": fired_at_ms}
+        return self._request("POST", "/v1/cron/schedules/%s/runs" % _enc(name), body, **request_opts)
 
-    def schedule_history(self, name):
+    def schedule_history(self, name, idempotency_key=None):
         """Recent run history."""
-        return self._request("GET", "/v1/cron/schedules/%s/history" % _enc(name))
+        request_opts = {}
+        if idempotency_key is not None:
+            request_opts["idempotency_key"] = idempotency_key
+        return self._request("GET", "/v1/cron/schedules/%s/history" % _enc(name), **request_opts)

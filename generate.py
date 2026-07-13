@@ -5,10 +5,11 @@ every client is regenerated identically; they can't drift from each other or the
 server. Each generated client is a thin, dependency-free HTTP wrapper that
 returns parsed JSON.
 
-    python3 generate.py            # regenerate all supported languages
+    python3 generate.py            # regenerate safe generated targets (not hand-hardened TS)
     python3 generate.py python go  # just these
 """
 import json
+import keyword
 import os
 import sys
 
@@ -26,6 +27,11 @@ def pascal(s):
 def camel(s):
     p = pascal(s)
     return p[:1].lower() + p[1:]
+
+
+def py_ident(name):
+    """Return a valid Python identifier while preserving the wire field name."""
+    return name + "_" if keyword.iskeyword(name) else name
 
 
 def parts(op):
@@ -60,15 +66,24 @@ def _enc(s):
     return urllib.parse.quote(str(s), safe="")
 
 
+def _metadata_query(path, metadata):
+    if not metadata:
+        return path
+    pairs = [("metadata.%s" % key, str(value)) for key, value in metadata.items()]
+    return path + ("&" if "?" in path else "?") + urllib.parse.urlencode(sorted(pairs))
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30):
         self.base, self.timeout = base_url.rstrip("/"), timeout
 
-    def _request(self, method, path, body=None):
+    def _request(self, method, path, body=None, idempotency_key=None):
         data = _json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
             req.add_header("content-type", "application/json")
+        if idempotency_key is not None:
+            req.add_header("idempotency-key", idempotency_key)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 text = r.read().decode()
@@ -81,26 +96,57 @@ class FiduciaClient:
 
 def emit_python(op):
     pp, qp, bp, req, opt = parts(op)
-    args = ["self"] + [x["name"] for x in req] + ["%s=None" % x["name"] for x in opt]
-    path = '"%s"' % op["path"].replace("{", "%s<<").replace("}", ">>")
+    args = ["self"] + [py_ident(x["name"]) for x in req] + ["%s=None" % py_ident(x["name"]) for x in opt]
+    accepts_request_idempotency = not any(x["name"] == "idempotency_key" for x in op["params"])
+    if accepts_request_idempotency:
+        args.append("idempotency_key=None")
     # build path expression
     fmt = op["path"]
     enc_args = []
     for x in pp:
         fmt = fmt.replace("{%s}" % x["name"], "%s")
-        enc_args.append("_enc(%s)" % x["name"])
+        enc_args.append("_enc(%s)" % py_ident(x["name"]))
     for x in qp:
+        if x.get("optional"):
+            continue
         fmt += ("&" if "?" in fmt else "?") + x["name"] + "=%s"
-        enc_args.append("_enc(%s)" % x["name"])
+        enc_args.append("_enc(%s)" % py_ident(x["name"]))
     pathexpr = '"%s"' % fmt + ((" %% (%s)" % ", ".join(enc_args)) if len(enc_args) > 1
                                else (" %% %s" % enc_args[0]) if enc_args else "")
-    call = '"%s", %s' % (op["method"], pathexpr)
+    lines = ["    def %s(%s):" % (op["name"], ", ".join(args)),
+             '        """%s"""' % op.get("doc", "")]
+    optional_query = [x for x in qp if x.get("optional")]
+    if optional_query:
+        lines.append("        path = %s" % pathexpr)
+        for x in optional_query:
+            if x["type"] == "object":
+                lines.append("        path = _metadata_query(path, %s)" % py_ident(x["name"]))
+        patharg = "path"
+    else:
+        patharg = pathexpr
+    request_opts = ""
+    if accepts_request_idempotency:
+        lines.extend([
+            "        request_opts = {}",
+            "        if idempotency_key is not None:",
+            '            request_opts["idempotency_key"] = idempotency_key',
+        ])
+        request_opts = ", **request_opts"
     if bp:
-        body = "{%s}" % ", ".join('"%s": %s' % (x["name"], x["name"]) for x in bp)
-        call += ", %s" % body
-    doc = op.get("doc", "")
-    return ('    def %s(%s):\n        """%s"""\n        return self._request(%s)\n'
-            % (op["name"], ", ".join(args), doc, call))
+        body = "{%s}" % ", ".join(
+            '"%s": %s' % (x["name"], py_ident(x["name"])) for x in bp
+        )
+        lines.append("        body = %s" % body)
+        lines.append(
+            '        return self._request("%s", %s, body%s)'
+            % (op["method"], patharg, request_opts)
+        )
+    else:
+        lines.append(
+            '        return self._request("%s", %s%s)'
+            % (op["method"], patharg, request_opts)
+        )
+    return "\n".join(lines) + "\n"
 
 
 def gen_python():
@@ -113,12 +159,23 @@ def gen_python():
 TS_PRE = BANNER_C + '''
 // Fiducia client (TypeScript) — generated. Zero runtime deps (global fetch).
 export class FiduciaError extends Error {
-  constructor(public status: number, public body: any) { super(`fiducia: HTTP ${status}`); }
+  status: number;
+  body: any;
+  constructor(status: number, body: any) {
+    super(`fiducia: HTTP ${status}`);
+    this.status = status;
+    this.body = body;
+  }
 }
 const enc = encodeURIComponent;
 export class FiduciaClient {
-  constructor(private base: string, private timeout = 30000) { this.base = base.replace(/\\/$/, ""); }
-  private async request(method: string, path: string, body?: any): Promise<any> {
+  base: string;
+  timeout: number;
+  constructor(base: string, timeout = 30000) {
+    this.base = base.replace(/\\/$/, "");
+    this.timeout = timeout;
+  }
+  async request(method: string, path: string, body?: any): Promise<any> {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), this.timeout);
     try {
@@ -152,16 +209,36 @@ def emit_ts(op):
     for x in pp:
         fmt = fmt.replace("{%s}" % x["name"], "${enc(%s)}" % camel(x["name"]))
     for x in qp:
+        if x.get("optional"):
+            continue
         fmt += ("&" if "?" in fmt else "?") + x["name"] + "=${enc(%s)}" % camel(x["name"])
-    call = '"%s", `%s`' % (op["method"], fmt)
+    optional_query = [x for x in qp if x.get("optional")]
+    lines = []
+    if optional_query:
+        lines.append("    let path = `%s`;" % fmt)
+        for x in optional_query:
+            if x["type"] == "object":
+                lines.extend([
+                    "    if (opts.%s) {" % x["name"],
+                    "      const query = new URLSearchParams();",
+                    "      for (const [key, value] of Object.entries(opts.%s)) query.set(`metadata.${key}`, String(value));" % x["name"],
+                    "      const encoded = query.toString();",
+                    "      if (encoded) path += `${path.includes('?') ? '&' : '?'}${encoded}`;",
+                    "    }",
+                ])
+        patharg = "path"
+    else:
+        patharg = "`%s`" % fmt
+    call = '"%s", %s' % (op["method"], patharg)
     if bp:
         items = []
         for x in bp:
             src = camel(x["name"]) if not x.get("optional") else "opts.%s" % x["name"]
             items.append("%s: %s" % (x["name"], src))
         call += ", { %s }" % ", ".join(items)
-    return ("  async %s(%s): Promise<any> {\n    return this.request(%s);\n  }\n"
-            % (camel(op["name"]), ", ".join(sig), call))
+    lines.append("    return this.request(%s);" % call)
+    return ("  async %s(%s): Promise<any> {\n%s\n  }\n"
+            % (camel(op["name"]), ", ".join(sig), "\n".join(lines)))
 
 
 def gen_ts():
@@ -203,6 +280,28 @@ func merge(dst, src map[string]any) map[string]any {
 		dst[k] = v
 	}
 	return dst
+}
+
+func addMetadataQuery(path string, raw any) (string, error) {
+	values := url.Values{}
+	switch metadata := raw.(type) {
+	case nil:
+		return path, nil
+	case map[string]any:
+		for key, value := range metadata {
+			values.Set("metadata."+key, fmt.Sprint(value))
+		}
+	case map[string]string:
+		for key, value := range metadata {
+			values.Set("metadata."+key, value)
+		}
+	default:
+		return "", fmt.Errorf("metadata must be map[string]any or map[string]string")
+	}
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return path, nil
 }
 
 func (c *Client) request(method, path string, body map[string]any) (map[string]any, error) {
@@ -254,6 +353,8 @@ def emit_go(op):
         fmt = fmt.replace("{%s}" % x["name"], "%s")
         enc_args.append("enc(%s)" % camel(x["name"]))
     for x in qp:
+        if x.get("optional"):
+            continue
         fmt += ("&" if "?" in fmt else "?") + x["name"] + "=%s"
         enc_args.append("enc(%s)" % camel(x["name"]))
     if enc_args:
@@ -261,6 +362,19 @@ def emit_go(op):
         pathvar = "path"
     else:
         pathvar = '"%s"' % fmt
+    optional_query = [x for x in qp if x.get("optional")]
+    if optional_query and not enc_args:
+        lines.append('\tpath := "%s"' % fmt)
+        pathvar = "path"
+    for x in optional_query:
+        if x["type"] == "object":
+            lines.extend([
+                '\tpath, err := addMetadataQuery(%s, opts["%s"])' % (pathvar, x["name"]),
+                '\tif err != nil {',
+                '\t\treturn nil, err',
+                '\t}',
+            ])
+            pathvar = "path"
     req_body = [x for x in bp if not x.get("optional")]
     if bp:
         inits = ", ".join('"%s": %s' % (x["name"], camel(x["name"])) for x in req_body)
@@ -599,7 +713,11 @@ def main():
     # `--check rust-wasm` — since some clients are hand-enhanced beyond the
     # generator baseline and would otherwise report expected drift.
     check = "--check" in args
-    want = [a for a in args if not a.startswith("--")] or list(TARGETS)
+    # TypeScript has a hand-hardened transport layer (retry fencing, redirect
+    # rejection, watch streams, and request controls) beyond the thin emitter.
+    # Never overwrite it as a side effect of the default regeneration command.
+    default_targets = ["python", "go", "rust-wasm", "docs"]
+    want = [a for a in args if not a.startswith("--")] or default_targets
     drift = 0
     for lang in want:
         rel, gen = TARGETS[lang]

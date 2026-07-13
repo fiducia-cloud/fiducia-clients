@@ -34,6 +34,28 @@ func merge(dst, src map[string]any) map[string]any {
 	return dst
 }
 
+func addMetadataQuery(path string, raw any) (string, error) {
+	values := url.Values{}
+	switch metadata := raw.(type) {
+	case nil:
+		return path, nil
+	case map[string]any:
+		for key, value := range metadata {
+			values.Set("metadata."+key, fmt.Sprint(value))
+		}
+	case map[string]string:
+		for key, value := range metadata {
+			values.Set("metadata."+key, value)
+		}
+	default:
+		return "", fmt.Errorf("metadata must be map[string]any or map[string]string")
+	}
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	return path, nil
+}
+
 func (c *Client) request(method, path string, body map[string]any) (map[string]any, error) {
 	var rdr io.Reader
 	if body != nil {
@@ -420,7 +442,11 @@ func (c *Client) ElectionResign(name string, candidate string, fencingToken int6
 
 // ServiceInstances List live instances of a service, optionally filtered by exact metadata matches.
 func (c *Client) ServiceInstances(service string, opts map[string]any) (map[string]any, error) {
-	path := fmt.Sprintf("/v1/services/%s?metadata=%s", enc(service), enc(metadata))
+	path := fmt.Sprintf("/v1/services/%s", enc(service))
+	path, err := addMetadataQuery(path, opts["metadata"])
+	if err != nil {
+		return nil, err
+	}
 	return c.request("GET", path, nil)
 }
 
