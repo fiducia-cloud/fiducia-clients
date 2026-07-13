@@ -118,9 +118,9 @@ impl std::error::Error for LockError {}
 static HOLDER_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A per-process random nonce, seeded once. Two processes that generate their
-/// first holder in the same nanosecond would otherwise collide (wall-clock nanos
-/// + a process-local counter that both start at 0); mixing in the pid and a
-/// nonce derived from a stack address makes the id distinct across processes.
+/// first holder in the same nanosecond would otherwise collide because their
+/// wall-clock nanos and process-local counters can match. Mixing in the pid and
+/// a nonce derived from a stack address makes the id distinct across processes.
 fn process_nonce() -> u64 {
     static NONCE: OnceLock<u64> = OnceLock::new();
     *NONCE.get_or_init(|| {

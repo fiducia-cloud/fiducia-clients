@@ -792,6 +792,9 @@ impl FiduciaClient {
     }
     /// Offer to transfer ownership of `resource` from `from` (presenting its
     /// current `from_token`) to `to`, with a context manifest and accept deadline.
+    // Keep the public method parallel to the HTTP contract; bundling these fields
+    // would be a breaking client API change.
+    #[allow(clippy::too_many_arguments)]
     pub fn handoff_offer(
         &self,
         name: &str,
@@ -1592,7 +1595,9 @@ mod tests {
             Value::Null,
         );
 
-        client.counter_add("rollout/v2/failures", -1, Some(7)).unwrap();
+        client
+            .counter_add("rollout/v2/failures", -1, Some(7))
+            .unwrap();
         assert_next(
             &rx,
             "POST",
@@ -1669,7 +1674,12 @@ mod tests {
         );
 
         client
-            .task_complete("repo/acme/api/issue/482", "agent-a", 42, json!({ "pr": 991 }))
+            .task_complete(
+                "repo/acme/api/issue/482",
+                "agent-a",
+                42,
+                json!({ "pr": 991 }),
+            )
             .unwrap();
         assert_next(
             &rx,
@@ -1708,7 +1718,9 @@ mod tests {
             }),
         );
 
-        client.effect_commit("invoice-882/payment", json!({ "confirmation": "pay_123" })).unwrap();
+        client
+            .effect_commit("invoice-882/payment", json!({ "confirmation": "pay_123" }))
+            .unwrap();
         assert_next(
             &rx,
             "POST",
@@ -1748,7 +1760,9 @@ mod tests {
             }),
         );
 
-        client.handoff_accept("ticket-482/handoff", "legal-agent").unwrap();
+        client
+            .handoff_accept("ticket-482/handoff", "legal-agent")
+            .unwrap();
         assert_next(
             &rx,
             "POST",
@@ -1823,7 +1837,11 @@ mod tests {
                 "org/acme/wf/42",
                 "res-1",
                 "research-agent",
-                BudgetAmount { usd_micros: Some(500_000), tokens: Some(100_000), tool_calls: None },
+                BudgetAmount {
+                    usd_micros: Some(500_000),
+                    tokens: Some(100_000),
+                    tool_calls: None,
+                },
             )
             .unwrap();
         assert_next(
@@ -1842,7 +1860,10 @@ mod tests {
             .budget_commit(
                 "org/acme/wf/42",
                 "res-1",
-                BudgetAmount { usd_micros: Some(200_000), ..Default::default() },
+                BudgetAmount {
+                    usd_micros: Some(200_000),
+                    ..Default::default()
+                },
             )
             .unwrap();
         assert_next(
@@ -1886,7 +1907,9 @@ mod tests {
             }),
         );
 
-        client.claim_resolve("customer/219/refund_eligible", true).unwrap();
+        client
+            .claim_resolve("customer/219/refund_eligible", true)
+            .unwrap();
         assert_next(
             &rx,
             "POST",
