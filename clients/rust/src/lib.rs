@@ -155,6 +155,25 @@ impl FiduciaClient {
     /// the internal-auth secret and org scope to every request. Use this from a
     /// service (never from an untrusted client) to read/write a tenant's
     /// coordination state.
+    ///
+    /// # Transport security
+    ///
+    /// `internal_secret` is **bearer-equivalent**: anyone who observes it can
+    /// impersonate an internal service. It is sent as the `x-fiducia-internal-auth`
+    /// request header on every call, so the transport MUST be confidential on any
+    /// path an attacker could observe:
+    ///
+    /// * In-cluster (`base_url` a plaintext `http://…svc.cluster.local` node
+    ///   address on a NetworkPolicy-restricted network) is the intended
+    ///   deployment — the internal network is the trust boundary.
+    /// * Across ANY untrusted network (public internet, a shared LAN, a hop that
+    ///   leaves the cluster) `base_url` MUST be `https://`. Passing an `http://`
+    ///   base over such a path leaks the secret in cleartext to any on-path
+    ///   observer.
+    ///
+    /// The header value is marked sensitive and never crosses a redirect
+    /// (`max_redirects(0)`), but that does not protect a cleartext hop — pick the
+    /// scheme to match where the request actually travels.
     pub fn internal(base_url: &str, internal_secret: &str, org_id: &str) -> Self {
         let mut client = Self::new(base_url);
         client.internal_auth = Some(internal_secret.to_string());
