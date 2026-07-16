@@ -217,7 +217,7 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: sbt
-      - uses: sbt/setup-sbt@66fb4376e81982c7d92a4074170846fff88e2e30 # v1
+      - uses: sbt/setup-sbt@9d56cf12e9b58d219605e1d8bfe69a8395fedde0 # v1
       - name: publishLocal (publishable artifact → ~/.ivy2/local)
         working-directory: clients/scala
         run: sbt publishLocal
