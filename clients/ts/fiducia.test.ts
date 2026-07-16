@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FiduciaClient, FiduciaError } from "./fiducia.ts";
+import { FiduciaClient, FiduciaError, FiduciaTimeoutError } from "./fiducia.ts";
 
 type RecordedCall = {
   method: string;
@@ -329,6 +329,119 @@ test("redirects are hard-rejected, not followed, and not retried", async () => {
   );
   // exactly one attempt — the redirect was neither followed nor retried
   assert.equal(calls.length, 1);
+});
+
+// A fetch that answers not-leader (503 + ProposeError-shaped body) `failFirst`
+// times, then succeeds — the shape a node returns when the shard leader moved.
+function notLeaderFetch(calls: RecordedCall[], failFirst: number): typeof fetch {
+  let seen = 0;
+  return (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    calls.push({
+      method: init.method ?? "GET",
+      path: `${url.pathname}${url.search}`,
+      body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+    });
+    if (seen++ < failFirst) {
+      return new Response(
+        JSON.stringify({ error: { reason: "not_leader", message: "shard 3 leader moved" } }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+}
+
+test("not-leader responses surface status and parsed body per PROTOCOL.md", async () => {
+  // Contract (PROTOCOL.md Errors): surface the status code and parsed body;
+  // do not retry by default — the edge/LB handles leader redirects.
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", {
+    fetch: notLeaderFetch(calls, Number.POSITIVE_INFINITY),
+  });
+
+  await assert.rejects(
+    () => client.tryLock("orders/42", { holder: "worker-a", ttlMs: 30_000 }),
+    (err: unknown) => {
+      assert.ok(err instanceof FiduciaError);
+      assert.equal(err.status, 503);
+      assert.equal((err.body as any)?.error?.reason, "not_leader");
+      assert.equal((err.body as any)?.error?.message, "shard 3 leader moved");
+      return true;
+    },
+  );
+  assert.equal(calls.length, 1); // surfaced, not silently retried or followed
+
+  // With retries opted in, a 503 IS retryable for idempotent reads: the next
+  // attempt lands on the new leader and succeeds.
+  const retryCalls: RecordedCall[] = [];
+  const retryClient = new FiduciaClient("https://fiducia.test", {
+    fetch: notLeaderFetch(retryCalls, 1),
+    maxRetries: 2,
+  });
+  assert.deepEqual(await retryClient.lockGet("orders/42"), { ok: true });
+  assert.equal(retryCalls.length, 2);
+  assert.equal(retryCalls[0].path, "/v1/locks?key=orders%2F42");
+  assert.equal(retryCalls[1].path, "/v1/locks?key=orders%2F42");
+});
+
+// A fetch that never answers but honors AbortSignal, like a hung connection.
+function hangingFetch(calls: RecordedCall[]): typeof fetch {
+  return (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(String(input));
+    calls.push({
+      method: init.method ?? "GET",
+      path: `${url.pathname}${url.search}`,
+      body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+    });
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+        { once: true },
+      );
+    });
+  }) as typeof fetch;
+}
+
+test("request timeout aborts a hung request and surfaces FiduciaTimeoutError", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", {
+    fetch: hangingFetch(calls),
+    timeoutMs: 25,
+    maxRetries: 1, // timeouts are retryable for idempotent reads
+  });
+
+  await assert.rejects(
+    () => client.lockGet("orders/42"),
+    (err: unknown) => {
+      assert.ok(err instanceof FiduciaTimeoutError);
+      assert.equal(err.name, "FiduciaTimeoutError");
+      assert.equal(err.timeoutMs, 25);
+      assert.equal(err.method, "GET");
+      assert.equal(err.path, "/v1/locks?key=orders%2F42");
+      assert.equal(err.attempt, 2); // the retry also timed out; attempts counted
+      return true;
+    },
+  );
+  assert.equal(calls.length, 2); // initial attempt + one retry, then surfaced
+
+  // A hung keyless POST must NOT be retried after its timeout: replaying a
+  // lock acquire could double-grant. One attempt, then the timeout surfaces.
+  const postCalls: RecordedCall[] = [];
+  const postClient = new FiduciaClient("https://fiducia.test", {
+    fetch: hangingFetch(postCalls),
+    timeoutMs: 25,
+    maxRetries: 3,
+  });
+  await assert.rejects(
+    () => postClient.tryLock("orders/42", { holder: "worker-a" }),
+    (err: unknown) => err instanceof FiduciaTimeoutError && err.attempt === 1,
+  );
+  assert.equal(postCalls.length, 1);
 });
 
 test("non-string metadata values are hard-rejected (query and body)", async () => {
