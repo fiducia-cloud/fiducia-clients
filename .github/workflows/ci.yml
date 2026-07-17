@@ -17,13 +17,20 @@ concurrency:
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # Preserve the same sibling layout used by the Go replace directive.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           path: fiducia-clients
+      - name: Validate GitHub Actions
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: fiducia-clients/.github/workflows/ci.yml fiducia-clients/.github/workflows/cli-flags.yml fiducia-clients/.github/workflows/client-packaging.yml
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
           ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
@@ -35,12 +42,15 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           path: fiducia-clients
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
           ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
@@ -54,16 +64,19 @@ jobs:
 
   ts:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           path: fiducia-clients
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
           ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22.22.1"
       - working-directory: fiducia-clients/clients/ts
@@ -78,13 +91,16 @@ jobs:
 
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # Preserve the same sibling layout used by the Rust path dependency.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           path: fiducia-clients
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
           ref: 487e470c45ab5851e8f6f3b1dc048fe067fbf408
           path: fiducia-interfaces
@@ -110,10 +126,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22.22.1"
       # Generator regression tests + drift check for every generated target.
@@ -143,7 +161,8 @@ jobs:
       # Regression guard: no `bigint` (i64 leak) may reach the generated .d.ts.
       - name: Assert generated .d.ts is clean
         run: |
-          dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
+          dts=$(find clients/rust-wasm/pkg -maxdepth 1 -type f -name '*.d.ts' ! -name '*_bg*' -print -quit)
+          test -n "$dts"
           echo "checking $dts"
           if grep -nE ':[[:space:]]*(bigint|Map<)|:[[:space:]]*Value([;[]|$)' "$dts"; then
             echo "::error::generated .d.ts has a bigint / Value / Map<> — type-mapping regression"
@@ -153,7 +172,8 @@ jobs:
       # Stronger guard: the generated .d.ts must be valid TypeScript.
       - name: Type-check generated .d.ts (tsc)
         run: |
-          dts=$(ls clients/rust-wasm/pkg/*.d.ts | grep -v _bg)
+          dts=$(find clients/rust-wasm/pkg -maxdepth 1 -type f -name '*.d.ts' ! -name '*_bg*' -print -quit)
+          test -n "$dts"
           npx -y -p typescript@5.9.3 tsc --noEmit --lib esnext,dom "$dts"
       # Runtime behavior: drive the compiled wasm against a stubbed fetch
       # (wire format, integer bodies, timeout, error shape).

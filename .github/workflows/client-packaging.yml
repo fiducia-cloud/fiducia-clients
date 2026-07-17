@@ -44,6 +44,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           dotnet-version: "8.0.x"
@@ -52,7 +54,8 @@ jobs:
         run: dotnet pack -c Release -o "$RUNNER_TEMP/nupkgs"
       - name: Assert artifact contents (must_contain)
         run: |
-          pkg=$(ls "$RUNNER_TEMP"/nupkgs/*.nupkg | head -1)
+          pkg=$(find "$RUNNER_TEMP/nupkgs" -maxdepth 1 -type f -name '*.nupkg' -print -quit)
+          test -n "$pkg"
           echo "artifact: $pkg"
           unzip -l "$pkg" | grep -q 'lib/net6.0/Fiducia.FSharp.Client.dll'
       - name: Smoke — resolve + import FROM the artifact (not repo source)
@@ -87,10 +90,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: haskell-actions/setup@cd0d9bdd65b20557f41bea4dbe43d0b5fbbfe553 # v2
         with:
           ghc-version: "9.10.3"
-          cabal-version: "latest"
+          cabal-version: "3.14.2.0"
       - name: sdist (publishable tarball)
         working-directory: clients/haskell
         run: |
@@ -98,7 +103,8 @@ jobs:
           cabal sdist -o "$RUNNER_TEMP/dist"
       - name: Assert artifact contents (must_contain)
         run: |
-          tarball=$(ls "$RUNNER_TEMP"/dist/*.tar.gz | head -1)
+          tarball=$(find "$RUNNER_TEMP/dist" -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          test -n "$tarball"
           echo "artifact: $tarball"
           tar tzf "$tarball" | grep -qx 'fiducia-client-0.1.0/src/Fiducia.hs'
           tar tzf "$tarball" | grep -qx 'fiducia-client-0.1.0/fiducia-client.cabal'
@@ -115,6 +121,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"          # OTP 27+ required (stdlib json module)
@@ -142,6 +150,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - name: System deps for luasec
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - uses: leafo/gh-actions-lua@6919171ccf181b826f44b9bca76307b577217377 # v13.0.0
@@ -171,6 +181,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec # v2
         with:
           nim-version: "2.2.10"
@@ -198,12 +210,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
           java-version: "17"
           cache: sbt
-      - uses: sbt/setup-sbt@66fb4376e81982c7d92a4074170846fff88e2e30 # v1
+      - uses: sbt/setup-sbt@9d56cf12e9b58d219605e1d8bfe69a8395fedde0 # v1
       - name: publishLocal (publishable artifact → ~/.ivy2/local)
         working-directory: clients/scala
         run: sbt publishLocal
@@ -234,6 +248,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
@@ -274,6 +290,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
@@ -304,6 +322,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - name: Stage shipped artifact + assert must_contain
@@ -333,6 +353,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - name: System deps
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev nlohmann-json3-dev
       - name: Stage shipped artifact + assert must_contain
@@ -360,6 +382,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: "0.16.0"
@@ -403,6 +427,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: "27"
@@ -423,6 +449,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         with:
           swift-version: "6.3.3"
@@ -441,6 +469,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
           crystal: "1.20.3"
@@ -462,6 +492,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3
         with:
           version: "1.10"
@@ -480,9 +512,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - name: Refresh system package indexes
         run: sudo apt-get update
-      - uses: ocaml/setup-ocaml@e32b06a3e831ff2fbc6f08cf35be2085e3918014 # v3
+      - uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
         with:
           ocaml-compiler: "5.2"
       - name: Assert archive integrity (must_contain)
@@ -503,15 +537,18 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
       - uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2
         with:
-          r-version: "release"
+          r-version: "4.5.1"
       - name: R CMD build (publishable tarball)
         working-directory: clients/r
         run: R CMD build .
       - name: Assert tarball contents (must_contain)
         run: |
-          tarball=$(ls clients/r/fiducia.client_*.tar.gz | head -1)
+          tarball=$(find clients/r -maxdepth 1 -type f -name 'fiducia.client_*.tar.gz' -print -quit)
+          test -n "$tarball"
           echo "artifact: $tarball"
           tar tzf "$tarball" | grep -qx 'fiducia.client/R/fiducia.R'
           tar tzf "$tarball" | grep -qx 'fiducia.client/DESCRIPTION'

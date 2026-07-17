@@ -37,6 +37,49 @@ fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
     Ok(header)
 }
 
+/// The host portion of `base` when (and only when) its scheme is cleartext
+/// `http://`. Returns `None` for `https://` or anything unparseable (which the
+/// request builder will reject on its own later).
+fn cleartext_http_host(base: &str) -> Option<&str> {
+    if base.len() < 7 || !base[..7].eq_ignore_ascii_case("http://") {
+        return None;
+    }
+    let rest = &base[7..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(v6) = host_port.strip_prefix('[') {
+        return Some(v6.split(']').next().unwrap_or(v6));
+    }
+    Some(host_port.split(':').next().unwrap_or(host_port))
+}
+
+/// Whether `host` is one the internal-auth secret may travel to in cleartext:
+/// loopback, a private/link-local IP, a single-label service name (compose /
+/// same-namespace k8s), or a cluster-internal DNS suffix. Public DNS names and
+/// public IPs are refused — a bearer-equivalent secret must not cross a path an
+/// on-path observer could watch (see [`FiduciaClient::internal`]).
+fn cleartext_internal_host_allowed(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return v4.is_loopback() || v4.is_private() || v4.is_link_local();
+    }
+    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+        let seg0 = v6.segments()[0];
+        return v6.is_loopback() || (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80;
+    }
+    // Single-label names only resolve via local/cluster search domains, never
+    // public DNS — the in-cluster `http://fiducia-node:8090` shape.
+    if !host.contains('.') {
+        return true;
+    }
+    [".svc", ".svc.cluster.local", ".cluster.local", ".internal", ".local"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
+}
+
 /// Per-request controls for blocking lock/semaphore acquires.
 #[derive(Clone, Debug, Default)]
 pub struct RequestControl {
