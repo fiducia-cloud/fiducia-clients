@@ -195,6 +195,7 @@ impl FiduciaClient {
             retry_delay: Duration::ZERO,
             internal_auth: None,
             org_scope: None,
+            allow_cleartext_internal: false,
         }
     }
 
