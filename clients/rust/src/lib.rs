@@ -222,11 +222,48 @@ impl FiduciaClient {
     /// The header value is marked sensitive and never crosses a redirect
     /// (`max_redirects(0)`), but that does not protect a cleartext hop — pick the
     /// scheme to match where the request actually travels.
+    ///
+    /// **Enforced:** an `http://` base is accepted only for hosts that are
+    /// recognizably local or in-cluster (loopback, private/link-local IPs,
+    /// single-label service names, `*.svc` / `*.cluster.local` / `*.internal` /
+    /// `*.local`). A cleartext request to any other host — a public DNS name or
+    /// public IP — is refused with a typed error before anything is sent. Use
+    /// `https://`, or opt in explicitly with
+    /// [`allow_cleartext_internal`](Self::allow_cleartext_internal) for an
+    /// unusual-but-trusted topology.
     pub fn internal(base_url: &str, internal_secret: &str, org_id: &str) -> Self {
         let mut client = Self::new(base_url);
         client.internal_auth = Some(internal_secret.to_string());
         client.org_scope = Some(org_id.to_string());
         client
+    }
+
+    /// Opt in to sending the internal-auth secret over cleartext `http://` to a
+    /// host that is not recognizably local/in-cluster. Only for topologies where
+    /// a multi-label internal DNS name doesn't match the recognized suffixes and
+    /// the whole path is genuinely trusted — anyone observing the hop can
+    /// impersonate an internal service with the captured secret.
+    pub fn allow_cleartext_internal(mut self) -> Self {
+        self.allow_cleartext_internal = true;
+        self
+    }
+
+    /// The refusal (if any) for sending the internal-auth secret over the
+    /// configured base. Pure — checked before every request; factored out so the
+    /// policy is unit-testable without a socket.
+    fn cleartext_refusal(&self) -> Option<Error> {
+        if self.internal_auth.is_none() || self.allow_cleartext_internal {
+            return None;
+        }
+        let host = cleartext_http_host(&self.base)?;
+        if cleartext_internal_host_allowed(host) {
+            return None;
+        }
+        Some(Error::Transport(format!(
+            "refusing to send the internal-auth secret over cleartext http to \
+             public host '{host}': use an https:// base_url, an in-cluster \
+             address, or opt in explicitly with allow_cleartext_internal()"
+        )))
     }
 
     fn request(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
