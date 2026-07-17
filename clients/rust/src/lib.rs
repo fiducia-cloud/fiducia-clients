@@ -315,6 +315,11 @@ impl FiduciaClient {
         control: RequestControl,
         lock_acquire: bool,
     ) -> Result<Value, Error> {
+        // Never let the bearer-equivalent internal secret travel a cleartext hop
+        // to a public host — refuse before anything is sent (or resolved).
+        if let Some(refusal) = self.cleartext_refusal() {
+            return Err(refusal);
+        }
         let url = format!("{}{}", self.base, path);
         let mut builder = http::Request::builder().method(method).uri(&url);
         if let Some(key) = control.idempotency_key.as_deref() {
