@@ -1670,6 +1670,84 @@ mod tests {
         assert!(!format!("{:?}", sensitive_header_value(secret).unwrap()).contains(secret));
     }
 
+    #[test]
+    fn cleartext_internal_host_policy() {
+        // Local / in-cluster shapes the secret may travel to over http.
+        for ok in [
+            "localhost",
+            "dev.localhost",
+            "127.0.0.1",
+            "10.2.3.4",
+            "172.16.0.9",
+            "192.168.1.20",
+            "169.254.1.1",
+            "::1",
+            "fd00::7",
+            "fe80::1",
+            "fiducia-node", // single-label service name (compose / same-ns k8s)
+            "fiducia-node.fiducia.svc",
+            "fiducia-node.fiducia.svc.cluster.local",
+            "node-0.corp.internal",
+            "node.local",
+        ] {
+            assert!(cleartext_internal_host_allowed(ok), "should allow {ok}");
+        }
+        // Public shapes it must not.
+        for bad in [
+            "api.fiducia.cloud",
+            "node.example.com",
+            "8.8.8.8",
+            "172.32.0.1", // just past the RFC1918 172.16/12 range
+            "2001:db8::1",
+        ] {
+            assert!(!cleartext_internal_host_allowed(bad), "should refuse {bad}");
+        }
+
+        // Host extraction: only http:// yields a host; https and userinfo/ports
+        // parse correctly; IPv6 brackets are stripped.
+        assert_eq!(cleartext_http_host("http://host:8090/v1"), Some("host"));
+        assert_eq!(cleartext_http_host("HTTP://Host.Example.com"), Some("Host.Example.com"));
+        assert_eq!(cleartext_http_host("http://user@host:1"), Some("host"));
+        assert_eq!(cleartext_http_host("http://[::1]:8090"), Some("::1"));
+        assert_eq!(cleartext_http_host("https://host:8090"), None);
+    }
+
+    #[test]
+    fn cleartext_secret_to_public_host_is_refused_before_send() {
+        // A public-DNS http base with the internal secret: refused with a typed
+        // error before any bytes (or DNS lookup) leave the process.
+        let client = FiduciaClient::internal("http://api.example.com:8090", "s3cret", "org");
+        let err = client.health().unwrap_err();
+        match err {
+            Error::Transport(msg) => {
+                assert!(msg.contains("cleartext"), "unexpected refusal text: {msg}");
+                assert!(!msg.contains("s3cret"), "refusal must not echo the secret");
+            }
+            other => panic!("expected a transport refusal, got {other:?}"),
+        }
+
+        // The refusal is scoped precisely: https, loopback http, in-cluster
+        // names, no-secret clients, and the explicit opt-in all pass the guard.
+        assert!(FiduciaClient::internal("https://api.example.com", "s", "o")
+            .cleartext_refusal()
+            .is_none());
+        assert!(FiduciaClient::internal("http://127.0.0.1:8090", "s", "o")
+            .cleartext_refusal()
+            .is_none());
+        assert!(FiduciaClient::internal("http://fiducia-node:8090", "s", "o")
+            .cleartext_refusal()
+            .is_none());
+        assert!(FiduciaClient::new("http://api.example.com")
+            .cleartext_refusal()
+            .is_none());
+        assert!(
+            FiduciaClient::internal("http://api.example.com", "s", "o")
+                .allow_cleartext_internal()
+                .cleartext_refusal()
+                .is_none()
+        );
+    }
+
     fn assert_next(rx: &Receiver<RecordedRequest>, method: &str, path: &str, body: Value) {
         let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(got.method, method);
