@@ -154,6 +154,10 @@ pub struct FiduciaClient {
     /// Org scope (`x-fiducia-org-id`) attached to internal-hop calls so the node
     /// can attribute/scope the request to a tenant.
     org_scope: Option<String>,
+    /// Explicit opt-in to sending the internal-auth secret over cleartext http
+    /// to a host that is not recognizably local/in-cluster. See
+    /// [`allow_cleartext_internal`](Self::allow_cleartext_internal).
+    allow_cleartext_internal: bool,
 }
 
 impl fmt::Debug for FiduciaClient {
