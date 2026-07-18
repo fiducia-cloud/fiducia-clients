@@ -29,7 +29,7 @@ pub enum Error {
 
 fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
     let mut header = HeaderValue::from_str(value)
-        .map_err(|err| Error::Transport(format!("invalid trusted-hop header: {err}")))?;
+        .map_err(|err| Error::Transport(format!("invalid sensitive request header: {err}")))?;
     // Defense in depth: ureq 3 redacts non-allowlisted headers from its debug
     // logs, and http::HeaderValue also redacts values explicitly marked
     // sensitive if another layer formats the request directly.
@@ -53,11 +53,12 @@ fn cleartext_http_host(base: &str) -> Option<&str> {
     Some(host_port.split(':').next().unwrap_or(host_port))
 }
 
-/// Whether `host` is one the internal-auth secret may travel to in cleartext:
+/// Whether `host` is one an authentication credential may travel to in cleartext:
 /// loopback, a private/link-local IP, a single-label service name (compose /
 /// same-namespace k8s), or a cluster-internal DNS suffix. Public DNS names and
 /// public IPs are refused — a bearer-equivalent secret must not cross a path an
-/// on-path observer could watch (see [`FiduciaClient::internal`]).
+/// on-path observer could watch (see [`FiduciaClient::internal`] and
+/// [`FiduciaClient::bearer`]).
 fn cleartext_internal_host_allowed(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
@@ -75,15 +76,9 @@ fn cleartext_internal_host_allowed(host: &str) -> bool {
     if !host.contains('.') {
         return true;
     }
-    [
-        ".svc",
-        ".svc.cluster.local",
-        ".cluster.local",
-        ".internal",
-        ".local",
-    ]
-    .iter()
-    .any(|suffix| host.ends_with(suffix))
+    [".svc", ".svc.cluster.local", ".cluster.local", ".internal"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
 }
 
 /// Per-request controls for blocking lock/semaphore acquires.
@@ -160,6 +155,9 @@ pub struct FiduciaClient {
     /// Org scope (`x-fiducia-org-id`) attached to internal-hop calls so the node
     /// can attribute/scope the request to a tenant.
     org_scope: Option<String>,
+    /// API key sent as a bearer credential to an edge/load-balancer endpoint.
+    /// This is mutually exclusive with the trusted internal-hop headers.
+    bearer_auth: Option<String>,
     /// Explicit opt-in to sending the internal-auth secret over cleartext http
     /// to a host that is not recognizably local/in-cluster. See
     /// [`allow_cleartext_internal`](Self::allow_cleartext_internal).
@@ -179,6 +177,10 @@ impl fmt::Debug for FiduciaClient {
                 &self.internal_auth.as_ref().map(|_| "<redacted>"),
             )
             .field("org_scope", &self.org_scope.as_ref().map(|_| "<redacted>"))
+            .field(
+                "bearer_auth",
+                &self.bearer_auth.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -201,6 +203,7 @@ impl FiduciaClient {
             retry_delay: Duration::ZERO,
             internal_auth: None,
             org_scope: None,
+            bearer_auth: None,
             allow_cleartext_internal: false,
         }
     }
@@ -231,8 +234,8 @@ impl FiduciaClient {
     ///
     /// **Enforced:** an `http://` base is accepted only for hosts that are
     /// recognizably local or in-cluster (loopback, private/link-local IPs,
-    /// single-label service names, `*.svc` / `*.cluster.local` / `*.internal` /
-    /// `*.local`). A cleartext request to any other host — a public DNS name or
+    /// single-label service names, `*.svc` / `*.cluster.local` / `*.internal`).
+    /// A cleartext request to any other host — a public DNS name or
     /// public IP — is refused with a typed error before anything is sent. Use
     /// `https://`, or opt in explicitly with
     /// [`allow_cleartext_internal`](Self::allow_cleartext_internal) for an
@@ -241,6 +244,17 @@ impl FiduciaClient {
         let mut client = Self::new(base_url);
         client.internal_auth = Some(internal_secret.to_string());
         client.org_scope = Some(org_id.to_string());
+        client
+    }
+
+    /// A client for a public edge or load-balancer endpoint authenticated with a
+    /// Fiducia API key. The bearer credential is redacted in debug output and is
+    /// never replayed through a redirect. For a non-loopback/non-cluster target,
+    /// the base URL must use `https://`; cleartext public endpoints are refused
+    /// before a request is sent.
+    pub fn bearer(base_url: &str, api_key: &str) -> Self {
+        let mut client = Self::new(base_url);
+        client.bearer_auth = Some(api_key.to_string());
         client
     }
 
@@ -258,17 +272,24 @@ impl FiduciaClient {
     /// configured base. Pure — checked before every request; factored out so the
     /// policy is unit-testable without a socket.
     fn cleartext_refusal(&self) -> Option<Error> {
-        if self.internal_auth.is_none() || self.allow_cleartext_internal {
+        let credential_kind = if self.internal_auth.is_some() {
+            if self.allow_cleartext_internal {
+                return None;
+            }
+            "internal-auth secret"
+        } else if self.bearer_auth.is_some() {
+            "bearer credential"
+        } else {
             return None;
-        }
+        };
         let host = cleartext_http_host(&self.base)?;
         if cleartext_internal_host_allowed(host) {
             return None;
         }
         Some(Error::Transport(format!(
-            "refusing to send the internal-auth secret over cleartext http to \
+            "refusing to send the {credential_kind} over cleartext http to \
              public host '{host}': use an https:// base_url, an in-cluster \
-             address, or opt in explicitly with allow_cleartext_internal()"
+             address, or loopback"
         )))
     }
 
@@ -321,8 +342,8 @@ impl FiduciaClient {
         control: RequestControl,
         lock_acquire: bool,
     ) -> Result<Value, Error> {
-        // Never let the bearer-equivalent internal secret travel a cleartext hop
-        // to a public host — refuse before anything is sent (or resolved).
+        // Never let an authentication credential travel a cleartext hop to a
+        // public host — refuse before anything is sent (or resolved).
         if let Some(refusal) = self.cleartext_refusal() {
             return Err(refusal);
         }
@@ -337,6 +358,12 @@ impl FiduciaClient {
         }
         if let Some(org) = self.org_scope.as_deref() {
             builder = builder.header("x-fiducia-org-id", sensitive_header_value(org)?);
+        }
+        if let Some(api_key) = self.bearer_auth.as_deref() {
+            builder = builder.header(
+                "authorization",
+                sensitive_header_value(&format!("Bearer {api_key}"))?,
+            );
         }
         let timeout = self.resolve_timeout(&control, lock_acquire);
         let resp = match body {
@@ -474,6 +501,18 @@ impl FiduciaClient {
     }
     pub fn status(&self) -> Result<Value, Error> {
         self.request("GET", "/v1/status", None)
+    }
+    /// Read one supported node observability inventory. This remains read-only
+    /// and validates `kind` rather than interpolating arbitrary path segments.
+    pub fn observe(&self, kind: &str) -> Result<Value, Error> {
+        match kind {
+            "locks" | "semaphores" | "elections" | "shards" | "metrics" => {
+                self.request("GET", &format!("/v1/observe/{kind}"), None)
+            }
+            _ => Err(Error::Transport(format!(
+                "unknown observe kind {kind:?}; expected locks, semaphores, elections, shards, or metrics"
+            ))),
+        }
     }
 
     // --- locks ---
@@ -1480,6 +1519,7 @@ mod tests {
         path: String,
         body: Value,
         idempotency_key: Option<String>,
+        authorization: Option<String>,
     }
 
     fn recording_server() -> (String, Receiver<RecordedRequest>) {
@@ -1521,6 +1561,7 @@ mod tests {
                 let method = first_line.next().unwrap().to_string();
                 let path = first_line.next().unwrap().to_string();
                 let idempotency_key = header_value(&headers, "idempotency-key");
+                let authorization = header_value(&headers, "authorization");
                 let body_start = header_end + 4;
                 let body = if content_len == 0 {
                     Value::Null
@@ -1533,6 +1574,7 @@ mod tests {
                     path,
                     body,
                     idempotency_key,
+                    authorization,
                 })
                 .unwrap();
                 stream
@@ -1677,6 +1719,33 @@ mod tests {
     }
 
     #[test]
+    fn bearer_credential_is_redacted_and_never_crosses_a_redirect() {
+        let attacker = TcpListener::bind("127.0.0.1:0").unwrap();
+        attacker.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/steal", attacker.local_addr().unwrap());
+        let (base, origin_headers) = redirecting_server(location);
+        let api_key = "fiducia-api-key-must-not-leak";
+        let client = FiduciaClient::bearer(&base, api_key);
+
+        let err = client.health().unwrap_err();
+        assert!(matches!(err, Error::Http { status: 302, .. }));
+        let headers = origin_headers.recv_timeout(Duration::from_secs(2)).unwrap();
+        let expected_header = format!("Bearer {api_key}");
+        assert_eq!(
+            header_value(&headers, "authorization").as_deref(),
+            Some(expected_header.as_str())
+        );
+        assert!(
+            matches!(attacker.accept(), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target received a bearer-authenticated request"
+        );
+
+        let debug = format!("{client:?}");
+        assert!(!debug.contains(api_key));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
     fn cleartext_internal_host_policy() {
         // Local / in-cluster shapes the secret may travel to over http.
         for ok in [
@@ -1694,7 +1763,6 @@ mod tests {
             "fiducia-node.fiducia.svc",
             "fiducia-node.fiducia.svc.cluster.local",
             "node-0.corp.internal",
-            "node.local",
         ] {
             assert!(cleartext_internal_host_allowed(ok), "should allow {ok}");
         }
@@ -1705,6 +1773,7 @@ mod tests {
             "8.8.8.8",
             "172.32.0.1", // just past the RFC1918 172.16/12 range
             "2001:db8::1",
+            "node.local", // mDNS is not a cluster-identity guarantee
         ] {
             assert!(!cleartext_internal_host_allowed(bad), "should refuse {bad}");
         }
@@ -1719,6 +1788,26 @@ mod tests {
         assert_eq!(cleartext_http_host("http://user@host:1"), Some("host"));
         assert_eq!(cleartext_http_host("http://[::1]:8090"), Some("::1"));
         assert_eq!(cleartext_http_host("https://host:8090"), None);
+    }
+
+    #[test]
+    fn bearer_client_authenticates_supported_observe_calls() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::bearer(&base, "api-key-sensitive");
+
+        client.observe("locks").unwrap();
+        let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(got.method, "GET");
+        assert_eq!(got.path, "/v1/observe/locks");
+        assert_eq!(got.body, Value::Null);
+        assert_eq!(
+            got.authorization.as_deref(),
+            Some("Bearer api-key-sensitive")
+        );
+        assert!(matches!(
+            client.observe("unknown"),
+            Err(Error::Transport(_))
+        ));
     }
 
     #[test]
@@ -1755,6 +1844,10 @@ mod tests {
             .allow_cleartext_internal()
             .cleartext_refusal()
             .is_none());
+        assert!(matches!(
+            FiduciaClient::bearer("http://api.example.com", "api-key").health(),
+            Err(Error::Transport(_))
+        ));
     }
 
     fn assert_next(rx: &Receiver<RecordedRequest>, method: &str, path: &str, body: Value) {
