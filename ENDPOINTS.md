@@ -19,7 +19,7 @@ too. `?param` marks an optional argument.
 | `POST` | `/v1/idempotency/claim` | `key`, `owner`?, `ttl_ms`?, `ttl`?, `metadata`? | Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record. |
 | `POST` | `/v1/idempotency/complete` | `key`, `owner`, `fencing_token`, `result`? | Mark a claimed idempotency key complete and optionally store a replayable result. |
 | `GET` | `/v1/kv` | `key` | Read a config key. |
-| `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`? | Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist). |
+| `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`?, `plaintext`? | Write a config key; values are encrypted at rest when the cluster has KV protection configured. plaintext=true explicitly opts this value out. prev_revision is a compare-and-swap guard (0 = must-not-exist). |
 | `DELETE` | `/v1/kv` | `key` | Delete a config key. |
 | `GET` | `/v1/counters` | `key` | Read a counter's value and revision; absent reads as found=false (treat as 0). |
 | `POST` | `/v1/counters/add` | `key`, `delta`, `prev_revision`? | Atomically add delta (may be negative); prev_revision makes it a compare-and-set. |

@@ -103,6 +103,15 @@ type RwOpts struct {
 	IdempotencyKey string
 }
 
+// KvPutOpts configures a KV write. Plaintext explicitly opts the value out of
+// cluster-side at-rest encryption; leave it false for encrypted-by-default storage.
+type KvPutOpts struct {
+	TTLMs          int64
+	PrevRevision   *int64
+	Plaintext      bool
+	IdempotencyKey string
+}
+
 // RateLimitCheckOpts configures an atomic rate-limit check.
 type RateLimitCheckOpts struct {
 	Algorithm       string
@@ -556,9 +565,19 @@ func (c *Client) KvGet(key string) (map[string]any, error) {
 	return c.request("GET", "/v1/kv?key="+url.QueryEscape(key), nil)
 }
 func (c *Client) KvPut(key, value string, ttlMs int64) (map[string]any, error) {
+	return c.KvPutWithOptions(key, value, KvPutOpts{TTLMs: ttlMs})
+}
+func (c *Client) KvPutWithOptions(key, value string, o KvPutOpts) (map[string]any, error) {
 	body := map[string]any{"value": value}
-	setOptionalInt64(body, "ttl_ms", ttlMs)
-	return c.request("PUT", "/v1/kv?key="+url.QueryEscape(key), body)
+	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	if o.PrevRevision != nil {
+		body["prev_revision"] = *o.PrevRevision
+	}
+	if o.Plaintext {
+		body["plaintext"] = true
+	}
+	return c.requestWithControl("PUT", "/v1/kv?key="+url.QueryEscape(key), body,
+		idempotencyControl(o.IdempotencyKey))
 }
 func (c *Client) KvDelete(key string) (map[string]any, error) {
 	return c.request("DELETE", "/v1/kv?key="+url.QueryEscape(key), nil)

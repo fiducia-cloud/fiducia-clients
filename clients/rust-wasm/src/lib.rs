@@ -331,9 +331,9 @@ impl FiduciaClient {
         self.request("GET", path, None).await
     }
 
-    /// Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist).
+    /// Write a config key; values are encrypted at rest when the cluster has KV protection configured. plaintext=true explicitly opts this value out. prev_revision is a compare-and-swap guard (0 = must-not-exist).
     #[wasm_bindgen(js_name = kvPut)]
-    pub async fn kv_put(&self, key: String, value: String, ttl_ms: Option<f64>, prev_revision: Option<f64>) -> Result<JsValue, JsValue> {
+    pub async fn kv_put(&self, key: String, value: String, ttl_ms: Option<f64>, prev_revision: Option<f64>, plaintext: Option<bool>) -> Result<JsValue, JsValue> {
         let mut path = String::from("/v1/kv");
         let mut _q: Vec<String> = Vec::new();
         _q.push(format!("key={}", enc(&key)));
@@ -348,6 +348,9 @@ impl FiduciaClient {
         }
         if let Some(v) = prev_revision {
             _body.insert("prev_revision".to_string(), serde_json::json!(checked_int(v, "prev_revision")?));
+        }
+        if let Some(v) = plaintext {
+            _body.insert("plaintext".to_string(), serde_json::json!(v));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("PUT", path, Some(_payload)).await

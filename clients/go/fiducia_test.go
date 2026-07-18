@@ -399,3 +399,28 @@ func TestMalformedSuccessfulJSONIsAnError(t *testing.T) {
 		t.Fatal("malformed successful JSON must not be reported as success")
 	}
 }
+
+func TestKvPutOptionsCarryCasAndExplicitPlaintextOptOut(t *testing.T) {
+	server, calls := recordingServer(t)
+	defer server.Close()
+	client := New(server.URL)
+	createOnly := int64(0)
+
+	if _, err := client.KvPutWithOptions("secrets/database", "value", KvPutOpts{
+		TTLMs:        60_000,
+		PrevRevision: &createOnly,
+		Plaintext:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	requireLastCall(t, calls, recordedCall{
+		Method: "PUT",
+		Path:   "/v1/kv?key=secrets%2Fdatabase",
+		Body: map[string]any{
+			"value":         "value",
+			"ttl_ms":        float64(60_000),
+			"prev_revision": float64(0),
+			"plaintext":     true,
+		},
+	})
+}

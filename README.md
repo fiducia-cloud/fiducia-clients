@@ -261,13 +261,13 @@ local development endpoint); it is not yet a hosted-customer login client.
 ## Reproducible build inputs
 
 The Rust client lockfiles are committed, and CI/container Cargo commands use
-`--locked`. Languages that consume the sibling `fiducia-interfaces` checkout
-are tested against the reviewed full commit
-`487e470c45ab5851e8f6f3b1dc048fe067fbf408`, never the moving default branch.
+`--locked`. The Rust manifest pins `fiducia-interfaces` directly by Git revision;
+languages that consume the sibling checkout are tested against the same reviewed
+full commit `e3dba39566e036ad61de91e2e6c1d625ec2b5411`, never the moving default branch.
 The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
 detached `HEAD`, and verifies it again; overrides that are branches, tags, short
-hashes, or a different object fail the build. Update all four CI checkout pins
-and the Docker argument together when intentionally adopting a new contract.
+hashes, or a different object fail the build. Update the CI checkout pins, Rust
+manifest/lockfile, and Docker argument together when adopting a new contract.
 The multi-language test image installs system tools as root, then switches to
 numeric UID/GID `10001:10001` before fetching contracts, copying source,
 compiling, or running tests. CI audits the TypeScript and both Rust lockfiles in

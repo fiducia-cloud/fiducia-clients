@@ -54,7 +54,8 @@
       { "name": "key", "in": "query", "type": "string" },
       { "name": "value", "in": "body", "type": "string" },
       { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
-      { "name": "prev_revision", "in": "body", "type": "int", "optional": true } ], "doc": "Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist)." },
+      { "name": "prev_revision", "in": "body", "type": "int", "optional": true },
+      { "name": "plaintext", "in": "body", "type": "bool", "optional": true } ], "doc": "Write a config key; values are encrypted at rest when the cluster has KV protection configured. plaintext=true explicitly opts this value out. prev_revision is a compare-and-swap guard (0 = must-not-exist)." },
     { "name": "kv_delete", "group": "kv", "method": "DELETE", "path": "/v1/kv", "params": [
       { "name": "key", "in": "query", "type": "string" } ], "doc": "Delete a config key." },
 

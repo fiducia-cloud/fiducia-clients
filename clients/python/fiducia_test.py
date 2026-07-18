@@ -322,12 +322,12 @@ class FiduciaPythonClientTests(unittest.TestCase):
 
         c.kv_get("flags/new-ui")
         self.assert_last_call(c, "GET", "/v1/kv?key=flags%2Fnew-ui")
-        c.kv_put("flags/new-ui", "on", ttl_ms=60_000, prev_revision=7)
+        c.kv_put("flags/new-ui", "on", ttl_ms=60_000, prev_revision=7, plaintext=True)
         self.assert_last_call(
             c,
             "PUT",
             "/v1/kv?key=flags%2Fnew-ui",
-            {"value": "on", "ttl_ms": 60_000, "prev_revision": 7},
+            {"value": "on", "ttl_ms": 60_000, "prev_revision": 7, "plaintext": True},
         )
         c.kv_delete("flags/new-ui")
         self.assert_last_call(c, "DELETE", "/v1/kv?key=flags%2Fnew-ui")
@@ -408,8 +408,8 @@ class FiduciaPythonClientTests(unittest.TestCase):
              ("lock_acquire_many", (["a", "b"],), {"holder": "h", "ttl_ms": 100, "wait": True})),
             (["sem", "acquire", "--key", "pool", "--holder", "h", "--limit", "4"],
              ("semaphore_acquire", ("pool", 4), {"holder": "h", "ttl_ms": None, "wait": False})),
-            (["kv", "put", "--key", "flags/new-ui", "--value", "on", "--prev-revision", "3"],
-             ("kv_put", ("flags/new-ui", "on"), {"ttl_ms": None, "prev_revision": 3})),
+            (["kv", "put", "--key", "flags/new-ui", "--value", "on", "--prev-revision", "3", "--plaintext"],
+             ("kv_put", ("flags/new-ui", "on"), {"ttl_ms": None, "prev_revision": 3, "plaintext": True})),
             (["ratelimit", "check", "--tenant", "tenant-a", "--key", "checkout", "--algorithm", "sliding_window", "--limit", "5", "--window-ms", "1000"],
              ("rate_limit_check", ("tenant-a", "checkout", "sliding_window", 5, 1000), {"refill_per_second": None, "cost": None})),
             (["cron", "upsert", "--name", "nightly", "--cron", "0 0 * * *", "--webhook", "https://example.test/hook"],

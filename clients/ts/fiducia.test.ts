@@ -129,11 +129,15 @@ test("mutating request controls can send an Idempotency-Key header", async () =>
   const calls: RecordedCall[] = [];
   const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
 
-  await client.kvPut("orders/42", "paid", { ttlMs: 30_000, idempotencyKey: "req_order_42" });
+  await client.kvPut("orders/42", "paid", {
+    ttlMs: 30_000,
+    plaintext: true,
+    idempotencyKey: "req_order_42",
+  });
   assert.deepEqual(calls.pop(), {
     method: "PUT",
     path: "/v1/kv?key=orders%2F42",
-    body: { value: "paid", ttl_ms: 30_000 },
+    body: { value: "paid", ttl_ms: 30_000, plaintext: true },
     idempotencyKey: "req_order_42",
   });
 

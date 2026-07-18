@@ -361,9 +361,10 @@ class FiduciaClient:
     def kv_get(self, key):
         return self._request("GET", _query("/v1/kv", key=key))
 
-    def kv_put(self, key, value, ttl_ms=None, prev_revision=None, **request_opts):
+    def kv_put(self, key, value, ttl_ms=None, prev_revision=None, plaintext=None, **request_opts):
         return self._request("PUT", _query("/v1/kv", key=key),
-                             {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision},
+                             {"value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision,
+                              "plaintext": plaintext},
                              **request_opts)
 
     def kv_delete(self, key, **request_opts):
@@ -714,6 +715,8 @@ def build_parser():
     p.add_argument("value")
     p.add_argument("--ttl-ms", type=int)
     p.add_argument("--prev-revision", type=int)
+    p.add_argument("--plaintext", action="store_true", default=None,
+                   help="explicitly opt this value out of at-rest encryption")
     p = kv_sub.add_parser("delete")
     p.add_argument("key")
     p = kv_sub.add_parser("list")
@@ -831,7 +834,8 @@ def main(argv=None, client_factory=FiduciaClient):
         if args.action == "get":
             value = client.kv_get(args.key)
         elif args.action == "put":
-            value = client.kv_put(args.key, args.value, ttl_ms=args.ttl_ms, prev_revision=args.prev_revision)
+            value = client.kv_put(args.key, args.value, ttl_ms=args.ttl_ms,
+                                  prev_revision=args.prev_revision, plaintext=args.plaintext)
         elif args.action == "delete":
             value = client.kv_delete(args.key)
         elif args.action == "list":

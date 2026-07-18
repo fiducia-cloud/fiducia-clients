@@ -636,10 +636,21 @@ impl FiduciaClient {
         holder: &str,
         fencing_token: u64,
     ) -> Result<Value, Error> {
-        self.request(
+        self.lock_release_with_options(_key, holder, fencing_token, RequestControl::default())
+    }
+    pub fn lock_release_with_options(
+        &self,
+        _key: &str,
+        holder: &str,
+        fencing_token: u64,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
+        self.request_with_control(
             "POST",
             "/v1/locks/release",
             Some(json!({ "holder": holder, "fencing_token": fencing_token })),
+            control,
+            false,
         )
     }
     pub fn lock_release_many(&self, lock_id: &str) -> Result<Value, Error> {
@@ -787,11 +798,7 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?key={}", enc(key)), None)
     }
     pub fn kv_put(&self, key: &str, value: &str, ttl_ms: Option<u64>) -> Result<Value, Error> {
-        self.request(
-            "PUT",
-            &format!("/v1/kv?key={}", enc(key)),
-            Some(json!({ "value": value, "ttl_ms": ttl_ms })),
-        )
+        self.kv_put_with_options(key, value, ttl_ms, None, false)
     }
     pub fn kv_put_cas(
         &self,
@@ -800,10 +807,28 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         prev_revision: Option<u64>,
     ) -> Result<Value, Error> {
+        self.kv_put_with_options(key, value, ttl_ms, prev_revision, false)
+    }
+    /// Write KV with compare-and-swap and storage-protection controls.
+    /// `plaintext=true` explicitly opts this value out of cluster-side at-rest
+    /// encryption; callers should normally leave it false.
+    pub fn kv_put_with_options(
+        &self,
+        key: &str,
+        value: &str,
+        ttl_ms: Option<u64>,
+        prev_revision: Option<u64>,
+        plaintext: bool,
+    ) -> Result<Value, Error> {
         self.request(
             "PUT",
             &format!("/v1/kv?key={}", enc(key)),
-            Some(json!({ "value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision })),
+            Some(json!({
+                "value": value,
+                "ttl_ms": ttl_ms,
+                "prev_revision": prev_revision,
+                "plaintext": plaintext,
+            })),
         )
     }
     pub fn kv_delete(&self, key: &str) -> Result<Value, Error> {
@@ -1329,14 +1354,32 @@ impl FiduciaClient {
         ttl_ms: u64,
         metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        self.election_campaign_with_options(
+            name,
+            candidate,
+            ttl_ms,
+            metadata,
+            RequestControl::default(),
+        )
+    }
+    pub fn election_campaign_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        ttl_ms: u64,
+        metadata: Option<Value>,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
         let mut body = json!({ "candidate": candidate, "ttl_ms": ttl_ms });
         if let Some(metadata) = metadata {
             body["metadata"] = metadata;
         }
-        self.request(
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/campaign", enc(name)),
             Some(body),
+            control,
+            false,
         )
     }
     pub fn election_campaign_with_metadata(
@@ -1357,14 +1400,32 @@ impl FiduciaClient {
         fencing_token: u64,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
+        self.election_renew_with_options(
+            name,
+            candidate,
+            fencing_token,
+            ttl_ms,
+            RequestControl::default(),
+        )
+    }
+    pub fn election_renew_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+        ttl_ms: Option<u64>,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
         let mut body = json!({ "candidate": candidate, "fencing_token": fencing_token });
         if let Some(ttl_ms) = ttl_ms {
             body["ttl_ms"] = json!(ttl_ms);
         }
-        self.request(
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/renew", enc(name)),
             Some(body),
+            control,
+            false,
         )
     }
     pub fn election_resign(
@@ -1373,10 +1434,21 @@ impl FiduciaClient {
         candidate: &str,
         fencing_token: u64,
     ) -> Result<Value, Error> {
-        self.request(
+        self.election_resign_with_options(name, candidate, fencing_token, RequestControl::default())
+    }
+    pub fn election_resign_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/resign", enc(name)),
             Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+            control,
+            false,
         )
     }
     pub fn election_get(&self, name: &str) -> Result<Value, Error> {
@@ -2455,6 +2527,53 @@ mod tests {
         assert_eq!(got.path, "/v1/locks/acquire");
         assert_eq!(got.idempotency_key.as_deref(), Some("req_order_42"));
         assert!(got.body.get("idempotency_key").is_none());
+    }
+
+    #[test]
+    fn lock_and_election_mutations_accept_idempotency_controls() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+        let control = |key: &str| RequestControl {
+            idempotency_key: Some(key.to_string()),
+            ..RequestControl::default()
+        };
+
+        client
+            .lock_release_with_options("orders/42", "worker-a", 7, control("release-7"))
+            .unwrap();
+        client
+            .election_campaign_with_options(
+                "billing/tenant-a",
+                "worker-a",
+                30_000,
+                None,
+                control("campaign-7"),
+            )
+            .unwrap();
+        client
+            .election_renew_with_options(
+                "billing/tenant-a",
+                "worker-a",
+                7,
+                Some(30_000),
+                control("renew-7"),
+            )
+            .unwrap();
+        client
+            .election_resign_with_options("billing/tenant-a", "worker-a", 7, control("resign-7"))
+            .unwrap();
+
+        for (path, key) in [
+            ("/v1/locks/release", "release-7"),
+            ("/v1/elections/billing%2Ftenant-a/campaign", "campaign-7"),
+            ("/v1/elections/billing%2Ftenant-a/renew", "renew-7"),
+            ("/v1/elections/billing%2Ftenant-a/resign", "resign-7"),
+        ] {
+            let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(got.method, "POST");
+            assert_eq!(got.path, path);
+            assert_eq!(got.idempotency_key.as_deref(), Some(key));
+        }
     }
 
     #[test]
