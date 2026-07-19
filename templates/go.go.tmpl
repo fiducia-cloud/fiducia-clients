@@ -12,6 +12,8 @@ package fiducia
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,8 +44,10 @@ type (
 // AcquireOpts configures a lock acquire.
 type AcquireOpts struct {
 	Holder             string
+	RequestID          string
 	TTLMs              int64
 	Wait               bool
+	WaitTimeoutMs      int64
 	Max                uint32
 	Context            context.Context
 	RequestTimeout     time.Duration
@@ -59,8 +63,10 @@ type AcquireOpts struct {
 type AcquireManyOpts struct {
 	Keys               []string
 	Holder             string
+	RequestID          string
 	TTLMs              int64
 	Wait               bool
+	WaitTimeoutMs      int64
 	Context            context.Context
 	RequestTimeout     time.Duration
 	LockRequestTimeout time.Duration
@@ -232,6 +238,9 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 
 	var rdr io.Reader
 	if body != nil {
+		if err := validateAttemptRequestIDs(body, "request"); err != nil {
+			return nil, err
+		}
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
@@ -265,7 +274,11 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 	var data map[string]any
 	var decodeErr error
 	if len(raw) > 0 {
-		decodeErr = json.Unmarshal(raw, &data)
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		// Preserve integer lexemes as json.Number. Decoding into float64 would
+		// silently round fencing tokens before authority checks inspect them.
+		decoder.UseNumber()
+		decodeErr = decoder.Decode(&data)
 	}
 	// Hard-reject redirects (the transport never follows them; see New). Match
 	// the TypeScript client's error shape so callers can detect it uniformly.
@@ -285,6 +298,30 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 		return nil, fmt.Errorf("fiducia: decoding HTTP %d JSON response: %w", res.StatusCode, decodeErr)
 	}
 	return data, nil
+}
+
+func validateAttemptRequestIDs(value any, at string) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if key == "request_id" && item != nil {
+				requestID, ok := item.(string)
+				if !ok || strings.TrimSpace(requestID) == "" || len([]byte(requestID)) > 128 || strings.ContainsFunc(requestID, func(r rune) bool { return r < 32 || r == 127 }) {
+					return fmt.Errorf("fiducia: %s.request_id must be 1-128 printable UTF-8 bytes", at)
+				}
+			}
+			if err := validateAttemptRequestIDs(item, at+"."+key); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, item := range typed {
+			if err := validateAttemptRequestIDs(item, fmt.Sprintf("%s[%d]", at, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Client) resolveTimeout(ctrl requestControl) time.Duration {
@@ -434,6 +471,29 @@ func setOptionalInt64(body map[string]any, key string, value int64) {
 	}
 }
 
+func generatedHolder() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("fiducia: generate secure holder: %w", err)
+	}
+	return "fdc-" + hex.EncodeToString(bytes[:]), nil
+}
+
+func generatedRequestID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("fiducia: generate secure request id: %w", err)
+	}
+	return "fdc-attempt-" + hex.EncodeToString(bytes[:]), nil
+}
+
+func holderOrGenerated(holder string) (string, error) {
+	if holder = strings.TrimSpace(holder); holder != "" {
+		return holder, nil
+	}
+	return generatedHolder()
+}
+
 // --- misc ---
 func (c *Client) Health() (map[string]any, error) { return c.request("GET", "/healthz", nil) }
 func (c *Client) Status() (map[string]any, error) { return c.request("GET", "/v1/status", nil) }
@@ -455,9 +515,14 @@ func (c *Client) Lock(key string, o AcquireOpts) (map[string]any, error) {
 	return c.MustLock(key, o)
 }
 func (c *Client) lockAcquireWithWait(key string, o AcquireOpts, wait bool) (map[string]any, error) {
-	body := map[string]any{"key": key, "wait": wait}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"key": key, "holder": holder, "wait": wait}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireControl(o))
 }
 func (c *Client) LockAcquireMany(o AcquireManyOpts) (map[string]any, error) {
@@ -473,9 +538,14 @@ func (c *Client) LockMany(o AcquireManyOpts) (map[string]any, error) {
 	return c.MustLockMany(o)
 }
 func (c *Client) lockAcquireManyWithWait(o AcquireManyOpts, wait bool) (map[string]any, error) {
-	body := map[string]any{"keys": o.Keys, "wait": wait}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"keys": o.Keys, "holder": holder, "wait": wait}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireManyControl(o))
 }
 func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
@@ -508,9 +578,14 @@ func (c *Client) semaphoreAcquireWithWait(key string, o AcquireOpts, wait bool) 
 	if max == 0 {
 		max = 2
 	}
-	body := map[string]any{"key": key, "wait": wait, "limit": max}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"key": key, "holder": holder, "wait": wait, "limit": max}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/semaphores/acquire", body, acquireControl(o))
 }
 func (c *Client) SemaphoreRelease(key string, o ReleaseOpts) (map[string]any, error) {

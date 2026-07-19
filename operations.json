@@ -9,14 +9,27 @@
       { "name": "key", "in": "query", "type": "string" } ], "doc": "Inspect a lock member key: holder, the held union, and the FIFO wait queue." },
     { "name": "lock_acquire", "group": "locks", "method": "POST", "path": "/v1/locks/acquire", "params": [
       { "name": "key", "in": "body", "type": "string" },
-      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "request_id", "in": "body", "type": "string", "optional": true },
       { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
-      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Acquire a single-key lock (try-lock unless wait)." },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true },
+      { "name": "wait_timeout_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API." },
     { "name": "lock_acquire_many", "group": "locks", "method": "POST", "path": "/v1/locks/acquire", "params": [
       { "name": "keys", "in": "body", "type": "string[]" },
-      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "request_id", "in": "body", "type": "string", "optional": true },
       { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
-      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key." },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true },
+      { "name": "wait_timeout_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key." },
+    { "name": "lock_renew", "group": "locks", "method": "POST", "path": "/v1/locks/renew", "params": [
+      { "name": "keys", "in": "body", "type": "string[]" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "ttl_ms", "in": "body", "type": "int" } ], "doc": "Renew a held union lock only when holder and fencing token still match; preserves the token." },
+    { "name": "lock_cancel", "group": "locks", "method": "POST", "path": "/v1/locks/cancel", "params": [
+      { "name": "keys", "in": "body", "type": "string[]" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "request_id", "in": "body", "type": "string", "optional": true } ], "doc": "Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior." },
     { "name": "lock_release", "group": "locks", "method": "POST", "path": "/v1/locks/release", "params": [
       { "name": "holder", "in": "body", "type": "string" },
       { "name": "fencing_token", "in": "body", "type": "int" } ], "doc": "Release the whole grant (every member key) by its fencing token." },
@@ -26,9 +39,20 @@
     { "name": "semaphore_acquire", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/acquire", "params": [
       { "name": "key", "in": "body", "type": "string" },
       { "name": "limit", "in": "body", "type": "int" },
-      { "name": "holder", "in": "body", "type": "string", "optional": true },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "request_id", "in": "body", "type": "string", "optional": true },
       { "name": "ttl_ms", "in": "body", "type": "int", "optional": true },
-      { "name": "wait", "in": "body", "type": "bool", "optional": true } ], "doc": "Take a permit of a counting semaphore (up to limit holders)." },
+      { "name": "wait", "in": "body", "type": "bool", "optional": true },
+      { "name": "wait_timeout_ms", "in": "body", "type": "int", "optional": true } ], "doc": "Take a permit of a counting semaphore (up to limit holders)." },
+    { "name": "semaphore_renew", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/renew", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "fencing_token", "in": "body", "type": "int" },
+      { "name": "ttl_ms", "in": "body", "type": "int" } ], "doc": "Renew a held semaphore permit only when holder and fencing token still match; preserves the token." },
+    { "name": "semaphore_cancel", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/cancel", "params": [
+      { "name": "key", "in": "body", "type": "string" },
+      { "name": "holder", "in": "body", "type": "string" },
+      { "name": "request_id", "in": "body", "type": "string", "optional": true } ], "doc": "Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior." },
     { "name": "semaphore_release", "group": "semaphores", "method": "POST", "path": "/v1/semaphores/release", "params": [
       { "name": "key", "in": "body", "type": "string" },
       { "name": "holder", "in": "body", "type": "string" },

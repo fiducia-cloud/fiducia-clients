@@ -174,20 +174,24 @@ impl FiduciaClient {
         self.request("GET", path, None).await
     }
 
-    /// Acquire a single-key lock (try-lock unless wait).
+    /// Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API.
     #[wasm_bindgen(js_name = lockAcquire)]
-    pub async fn lock_acquire(&self, key: String, holder: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
+    pub async fn lock_acquire(&self, key: String, holder: String, request_id: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>, wait_timeout_ms: Option<f64>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/locks/acquire");
         let mut _body = serde_json::Map::new();
         _body.insert("key".to_string(), serde_json::Value::String(key));
-        if let Some(v) = holder {
-            _body.insert("holder".to_string(), serde_json::json!(v));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        if let Some(v) = request_id {
+            _body.insert("request_id".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
             _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
+        }
+        if let Some(v) = wait_timeout_ms {
+            _body.insert("wait_timeout_ms".to_string(), serde_json::json!(checked_int(v, "wait_timeout_ms")?));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
@@ -195,18 +199,49 @@ impl FiduciaClient {
 
     /// Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key.
     #[wasm_bindgen(js_name = lockAcquireMany)]
-    pub async fn lock_acquire_many(&self, keys: Vec<String>, holder: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
+    pub async fn lock_acquire_many(&self, keys: Vec<String>, holder: String, request_id: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>, wait_timeout_ms: Option<f64>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/locks/acquire");
         let mut _body = serde_json::Map::new();
         _body.insert("keys".to_string(), serde_json::json!(keys));
-        if let Some(v) = holder {
-            _body.insert("holder".to_string(), serde_json::json!(v));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        if let Some(v) = request_id {
+            _body.insert("request_id".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
             _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
+        }
+        if let Some(v) = wait_timeout_ms {
+            _body.insert("wait_timeout_ms".to_string(), serde_json::json!(checked_int(v, "wait_timeout_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Renew a held union lock only when holder and fencing token still match; preserves the token.
+    #[wasm_bindgen(js_name = lockRenew)]
+    pub async fn lock_renew(&self, keys: Vec<String>, holder: String, fencing_token: f64, ttl_ms: f64) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/locks/renew");
+        let mut _body = serde_json::Map::new();
+        _body.insert("keys".to_string(), serde_json::json!(keys));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
+        _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(ttl_ms, "ttl_ms")?));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior.
+    #[wasm_bindgen(js_name = lockCancel)]
+    pub async fn lock_cancel(&self, keys: Vec<String>, holder: String, request_id: Option<String>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/locks/cancel");
+        let mut _body = serde_json::Map::new();
+        _body.insert("keys".to_string(), serde_json::json!(keys));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        if let Some(v) = request_id {
+            _body.insert("request_id".to_string(), serde_json::json!(v));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await
@@ -238,19 +273,50 @@ impl FiduciaClient {
 
     /// Take a permit of a counting semaphore (up to limit holders).
     #[wasm_bindgen(js_name = semaphoreAcquire)]
-    pub async fn semaphore_acquire(&self, key: String, limit: f64, holder: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>) -> Result<JsValue, JsValue> {
+    pub async fn semaphore_acquire(&self, key: String, limit: f64, holder: String, request_id: Option<String>, ttl_ms: Option<f64>, wait: Option<bool>, wait_timeout_ms: Option<f64>) -> Result<JsValue, JsValue> {
         let path = String::from("/v1/semaphores/acquire");
         let mut _body = serde_json::Map::new();
         _body.insert("key".to_string(), serde_json::Value::String(key));
         _body.insert("limit".to_string(), serde_json::json!(checked_int(limit, "limit")?));
-        if let Some(v) = holder {
-            _body.insert("holder".to_string(), serde_json::json!(v));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        if let Some(v) = request_id {
+            _body.insert("request_id".to_string(), serde_json::json!(v));
         }
         if let Some(v) = ttl_ms {
             _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(v, "ttl_ms")?));
         }
         if let Some(v) = wait {
             _body.insert("wait".to_string(), serde_json::json!(v));
+        }
+        if let Some(v) = wait_timeout_ms {
+            _body.insert("wait_timeout_ms".to_string(), serde_json::json!(checked_int(v, "wait_timeout_ms")?));
+        }
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Renew a held semaphore permit only when holder and fencing token still match; preserves the token.
+    #[wasm_bindgen(js_name = semaphoreRenew)]
+    pub async fn semaphore_renew(&self, key: String, holder: String, fencing_token: f64, ttl_ms: f64) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/semaphores/renew");
+        let mut _body = serde_json::Map::new();
+        _body.insert("key".to_string(), serde_json::Value::String(key));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        _body.insert("fencing_token".to_string(), serde_json::json!(checked_int(fencing_token, "fencing_token")?));
+        _body.insert("ttl_ms".to_string(), serde_json::json!(checked_int(ttl_ms, "ttl_ms")?));
+        let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
+        self.request("POST", path, Some(_payload)).await
+    }
+
+    /// Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior.
+    #[wasm_bindgen(js_name = semaphoreCancel)]
+    pub async fn semaphore_cancel(&self, key: String, holder: String, request_id: Option<String>) -> Result<JsValue, JsValue> {
+        let path = String::from("/v1/semaphores/cancel");
+        let mut _body = serde_json::Map::new();
+        _body.insert("key".to_string(), serde_json::Value::String(key));
+        _body.insert("holder".to_string(), serde_json::Value::String(holder));
+        if let Some(v) = request_id {
+            _body.insert("request_id".to_string(), serde_json::json!(v));
         }
         let _payload = serde_json::to_string(&serde_json::Value::Object(_body)).unwrap();
         self.request("POST", path, Some(_payload)).await

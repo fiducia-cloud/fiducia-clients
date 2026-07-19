@@ -438,6 +438,8 @@ impl FiduciaClient {
         }
     }
 
+    // Mirrors the compatibility surface's independent acquire controls.
+    #[allow(clippy::too_many_arguments)]
     fn lock_acquire_with_wait(
         &self,
         key: &str,
@@ -445,15 +447,16 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
         _max: Option<u32>,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.request_with_control(
-            "POST",
-            "/v1/locks/acquire",
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
-            control,
-            true,
-        )
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request_with_control("POST", "/v1/locks/acquire", Some(body), control, true)
     }
 
     fn lock_acquire_many_with_wait(
@@ -462,17 +465,20 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
         wait: bool,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.request_with_control(
-            "POST",
-            "/v1/locks/acquire",
-            Some(json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
-            control,
-            true,
-        )
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request_with_control("POST", "/v1/locks/acquire", Some(body), control, true)
     }
 
+    // Mirrors the compatibility surface's independent acquire controls.
+    #[allow(clippy::too_many_arguments)]
     fn semaphore_acquire_with_wait(
         &self,
         key: &str,
@@ -480,8 +486,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
         max: u32,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(1) });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
         self.request_with_control(
             "POST",
             "/v1/semaphores/acquire",
@@ -489,7 +502,7 @@ impl FiduciaClient {
             // is a mutex (per the shared LockAcquireRequest contract), and the
             // old `.max(2)` silently turned a mutex into a capacity-2 semaphore,
             // letting two holders enter a section that must admit exactly one.
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(1) })),
+            Some(body),
             control,
             true,
         )
@@ -527,7 +540,37 @@ impl FiduciaClient {
         wait: bool,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a single lock under an attempt-scoped request identity. Reuse
+    /// the same request_id for retries and cancellation, never for a later
+    /// logical attempt. Passing None preserves the legacy wire contract.
+    pub fn lock_acquire_with_request_id(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: Option<u32>,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn lock_acquire_with_options(
         &self,
@@ -538,7 +581,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, None, control)
     }
     pub fn try_lock(
         &self,
@@ -547,7 +590,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            false,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn try_lock_with_options(
         &self,
@@ -557,7 +608,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, None, control)
     }
     pub fn must_lock(
         &self,
@@ -566,7 +617,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            true,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_lock_with_options(
         &self,
@@ -576,7 +635,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, None, control)
     }
     pub fn lock(
         &self,
@@ -594,7 +653,32 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            wait,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a union lock under an attempt-scoped request identity.
+    pub fn lock_acquire_many_with_request_id(
+        &self,
+        keys: &[&str],
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            wait,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn lock_acquire_many_with_options(
         &self,
@@ -604,7 +688,7 @@ impl FiduciaClient {
         wait: bool,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, control)
+        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, None, control)
     }
     pub fn try_lock_many(
         &self,
@@ -612,7 +696,14 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, false, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            false,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_lock_many(
         &self,
@@ -620,7 +711,14 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, true, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            true,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn lock_many(
         &self,
@@ -629,6 +727,42 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
         self.must_lock_many(keys, holder, ttl_ms)
+    }
+    pub fn lock_renew(
+        &self,
+        keys: &[&str],
+        holder: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/renew",
+            Some(json!({
+                "keys": keys,
+                "holder": holder,
+                "fencing_token": fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )
+    }
+    pub fn lock_cancel(&self, keys: &[&str], holder: &str) -> Result<Value, Error> {
+        self.lock_cancel_with_request_id(keys, holder, None)
+    }
+    /// Cancel exactly one logical union-lock acquisition attempt. None keeps
+    /// the legacy holder/key cancellation behavior for rolling upgrades.
+    pub fn lock_cancel_with_request_id(
+        &self,
+        keys: &[&str],
+        holder: &str,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({ "keys": keys, "holder": holder });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request("POST", "/v1/locks/cancel", Some(body))
     }
     pub fn lock_release(
         &self,
@@ -668,7 +802,35 @@ impl FiduciaClient {
         wait: bool,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a semaphore permit under an attempt-scoped request identity.
+    pub fn semaphore_acquire_with_request_id(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: u32,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn semaphore_acquire_with_options(
         &self,
@@ -679,7 +841,7 @@ impl FiduciaClient {
         max: u32,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, control)
+        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, None, control)
     }
     pub fn try_semaphore(
         &self,
@@ -688,7 +850,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, false, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            false,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_semaphore(
         &self,
@@ -697,7 +867,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, true, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            true,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn semaphore(
         &self,
@@ -707,6 +885,41 @@ impl FiduciaClient {
         max: u32,
     ) -> Result<Value, Error> {
         self.must_semaphore(key, holder, ttl_ms, max)
+    }
+    pub fn semaphore_renew(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/semaphores/renew",
+            Some(json!({
+                "key": key,
+                "holder": holder,
+                "fencing_token": fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )
+    }
+    pub fn semaphore_cancel(&self, key: &str, holder: &str) -> Result<Value, Error> {
+        self.semaphore_cancel_with_request_id(key, holder, None)
+    }
+    /// Cancel exactly one logical semaphore acquisition attempt.
+    pub fn semaphore_cancel_with_request_id(
+        &self,
+        key: &str,
+        holder: &str,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({ "key": key, "holder": holder });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request("POST", "/v1/semaphores/cancel", Some(body))
     }
     pub fn semaphore_release(
         &self,
@@ -1993,6 +2206,53 @@ mod tests {
             json!({ "keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": 30_000, "wait": true }),
         );
 
+        client
+            .lock_renew(&["orders/42"], "worker-a", 11, 30_000)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/renew",
+            json!({ "keys": ["orders/42"], "holder": "worker-a", "fencing_token": 11, "ttl_ms": 30_000 }),
+        );
+        client.lock_cancel(&["orders/42"], "worker-a").unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/cancel",
+            json!({ "keys": ["orders/42"], "holder": "worker-a" }),
+        );
+        client
+            .lock_acquire_many_with_request_id(
+                &["orders/42"],
+                Some("worker-a"),
+                Some(30_000),
+                true,
+                Some("fdc-attempt-lock-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/acquire",
+            json!({
+                "keys": ["orders/42"], "holder": "worker-a", "ttl_ms": 30_000,
+                "wait": true, "request_id": "fdc-attempt-lock-1"
+            }),
+        );
+        client
+            .lock_cancel_with_request_id(&["orders/42"], "worker-a", Some("fdc-attempt-lock-1"))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/cancel",
+            json!({
+                "keys": ["orders/42"], "holder": "worker-a",
+                "request_id": "fdc-attempt-lock-1"
+            }),
+        );
+
         client.lock_release("orders/42", "worker-a", 11).unwrap();
         assert_next(
             &rx,
@@ -2004,14 +2264,68 @@ mod tests {
         assert!(client.lock_release_many("legacy-lock-id").is_err());
 
         client
-            .try_semaphore("pools/db/primary", None, None, 0)
+            .try_semaphore("pools/db/primary", Some("worker-b"), None, 0)
             .unwrap();
         assert_next(
             &rx,
             "POST",
             "/v1/semaphores/acquire",
             // max=0 is invalid and clamped to 1 (a mutex); higher values pass through.
-            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 1 }),
+            json!({ "key": "pools/db/primary", "holder": "worker-b", "ttl_ms": null, "wait": false, "limit": 1 }),
+        );
+
+        client
+            .semaphore_renew("pools/db/primary", "worker-b", 12, 30_000)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/renew",
+            json!({ "key": "pools/db/primary", "holder": "worker-b", "fencing_token": 12, "ttl_ms": 30_000 }),
+        );
+        client
+            .semaphore_cancel("pools/db/primary", "worker-b")
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/cancel",
+            json!({ "key": "pools/db/primary", "holder": "worker-b" }),
+        );
+        client
+            .semaphore_acquire_with_request_id(
+                "pools/db/primary",
+                Some("worker-b"),
+                Some(30_000),
+                true,
+                2,
+                Some("fdc-attempt-semaphore-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/acquire",
+            json!({
+                "key": "pools/db/primary", "holder": "worker-b", "ttl_ms": 30_000,
+                "wait": true, "limit": 2, "request_id": "fdc-attempt-semaphore-1"
+            }),
+        );
+        client
+            .semaphore_cancel_with_request_id(
+                "pools/db/primary",
+                "worker-b",
+                Some("fdc-attempt-semaphore-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/cancel",
+            json!({
+                "key": "pools/db/primary", "holder": "worker-b",
+                "request_id": "fdc-attempt-semaphore-1"
+            }),
         );
 
         client
@@ -2092,6 +2406,23 @@ mod tests {
                 "metadata": { "address": "10.2.4.18:8080", "region": "us-east-1" }
             }),
         );
+    }
+
+    #[test]
+    fn omitted_lock_holder_becomes_a_unique_uuid_capability() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+        client.try_lock("orders/42", None, None, None).unwrap();
+        client
+            .try_lock("orders/43", Some("   "), None, None)
+            .unwrap();
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let first_holder = first.body["holder"].as_str().unwrap();
+        let second_holder = second.body["holder"].as_str().unwrap();
+        assert!(first_holder.starts_with("fdc-"));
+        assert_eq!(first_holder.len(), 36);
+        assert_ne!(first_holder, second_holder);
     }
 
     #[test]

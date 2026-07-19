@@ -97,6 +97,23 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		},
 	})
 
+	if _, err := client.LockRenew([]string{"orders/42"}, "worker-a", 11, 30000); err != nil {
+		t.Fatal(err)
+	}
+	requireLastCall(t, calls, recordedCall{
+		Method: "POST",
+		Path:   "/v1/locks/renew",
+		Body: map[string]any{"keys": []any{"orders/42"}, "holder": "worker-a",
+			"fencing_token": float64(11), "ttl_ms": float64(30000)},
+	})
+	if _, err := client.LockCancel([]string{"orders/42"}, "worker-a"); err != nil {
+		t.Fatal(err)
+	}
+	requireLastCall(t, calls, recordedCall{
+		Method: "POST", Path: "/v1/locks/cancel",
+		Body: map[string]any{"keys": []any{"orders/42"}, "holder": "worker-a"},
+	})
+
 	if _, err := client.LockRelease("orders/42", ReleaseOpts{Holder: "worker-a", FencingToken: 11}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,13 +123,29 @@ func TestCoordinationRoutesMatchNodeContract(t *testing.T) {
 		Body:   map[string]any{"holder": "worker-a", "fencing_token": float64(11)},
 	})
 
-	if _, err := client.SemaphoreAcquire("pools/db/primary", AcquireOpts{Max: 2, Wait: false}); err != nil {
+	if _, err := client.SemaphoreAcquire("pools/db/primary", AcquireOpts{Holder: "worker-b", Max: 2, Wait: false}); err != nil {
 		t.Fatal(err)
 	}
 	requireLastCall(t, calls, recordedCall{
 		Method: "POST",
 		Path:   "/v1/semaphores/acquire",
-		Body:   map[string]any{"key": "pools/db/primary", "wait": false, "limit": float64(2)},
+		Body:   map[string]any{"key": "pools/db/primary", "holder": "worker-b", "wait": false, "limit": float64(2)},
+	})
+
+	if _, err := client.SemaphoreRenew("pools/db/primary", "worker-b", 12, 20000); err != nil {
+		t.Fatal(err)
+	}
+	requireLastCall(t, calls, recordedCall{
+		Method: "POST", Path: "/v1/semaphores/renew",
+		Body: map[string]any{"key": "pools/db/primary", "holder": "worker-b",
+			"fencing_token": float64(12), "ttl_ms": float64(20000)},
+	})
+	if _, err := client.SemaphoreCancel("pools/db/primary", "worker-b"); err != nil {
+		t.Fatal(err)
+	}
+	requireLastCall(t, calls, recordedCall{
+		Method: "POST", Path: "/v1/semaphores/cancel",
+		Body: map[string]any{"key": "pools/db/primary", "holder": "worker-b"},
 	})
 
 	if _, err := client.SemaphoreRelease("pools/db/primary", ReleaseOpts{Holder: "worker-b", FencingToken: 12}); err != nil {

@@ -9,7 +9,7 @@ ENV HOME=/home/ci \
     CARGO_HOME=/home/ci/.cargo \
     GOCACHE=/home/ci/.cache/go
 USER 10001:10001
-ARG INTERFACES_REF=e3dba39566e036ad61de91e2e6c1d625ec2b5411
+ARG INTERFACES_REF=6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
 RUN git init /fiducia-interfaces \
     && git -C /fiducia-interfaces remote add origin https://github.com/fiducia-cloud/fiducia-interfaces.git \
     && git -C /fiducia-interfaces fetch --depth 1 origin "$INTERFACES_REF" \

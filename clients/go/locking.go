@@ -17,8 +17,9 @@
 package fiducia
 
 import (
+	"encoding/json"
 	"fmt"
-	"sync/atomic"
+	"strings"
 	"time"
 )
 
@@ -36,7 +37,7 @@ func DefaultLockOptions() LockOptions {
 	return LockOptions{TTLMs: 60000, MaxWait: 30 * time.Second, RetryInterval: 250 * time.Millisecond}
 }
 
-func (o LockOptions) withDefaults() LockOptions {
+func (o LockOptions) withDefaults() (LockOptions, error) {
 	if o.TTLMs == 0 {
 		o.TTLMs = 60000
 	}
@@ -46,10 +47,14 @@ func (o LockOptions) withDefaults() LockOptions {
 	if o.RetryInterval == 0 {
 		o.RetryInterval = 250 * time.Millisecond
 	}
-	if o.Holder == "" {
-		o.Holder = genHolder()
+	if o.Holder = strings.TrimSpace(o.Holder); o.Holder == "" {
+		holder, err := generatedHolder()
+		if err != nil {
+			return o, err
+		}
+		o.Holder = holder
 	}
-	return o
+	return o, nil
 }
 
 // Lock is a held grant. Call Release (alias Unlock) when done.
@@ -59,6 +64,7 @@ type Lock struct {
 	Holder         string
 	FencingToken   int64
 	LeaseExpiresMs int64
+	TTLMs          int64
 }
 
 // Release frees the whole grant (every member key) by its fencing token.
@@ -73,6 +79,25 @@ func (l *Lock) Release() (map[string]any, error) {
 // Unlock is an alias of Release.
 func (l *Lock) Unlock() (map[string]any, error) { return l.Release() }
 
+// Renew extends this grant only while its holder, key set, and fencing token
+// still match. Passing 0 reuses the acquisition TTL.
+func (l *Lock) Renew(ttlMs int64) (map[string]any, error) {
+	if ttlMs == 0 {
+		ttlMs = l.TTLMs
+	}
+	resp, err := l.c.LockRenew(l.Keys, l.Holder, l.FencingToken, ttlMs)
+	if err != nil {
+		return nil, err
+	}
+	out := output(resp)
+	if !asBool(out["renewed"]) {
+		return nil, fmt.Errorf("fiducia: lock renewal lost fenced authority")
+	}
+	l.LeaseExpiresMs = asInt(out["lease_expires_ms"])
+	l.TTLMs = ttlMs
+	return resp, nil
+}
+
 // SemaphoreHandle is a held permit. Call Release when done.
 type SemaphoreHandle struct {
 	c              *Client
@@ -80,6 +105,7 @@ type SemaphoreHandle struct {
 	Holder         string
 	FencingToken   int64
 	LeaseExpiresMs int64
+	TTLMs          int64
 }
 
 // Release returns one permit (admits the next FIFO waiter).
@@ -89,6 +115,25 @@ func (s *SemaphoreHandle) Release() (map[string]any, error) {
 
 // Unlock is an alias of Release.
 func (s *SemaphoreHandle) Unlock() (map[string]any, error) { return s.Release() }
+
+// Renew extends this permit without changing its fencing token. Passing 0
+// reuses the acquisition TTL.
+func (s *SemaphoreHandle) Renew(ttlMs int64) (map[string]any, error) {
+	if ttlMs == 0 {
+		ttlMs = s.TTLMs
+	}
+	resp, err := s.c.SemaphoreRenew(s.Key, s.Holder, s.FencingToken, ttlMs)
+	if err != nil {
+		return nil, err
+	}
+	out := output(resp)
+	if !asBool(out["renewed"]) {
+		return nil, fmt.Errorf("fiducia: semaphore renewal lost fenced authority")
+	}
+	s.LeaseExpiresMs = asInt(out["lease_expires_ms"])
+	s.TTLMs = ttlMs
+	return resp, nil
+}
 
 // LockTimeoutError is returned by Lock/AcquireSemaphore when the wait budget elapses.
 type LockTimeoutError struct {
@@ -100,24 +145,26 @@ func (e *LockTimeoutError) Error() string {
 	return fmt.Sprintf("fiducia: timed out after %s waiting for %v", e.Waited, e.Keys)
 }
 
-var holderSeq uint64
-
-func genHolder() string {
-	return fmt.Sprintf("fdc-%x-%x", time.Now().UnixNano(), atomic.AddUint64(&holderSeq, 1))
-}
-
 // --- locks -----------------------------------------------------------------
 
 // TryLockHandle takes the union of keys now (wait:false). It is deliberately
 // named separately from the thin single-key TryLock method.
 func (c *Client) TryLockHandle(keys []string, opts LockOptions) (*Lock, error) {
-	return c.acquireLock(keys, false, opts.withDefaults())
+	resolved, err := opts.withDefaults()
+	if err != nil {
+		return nil, err
+	}
+	return c.acquireLock(keys, false, resolved)
 }
 
 // LockHandle blocks until the union of keys is acquired, the budget elapses
 // (*LockTimeoutError), or the server errors (wait:true).
 func (c *Client) LockHandle(keys []string, opts LockOptions) (*Lock, error) {
-	opts = opts.withDefaults()
+	var err error
+	opts, err = opts.withDefaults()
+	if err != nil {
+		return nil, err
+	}
 	lock, err := c.acquireLock(keys, true, opts)
 	if err != nil {
 		return nil, err
@@ -143,46 +190,128 @@ func (c *Client) WithLock(keys []string, opts LockOptions, fn func(*Lock) error)
 	return fn(lock)
 }
 
-func (c *Client) acquireLock(keys []string, wait bool, opts LockOptions) (*Lock, error) {
+func (c *Client) acquireLock(keys []string, wait bool, opts LockOptions) (result *Lock, err error) {
+	requestID, err := generatedRequestID()
+	if err != nil {
+		return nil, err
+	}
+	waitTimeoutMs := int64(0)
+	if wait {
+		waitTimeoutMs = opts.MaxWait.Milliseconds()
+	}
 	first, err := c.LockAcquireMany(AcquireManyOpts{
 		Keys: keys, Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: wait,
+		WaitTimeoutMs: waitTimeoutMs, RequestID: requestID,
 	})
 	if err != nil {
+		if cancelErr := c.cancelLockWait(keys, opts.Holder, requestID); cancelErr != nil {
+			return nil, cancelErr
+		}
 		return nil, err
 	}
 	out := output(first)
 	if asBool(out["acquired"]) {
+		token := asInt(out["fencing_token"])
+		if token <= 0 {
+			return nil, fmt.Errorf("fiducia: acquired lock carried no fencing token")
+		}
+		leaseExpiresMs := asInt(out["lease_expires_ms"])
+		if renewed, present := out["renewed"].(bool); present && !renewed {
+			response, renewErr := c.LockRenew(keys, opts.Holder, token, opts.TTLMs)
+			if renewErr != nil {
+				if cancelErr := c.cancelLockWait(keys, opts.Holder, requestID); cancelErr != nil {
+					return nil, cancelErr
+				}
+				return nil, renewErr
+			}
+			renewedOut := output(response)
+			if !asBool(renewedOut["renewed"]) {
+				if cancelErr := c.cancelLockWait(keys, opts.Holder, requestID); cancelErr != nil {
+					return nil, cancelErr
+				}
+				return nil, fmt.Errorf("fiducia: reacquired lock lost fenced authority during renewal")
+			}
+			leaseExpiresMs = asInt(renewedOut["lease_expires_ms"])
+		}
 		return &Lock{c: c, Keys: keys, Holder: opts.Holder,
-			FencingToken: asInt(out["fencing_token"]), LeaseExpiresMs: asInt(out["lease_expires_ms"])}, nil
+			FencingToken: token, LeaseExpiresMs: leaseExpiresMs, TTLMs: opts.TTLMs}, nil
 	}
 	if !wait {
 		return nil, nil // TryLock: held now → fail fast
 	}
 
-	probe := ""
-	if len(keys) > 0 {
-		probe = keys[0]
-	}
 	deadline := time.Now().Add(opts.MaxWait)
+	acquired := false
+	defer func() {
+		if !acquired {
+			if cancelErr := c.cancelLockWait(keys, opts.Holder, requestID); cancelErr != nil {
+				result = nil
+				err = cancelErr
+			}
+		}
+	}()
 	for attempt := 0; opts.MaxRetries == 0 || attempt < opts.MaxRetries; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		time.Sleep(minDur(opts.RetryInterval, remaining))
-		got, err := c.LockGet(probe)
+		backoff := opts.RetryInterval * time.Duration(1<<minInt(attempt, 3))
+		time.Sleep(minDur(minDur(backoff, 2*time.Second), remaining))
+		got, err := c.LockAcquireMany(AcquireManyOpts{
+			Keys: keys, Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: true,
+			WaitTimeoutMs: waitTimeoutMs, RequestID: requestID,
+		})
 		if err != nil {
 			return nil, err
 		}
-		lk := asMap(got["lock"])
-		if asString(lk["holder"]) == opts.Holder {
-			if tok, ok := lk["fencing_token"]; ok && tok != nil {
-				return &Lock{c: c, Keys: keys, Holder: opts.Holder,
-					FencingToken: asInt(tok), LeaseExpiresMs: asInt(lk["lease_expires_ms"])}, nil
+		out := output(got)
+		if asBool(out["acquired"]) {
+			token := asInt(out["fencing_token"])
+			if token <= 0 {
+				return nil, fmt.Errorf("fiducia: acquired lock carried no fencing token")
 			}
+			renewed, err := c.LockRenew(keys, opts.Holder, token, opts.TTLMs)
+			if err != nil {
+				return nil, err
+			}
+			renewedOut := output(renewed)
+			if !asBool(renewedOut["renewed"]) {
+				return nil, fmt.Errorf("fiducia: retry-discovered lock lost fenced authority during renewal")
+			}
+			acquired = true
+			return &Lock{c: c, Keys: keys, Holder: opts.Holder,
+				FencingToken: token, LeaseExpiresMs: asInt(renewedOut["lease_expires_ms"]), TTLMs: opts.TTLMs}, nil
 		}
 	}
 	return nil, nil
+}
+
+func (c *Client) cancelLockWait(keys []string, holder, requestID string) error {
+	resp, err := c.LockCancel(keys, holder, map[string]any{"request_id": requestID})
+	if err != nil {
+		return err
+	}
+	out := output(resp)
+	if asBool(out["acquired"]) {
+		if token := asInt(out["fencing_token"]); token > 0 {
+			key := ""
+			if len(keys) > 0 {
+				key = keys[0]
+			}
+			released, err := c.LockRelease(key, ReleaseOpts{Holder: holder, FencingToken: uint64(token)})
+			if err != nil {
+				return err
+			}
+			if releasedOut := output(released); releasedOut["released"] == false {
+				return fmt.Errorf("fiducia: raced lock could not be released safely")
+			}
+			return nil
+		}
+	}
+	if asBool(out["cancelled"]) {
+		return nil
+	}
+	return fmt.Errorf("fiducia: lock cancellation did not establish safety (%v)", out["reason"])
 }
 
 // --- counting semaphores ---------------------------------------------------
@@ -190,12 +319,20 @@ func (c *Client) acquireLock(keys []string, wait bool, opts LockOptions) (*Lock,
 // TrySemaphoreHandle takes a permit now (wait:false). It is separate from the
 // thin TrySemaphore method, which returns the raw response envelope.
 func (c *Client) TrySemaphoreHandle(key string, limit int64, opts LockOptions) (*SemaphoreHandle, error) {
-	return c.acquireSemaphore(key, limit, false, opts.withDefaults())
+	resolved, err := opts.withDefaults()
+	if err != nil {
+		return nil, err
+	}
+	return c.acquireSemaphore(key, limit, false, resolved)
 }
 
 // AcquireSemaphore blocks until a permit is free, the budget elapses, or error.
 func (c *Client) AcquireSemaphore(key string, limit int64, opts LockOptions) (*SemaphoreHandle, error) {
-	opts = opts.withDefaults()
+	var err error
+	opts, err = opts.withDefaults()
+	if err != nil {
+		return nil, err
+	}
 	h, err := c.acquireSemaphore(key, limit, true, opts)
 	if err != nil {
 		return nil, err
@@ -206,49 +343,135 @@ func (c *Client) AcquireSemaphore(key string, limit int64, opts LockOptions) (*S
 	return h, nil
 }
 
-func (c *Client) acquireSemaphore(key string, limit int64, wait bool, opts LockOptions) (*SemaphoreHandle, error) {
+func (c *Client) acquireSemaphore(key string, limit int64, wait bool, opts LockOptions) (result *SemaphoreHandle, err error) {
 	if limit <= 0 || uint64(limit) > uint64(^uint32(0)) {
 		return nil, fmt.Errorf("fiducia: semaphore limit must be between 1 and %d", uint64(^uint32(0)))
 	}
+	requestID, err := generatedRequestID()
+	if err != nil {
+		return nil, err
+	}
+	waitTimeoutMs := int64(0)
+	if wait {
+		waitTimeoutMs = opts.MaxWait.Milliseconds()
+	}
 	first, err := c.SemaphoreAcquire(key, AcquireOpts{
 		Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: wait, Max: uint32(limit),
+		WaitTimeoutMs: waitTimeoutMs, RequestID: requestID,
 	})
 	if err != nil {
+		if cancelErr := c.cancelSemaphoreWait(key, opts.Holder, requestID); cancelErr != nil {
+			return nil, cancelErr
+		}
 		return nil, err
 	}
 	out := output(first)
 	if asBool(out["acquired"]) {
+		token := asInt(out["fencing_token"])
+		if token <= 0 {
+			return nil, fmt.Errorf("fiducia: acquired semaphore permit carried no fencing token")
+		}
+		leaseExpiresMs := asInt(out["lease_expires_ms"])
+		if renewed, present := out["renewed"].(bool); present && !renewed {
+			response, renewErr := c.SemaphoreRenew(key, opts.Holder, token, opts.TTLMs)
+			if renewErr != nil {
+				if cancelErr := c.cancelSemaphoreWait(key, opts.Holder, requestID); cancelErr != nil {
+					return nil, cancelErr
+				}
+				return nil, renewErr
+			}
+			renewedOut := output(response)
+			if !asBool(renewedOut["renewed"]) {
+				if cancelErr := c.cancelSemaphoreWait(key, opts.Holder, requestID); cancelErr != nil {
+					return nil, cancelErr
+				}
+				return nil, fmt.Errorf("fiducia: reacquired semaphore permit lost fenced authority during renewal")
+			}
+			leaseExpiresMs = asInt(renewedOut["lease_expires_ms"])
+		}
 		return &SemaphoreHandle{c: c, Key: key, Holder: opts.Holder,
-			FencingToken: asInt(out["fencing_token"]), LeaseExpiresMs: asInt(out["lease_expires_ms"])}, nil
+			FencingToken: token, LeaseExpiresMs: leaseExpiresMs, TTLMs: opts.TTLMs}, nil
+	}
+	if out["reason"] == "limit_mismatch" {
+		return nil, fmt.Errorf("fiducia: semaphore limit mismatch (requested %d, configured %d)",
+			limit, asInt(out["limit"]))
 	}
 	if !wait {
 		return nil, nil
 	}
 
 	deadline := time.Now().Add(opts.MaxWait)
+	acquired := false
+	defer func() {
+		if !acquired {
+			if cancelErr := c.cancelSemaphoreWait(key, opts.Holder, requestID); cancelErr != nil {
+				result = nil
+				err = cancelErr
+			}
+		}
+	}()
 	for attempt := 0; opts.MaxRetries == 0 || attempt < opts.MaxRetries; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		time.Sleep(minDur(opts.RetryInterval, remaining))
-		got, err := c.SemaphoreGet(key)
+		backoff := opts.RetryInterval * time.Duration(1<<minInt(attempt, 3))
+		time.Sleep(minDur(minDur(backoff, 2*time.Second), remaining))
+		got, err := c.SemaphoreAcquire(key, AcquireOpts{
+			Holder: opts.Holder, TTLMs: opts.TTLMs, Wait: true, Max: uint32(limit),
+			WaitTimeoutMs: waitTimeoutMs, RequestID: requestID,
+		})
 		if err != nil {
 			return nil, err
 		}
-		sem := asMap(got["semaphore"])
-		holders, _ := sem["holders"].([]any)
-		for _, h := range holders {
-			slot := asMap(h)
-			if asString(slot["holder"]) == opts.Holder {
-				if tok, ok := slot["fencing_token"]; ok && tok != nil {
-					return &SemaphoreHandle{c: c, Key: key, Holder: opts.Holder,
-						FencingToken: asInt(tok), LeaseExpiresMs: asInt(slot["lease_expires_ms"])}, nil
-				}
+		out := output(got)
+		if asBool(out["acquired"]) {
+			token := asInt(out["fencing_token"])
+			if token <= 0 {
+				return nil, fmt.Errorf("fiducia: acquired semaphore permit carried no fencing token")
 			}
+			renewed, err := c.SemaphoreRenew(key, opts.Holder, token, opts.TTLMs)
+			if err != nil {
+				return nil, err
+			}
+			renewedOut := output(renewed)
+			if !asBool(renewedOut["renewed"]) {
+				return nil, fmt.Errorf("fiducia: retry-discovered semaphore permit lost fenced authority during renewal")
+			}
+			acquired = true
+			return &SemaphoreHandle{c: c, Key: key, Holder: opts.Holder,
+				FencingToken: token, LeaseExpiresMs: asInt(renewedOut["lease_expires_ms"]), TTLMs: opts.TTLMs}, nil
+		}
+		if out["reason"] == "limit_mismatch" {
+			return nil, fmt.Errorf("fiducia: semaphore limit mismatch (requested %d, configured %d)",
+				limit, asInt(out["limit"]))
 		}
 	}
 	return nil, nil
+}
+
+func (c *Client) cancelSemaphoreWait(key, holder, requestID string) error {
+	resp, err := c.SemaphoreCancel(key, holder, map[string]any{"request_id": requestID})
+	if err != nil {
+		return err
+	}
+	out := output(resp)
+	if asBool(out["acquired"]) {
+		if token := asInt(out["fencing_token"]); token > 0 {
+			released, err := c.SemaphoreRelease(key, ReleaseOpts{Holder: holder, FencingToken: uint64(token)})
+			if err != nil {
+				return err
+			}
+			if releasedOut := output(released); releasedOut["released"] == false {
+				return fmt.Errorf("fiducia: raced semaphore permit could not be released safely")
+			}
+			return nil
+		}
+	}
+	if asBool(out["cancelled"]) {
+		return nil
+	}
+	return fmt.Errorf("fiducia: semaphore cancellation did not establish safety (%v)", out["reason"])
 }
 
 // --- JSON helpers (responses come back as map[string]any) ------------------
@@ -269,16 +492,18 @@ func asBool(v any) bool {
 	return b
 }
 
-func asString(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
-// asInt coerces a JSON number (float64) — or an int64 — to int64.
+// asInt converts exact JSON integers without routing them through float64.
 func asInt(v any) int64 {
 	switch n := v.(type) {
+	case json.Number:
+		value, err := n.Int64()
+		if err == nil {
+			return value
+		}
 	case float64:
-		return int64(n)
+		if n == float64(int64(n)) {
+			return int64(n)
+		}
 	case int64:
 		return n
 	case int:
@@ -286,9 +511,17 @@ func asInt(v any) int64 {
 	default:
 		return 0
 	}
+	return 0
 }
 
 func minDur(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

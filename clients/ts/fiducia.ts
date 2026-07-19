@@ -42,16 +42,24 @@ export interface FiduciaClientOpts extends RequestControlOpts {
 
 export interface AcquireOpts extends RequestControlOpts {
   holder?: string;
+  /** Stable identity for one logical acquire/retry/cancel attempt. */
+  requestId?: string;
   ttlMs?: number;
   wait?: boolean;
+  /** Maximum time a queued request may remain eligible for promotion. */
+  waitTimeoutMs?: number;
   max?: number;
 }
 
 export interface AcquireManyOpts extends RequestControlOpts {
   keys: string[];
   holder?: string;
+  /** Stable identity for one logical acquire/retry/cancel attempt. */
+  requestId?: string;
   ttlMs?: number;
   wait?: boolean;
+  /** Maximum time a queued request may remain eligible for promotion. */
+  waitTimeoutMs?: number;
 }
 export interface ReleaseOpts extends RequestControlOpts { holder: string; fencingToken: number; }
 export interface RwOpts extends RequestControlOpts { ttlMs?: number; wait?: boolean; }
@@ -100,6 +108,19 @@ export interface WatchEvent<T = any> {
   event: string;
   data: T;
   id?: string;
+}
+
+/** Generate an unguessable holder id. Never fall back to Math.random: holder
+ * identity is part of lock/semaphore exclusion and release authority. */
+function generatedHolder(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return `fdc-${cryptoApi.randomUUID()}`;
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    return `fdc-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  throw new Error("fiducia: secure randomness is unavailable; provide an explicit nonempty holder");
 }
 
 export class FiduciaError extends Error {
@@ -180,6 +201,61 @@ function assertHeaderValueSafe(name: string, value: string): void {
   if (/[\r\n]/.test(value)) {
     throw new TypeError(`fiducia: ${name} header value contains an illegal CR/LF character`);
   }
+}
+
+/** Reject authority tokens that JavaScript cannot represent exactly. Running
+ * this both before serialization and after parsing prevents a caller or server
+ * from silently crossing the JSON safe-integer boundary. */
+function assertSafeFencingTokens(value: unknown, at = "response"): void {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertSafeFencingTokens(item, `${at}[${index}]`));
+    return;
+  }
+  if (typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if ((key === "fencing_token" || key === "from_token" || key === "to_token")
+      && item !== null && item !== undefined) {
+      if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 0) {
+        throw new TypeError(`fiducia: ${at}.${key} must be a non-negative safe integer`);
+      }
+    } else if (key === "fencing_tokens" && item && typeof item === "object") {
+      for (const [member, token] of Object.entries(item as Record<string, unknown>)) {
+        if (typeof token !== "number" || !Number.isSafeInteger(token) || token < 0) {
+          throw new TypeError(`fiducia: ${at}.${key}.${member} must be a safe integer`);
+        }
+      }
+    }
+    assertSafeFencingTokens(item, `${at}.${key}`);
+  }
+}
+
+function assertValidAttemptRequestIds(value: unknown, at = "request"): void {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertValidAttemptRequestIds(item, `${at}[${index}]`));
+    return;
+  }
+  if (typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "request_id" && item !== null && item !== undefined) {
+      if (
+        typeof item !== "string"
+        || item.trim().length === 0
+        || new TextEncoder().encode(item).length > 128
+        || /[\x00-\x1f\x7f]/.test(item)
+      ) {
+        throw new TypeError(`fiducia: ${at}.${key} must be 1-128 printable UTF-8 bytes`);
+      }
+    }
+    assertValidAttemptRequestIds(item, `${at}.${key}`);
+  }
+}
+
+function parseJson(text: string): any {
+  const value = JSON.parse(text);
+  assertSafeFencingTokens(value);
+  return value;
 }
 
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
@@ -330,6 +406,8 @@ export class FiduciaClient {
     }
 
     try {
+      assertValidAttemptRequestIds(body);
+      assertSafeFencingTokens(body, "request");
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
       if (opts.idempotencyKey) {
@@ -350,7 +428,7 @@ export class FiduciaClient {
       // status; browsers yield an opaque redirect (type "opaqueredirect", status 0).
       if (isRedirect(res)) throw redirectError(res, method, path);
       const text = await res.text();
-      const data = text ? JSON.parse(text) : null;
+      const data = text ? parseJson(text) : null;
       if (!res.ok) throw new FiduciaError(res.status, data, res.headers);
       return data;
     } catch (err) {
@@ -387,7 +465,7 @@ export class FiduciaClient {
       if (isRedirect(res)) throw redirectError(res, "GET", path);
       if (!res.ok) {
         const text = await res.text();
-        const data = text ? JSON.parse(text) : null;
+        const data = text ? parseJson(text) : null;
         throw new FiduciaError(res.status, data, res.headers);
       }
       if (!res.body?.getReader) throw new Error("fiducia: response body is not streamable");
@@ -422,8 +500,9 @@ export class FiduciaClient {
   }
 
   private lockAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/locks/acquire",
-      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+      { key, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs }, opts, true);
   }
 
   private acquireOptsFromArgs(optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, maybeOpts: AcquireOpts = {}): AcquireOpts {
@@ -435,13 +514,15 @@ export class FiduciaClient {
   }
 
   private lockAcquireManyWithWait(opts: AcquireManyOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/locks/acquire",
-      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+      { keys: opts.keys, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs }, opts, true);
   }
 
   private semaphoreAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/semaphores/acquire",
-      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait, limit: opts.max ?? 2 }, opts, true);
+      { key, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs, limit: opts.max ?? 2 }, opts, true);
   }
 
   // --- misc ---
@@ -649,6 +730,22 @@ export class FiduciaClient {
     return this.watch(`/v1/services/${enc(service)}/watch`, opts);
   }
 
+  async lockRenew(keys: string[], holder: string, fencingToken: number, ttlMs: number, opts: RequestControlOpts = {}): Promise<any> {
+    return this.request("POST", `/v1/locks/renew`, { keys: keys, holder: holder, fencing_token: fencingToken, ttl_ms: ttlMs }, opts);
+  }
+
+  async lockCancel(keys: string[], holder: string, opts: RequestControlOpts & { requestId?: string } = {}): Promise<any> {
+    return this.request("POST", `/v1/locks/cancel`, { keys: keys, holder: holder, request_id: opts.requestId }, opts);
+  }
+
+  async semaphoreRenew(key: string, holder: string, fencingToken: number, ttlMs: number, opts: RequestControlOpts = {}): Promise<any> {
+    return this.request("POST", `/v1/semaphores/renew`, { key: key, holder: holder, fencing_token: fencingToken, ttl_ms: ttlMs }, opts);
+  }
+
+  async semaphoreCancel(key: string, holder: string, opts: RequestControlOpts & { requestId?: string } = {}): Promise<any> {
+    return this.request("POST", `/v1/semaphores/cancel`, { key: key, holder: holder, request_id: opts.requestId }, opts);
+  }
+
   async counterGet(key: string, opts: RequestControlOpts = {}): Promise<any> {
     const query = new URLSearchParams();
     query.set("key", String(key));
@@ -845,7 +942,7 @@ function parseSseBlock(block: string): WatchEvent | undefined {
   const raw = data.join("\n");
   let decoded: any = raw;
   try {
-    decoded = JSON.parse(raw);
+    decoded = parseJson(raw);
   } catch {
     decoded = raw;
   }

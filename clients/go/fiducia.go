@@ -13,6 +13,8 @@ package fiducia
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,8 +45,10 @@ type (
 // AcquireOpts configures a lock acquire.
 type AcquireOpts struct {
 	Holder             string
+	RequestID          string
 	TTLMs              int64
 	Wait               bool
+	WaitTimeoutMs      int64
 	Max                uint32
 	Context            context.Context
 	RequestTimeout     time.Duration
@@ -60,8 +64,10 @@ type AcquireOpts struct {
 type AcquireManyOpts struct {
 	Keys               []string
 	Holder             string
+	RequestID          string
 	TTLMs              int64
 	Wait               bool
+	WaitTimeoutMs      int64
 	Context            context.Context
 	RequestTimeout     time.Duration
 	LockRequestTimeout time.Duration
@@ -233,6 +239,9 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 
 	var rdr io.Reader
 	if body != nil {
+		if err := validateAttemptRequestIDs(body, "request"); err != nil {
+			return nil, err
+		}
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
@@ -266,7 +275,11 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 	var data map[string]any
 	var decodeErr error
 	if len(raw) > 0 {
-		decodeErr = json.Unmarshal(raw, &data)
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		// Preserve integer lexemes as json.Number. Decoding into float64 would
+		// silently round fencing tokens before authority checks inspect them.
+		decoder.UseNumber()
+		decodeErr = decoder.Decode(&data)
 	}
 	// Hard-reject redirects (the transport never follows them; see New). Match
 	// the TypeScript client's error shape so callers can detect it uniformly.
@@ -286,6 +299,30 @@ func (c *Client) requestOnce(method, path string, body any, ctrl requestControl)
 		return nil, fmt.Errorf("fiducia: decoding HTTP %d JSON response: %w", res.StatusCode, decodeErr)
 	}
 	return data, nil
+}
+
+func validateAttemptRequestIDs(value any, at string) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if key == "request_id" && item != nil {
+				requestID, ok := item.(string)
+				if !ok || strings.TrimSpace(requestID) == "" || len([]byte(requestID)) > 128 || strings.ContainsFunc(requestID, func(r rune) bool { return r < 32 || r == 127 }) {
+					return fmt.Errorf("fiducia: %s.request_id must be 1-128 printable UTF-8 bytes", at)
+				}
+			}
+			if err := validateAttemptRequestIDs(item, at+"."+key); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, item := range typed {
+			if err := validateAttemptRequestIDs(item, fmt.Sprintf("%s[%d]", at, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Client) resolveTimeout(ctrl requestControl) time.Duration {
@@ -435,6 +472,29 @@ func setOptionalInt64(body map[string]any, key string, value int64) {
 	}
 }
 
+func generatedHolder() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("fiducia: generate secure holder: %w", err)
+	}
+	return "fdc-" + hex.EncodeToString(bytes[:]), nil
+}
+
+func generatedRequestID() (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", fmt.Errorf("fiducia: generate secure request id: %w", err)
+	}
+	return "fdc-attempt-" + hex.EncodeToString(bytes[:]), nil
+}
+
+func holderOrGenerated(holder string) (string, error) {
+	if holder = strings.TrimSpace(holder); holder != "" {
+		return holder, nil
+	}
+	return generatedHolder()
+}
+
 // --- misc ---
 func (c *Client) Health() (map[string]any, error) { return c.request("GET", "/healthz", nil) }
 func (c *Client) Status() (map[string]any, error) { return c.request("GET", "/v1/status", nil) }
@@ -456,9 +516,14 @@ func (c *Client) Lock(key string, o AcquireOpts) (map[string]any, error) {
 	return c.MustLock(key, o)
 }
 func (c *Client) lockAcquireWithWait(key string, o AcquireOpts, wait bool) (map[string]any, error) {
-	body := map[string]any{"key": key, "wait": wait}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"key": key, "holder": holder, "wait": wait}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireControl(o))
 }
 func (c *Client) LockAcquireMany(o AcquireManyOpts) (map[string]any, error) {
@@ -474,9 +539,14 @@ func (c *Client) LockMany(o AcquireManyOpts) (map[string]any, error) {
 	return c.MustLockMany(o)
 }
 func (c *Client) lockAcquireManyWithWait(o AcquireManyOpts, wait bool) (map[string]any, error) {
-	body := map[string]any{"keys": o.Keys, "wait": wait}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"keys": o.Keys, "holder": holder, "wait": wait}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/locks/acquire", body, acquireManyControl(o))
 }
 func (c *Client) LockRelease(key string, o ReleaseOpts) (map[string]any, error) {
@@ -509,9 +579,14 @@ func (c *Client) semaphoreAcquireWithWait(key string, o AcquireOpts, wait bool) 
 	if max == 0 {
 		max = 2
 	}
-	body := map[string]any{"key": key, "wait": wait, "limit": max}
-	setOptionalString(body, "holder", o.Holder)
+	holder, err := holderOrGenerated(o.Holder)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{"key": key, "holder": holder, "wait": wait, "limit": max}
+	setOptionalString(body, "request_id", o.RequestID)
 	setOptionalInt64(body, "ttl_ms", o.TTLMs)
+	setOptionalInt64(body, "wait_timeout_ms", o.WaitTimeoutMs)
 	return c.requestWithControl("POST", "/v1/semaphores/acquire", body, acquireControl(o))
 }
 func (c *Client) SemaphoreRelease(key string, o ReleaseOpts) (map[string]any, error) {
@@ -696,6 +771,50 @@ func (c *Client) ServiceList() (map[string]any, error) {
 	return c.request("GET", "/v1/services", nil)
 }
 
+// LockRenew Renew a held union lock only when holder and fencing token still match; preserves the token.
+func (c *Client) LockRenew(keys []string, holder string, fencingToken int64, ttlMs int64) (map[string]any, error) {
+	body := map[string]any{"keys": keys, "holder": holder, "fencing_token": fencingToken, "ttl_ms": ttlMs}
+	return c.request("POST", "/v1/locks/renew", body)
+}
+
+// LockCancel Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior.
+func (c *Client) LockCancel(keys []string, holder string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
+	body := map[string]any{"keys": keys, "holder": holder}
+	if value, ok := opts["request_id"]; ok {
+		body["request_id"] = value
+	}
+	return c.request("POST", "/v1/locks/cancel", body)
+}
+
+// SemaphoreRenew Renew a held semaphore permit only when holder and fencing token still match; preserves the token.
+func (c *Client) SemaphoreRenew(key string, holder string, fencingToken int64, ttlMs int64) (map[string]any, error) {
+	body := map[string]any{"key": key, "holder": holder, "fencing_token": fencingToken, "ttl_ms": ttlMs}
+	return c.request("POST", "/v1/semaphores/renew", body)
+}
+
+// SemaphoreCancel Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior.
+func (c *Client) SemaphoreCancel(key string, holder string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
+	body := map[string]any{"key": key, "holder": holder}
+	if value, ok := opts["request_id"]; ok {
+		body["request_id"] = value
+	}
+	return c.request("POST", "/v1/semaphores/cancel", body)
+}
+
 // CounterGet Read a counter's value and revision; absent reads as found=false (treat as 0).
 func (c *Client) CounterGet(key string) (map[string]any, error) {
 	path := "/v1/counters"
@@ -708,7 +827,14 @@ func (c *Client) CounterGet(key string) (map[string]any, error) {
 }
 
 // CounterAdd Atomically add delta (may be negative); prev_revision makes it a compare-and-set.
-func (c *Client) CounterAdd(key string, delta int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) CounterAdd(key string, delta int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"key": key, "delta": delta}
 	if value, ok := opts["prev_revision"]; ok {
 		body["prev_revision"] = value
@@ -717,7 +843,14 @@ func (c *Client) CounterAdd(key string, delta int64, opts map[string]any) (map[s
 }
 
 // CounterSet Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set.
-func (c *Client) CounterSet(key string, value int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) CounterSet(key string, value int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"key": key, "value": value}
 	if value, ok := opts["prev_revision"]; ok {
 		body["prev_revision"] = value
@@ -737,7 +870,14 @@ func (c *Client) BarrierGet(name string) (map[string]any, error) {
 }
 
 // BarrierCreate Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum).
-func (c *Client) BarrierCreate(name string, policy map[string]any, opts map[string]any) (map[string]any, error) {
+func (c *Client) BarrierCreate(name string, policy map[string]any, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "policy": policy}
 	if value, ok := opts["expected"]; ok {
 		body["expected"] = value
@@ -749,7 +889,14 @@ func (c *Client) BarrierCreate(name string, policy map[string]any, opts map[stri
 }
 
 // BarrierArrive Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent.
-func (c *Client) BarrierArrive(name string, participant string, opts map[string]any) (map[string]any, error) {
+func (c *Client) BarrierArrive(name string, participant string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "participant": participant}
 	if value, ok := opts["weight"]; ok {
 		body["weight"] = value
@@ -772,7 +919,14 @@ func (c *Client) TaskGet(name string) (map[string]any, error) {
 }
 
 // TaskCreate Create a durable task if it does not exist (idempotent).
-func (c *Client) TaskCreate(name string, taskType string, opts map[string]any) (map[string]any, error) {
+func (c *Client) TaskCreate(name string, taskType string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "task_type": taskType}
 	if value, ok := opts["payload"]; ok {
 		body["payload"] = value
@@ -784,7 +938,14 @@ func (c *Client) TaskCreate(name string, taskType string, opts map[string]any) (
 }
 
 // TaskClaim Claim a pending or lease-expired task; the grant carries a fencing token.
-func (c *Client) TaskClaim(name string, worker string, opts map[string]any) (map[string]any, error) {
+func (c *Client) TaskClaim(name string, worker string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "worker": worker}
 	if value, ok := opts["ttl_ms"]; ok {
 		body["ttl_ms"] = value
@@ -793,7 +954,14 @@ func (c *Client) TaskClaim(name string, worker string, opts map[string]any) (map
 }
 
 // TaskProgress Report progress and a checkpoint under the current fencing token.
-func (c *Client) TaskProgress(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) TaskProgress(name string, worker string, fencingToken int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
 	if value, ok := opts["percent"]; ok {
 		body["percent"] = value
@@ -805,7 +973,14 @@ func (c *Client) TaskProgress(name string, worker string, fencingToken int64, op
 }
 
 // TaskComplete Complete a task with a durable result under the current fencing token.
-func (c *Client) TaskComplete(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) TaskComplete(name string, worker string, fencingToken int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
 	if value, ok := opts["result"]; ok {
 		body["result"] = value
@@ -814,7 +989,14 @@ func (c *Client) TaskComplete(name string, worker string, fencingToken int64, op
 }
 
 // TaskFail Fail a task; retryable requeues it for another worker.
-func (c *Client) TaskFail(name string, worker string, fencingToken int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) TaskFail(name string, worker string, fencingToken int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "worker": worker, "fencing_token": fencingToken}
 	if value, ok := opts["retryable"]; ok {
 		body["retryable"] = value
@@ -840,7 +1022,14 @@ func (c *Client) EffectGet(name string) (map[string]any, error) {
 }
 
 // EffectPrepare Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved.
-func (c *Client) EffectPrepare(name string, effectType string, idempotencyKey string, opts map[string]any) (map[string]any, error) {
+func (c *Client) EffectPrepare(name string, effectType string, idempotencyKey string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "effect_type": effectType, "idempotency_key": idempotencyKey}
 	if value, ok := opts["payload"]; ok {
 		body["payload"] = value
@@ -861,7 +1050,14 @@ func (c *Client) EffectApprove(name string, principal string) (map[string]any, e
 }
 
 // EffectCommit Commit an approved effect exactly once, recording the result; a repeat commit replays.
-func (c *Client) EffectCommit(name string, opts map[string]any) (map[string]any, error) {
+func (c *Client) EffectCommit(name string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name}
 	if value, ok := opts["result"]; ok {
 		body["result"] = value
@@ -887,7 +1083,14 @@ func (c *Client) HandoffGet(name string) (map[string]any, error) {
 }
 
 // HandoffOffer Offer to transfer ownership of a resource; the original owner keeps authority until accepted.
-func (c *Client) HandoffOffer(name string, resource string, from string, to string, fromToken int64, opts map[string]any) (map[string]any, error) {
+func (c *Client) HandoffOffer(name string, resource string, from string, to string, fromToken int64, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "resource": resource, "from": from, "to": to, "from_token": fromToken}
 	if value, ok := opts["context"]; ok {
 		body["context"] = value
@@ -922,7 +1125,14 @@ func (c *Client) DecisionGet(name string) (map[string]any, error) {
 }
 
 // DecisionPropose Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous).
-func (c *Client) DecisionPropose(name string, question string, options map[string]any, policy map[string]any, opts map[string]any) (map[string]any, error) {
+func (c *Client) DecisionPropose(name string, question string, options map[string]any, policy map[string]any, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "question": question, "options": options, "policy": policy}
 	if value, ok := opts["deadline_ms"]; ok {
 		body["deadline_ms"] = value
@@ -931,7 +1141,14 @@ func (c *Client) DecisionPropose(name string, question string, options map[strin
 }
 
 // DecisionVote Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution.
-func (c *Client) DecisionVote(name string, voter string, opts map[string]any) (map[string]any, error) {
+func (c *Client) DecisionVote(name string, voter string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "voter": voter}
 	if value, ok := opts["option"]; ok {
 		body["option"] = value
@@ -998,7 +1215,14 @@ func (c *Client) ClaimGet(name string) (map[string]any, error) {
 }
 
 // ClaimAssert Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests.
-func (c *Client) ClaimAssert(name string, subject string, predicate string, author string, opts map[string]any) (map[string]any, error) {
+func (c *Client) ClaimAssert(name string, subject string, predicate string, author string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "subject": subject, "predicate": predicate, "author": author}
 	if value, ok := opts["value"]; ok {
 		body["value"] = value
@@ -1022,7 +1246,14 @@ func (c *Client) ClaimSupport(name string, agent string) (map[string]any, error)
 }
 
 // ClaimContest Record an agent's contest of a claim, moving it to contested.
-func (c *Client) ClaimContest(name string, agent string, opts map[string]any) (map[string]any, error) {
+func (c *Client) ClaimContest(name string, agent string, optional ...map[string]any) (map[string]any, error) {
+	if len(optional) > 1 {
+		return nil, fmt.Errorf("fiducia: expected at most one options map")
+	}
+	opts := map[string]any{}
+	if len(optional) == 1 && optional[0] != nil {
+		opts = optional[0]
+	}
 	body := map[string]any{"name": name, "agent": agent}
 	if value, ok := opts["reason"]; ok {
 		body["reason"] = value

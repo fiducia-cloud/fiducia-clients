@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
-          ref: e3dba39566e036ad61de91e2e6c1d625ec2b5411
+          ref: 6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
           path: fiducia-interfaces
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -52,7 +52,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
-          ref: e3dba39566e036ad61de91e2e6c1d625ec2b5411
+          ref: 6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
           path: fiducia-interfaces
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -74,7 +74,7 @@ jobs:
         with:
           persist-credentials: false
           repository: fiducia-cloud/fiducia-interfaces
-          ref: e3dba39566e036ad61de91e2e6c1d625ec2b5411
+          ref: 6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
           path: fiducia-interfaces
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:

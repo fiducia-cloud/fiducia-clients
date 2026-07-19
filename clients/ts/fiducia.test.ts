@@ -30,6 +30,17 @@ function recordingFetch(calls: RecordedCall[]): typeof fetch {
   }) as typeof fetch;
 }
 
+test("omitted holders become unique cryptographic identities", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+  await client.tryLock("orders/42");
+  await client.tryLock("orders/43");
+  const first = (calls[0].body as { holder: string }).holder;
+  const second = (calls[1].body as { holder: string }).holder;
+  assert.match(first, /^fdc-[0-9a-f-]{32,36}$/);
+  assert.notEqual(first, second);
+});
+
 test("coordination SDK methods hide slash-safe wire routes", async () => {
   const calls: RecordedCall[] = [];
   const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
@@ -55,6 +66,19 @@ test("coordination SDK methods hide slash-safe wire routes", async () => {
     body: { keys: ["orders/42", "inventory/sku-7"], holder: "worker-a", wait: true },
   });
 
+  await client.lockRenew(["orders/42"], "worker-a", 11, 30_000);
+  assert.deepEqual(calls.pop(), {
+    method: "POST",
+    path: "/v1/locks/renew",
+    body: { keys: ["orders/42"], holder: "worker-a", fencing_token: 11, ttl_ms: 30_000 },
+  });
+  await client.lockCancel(["orders/42"], "worker-a");
+  assert.deepEqual(calls.pop(), {
+    method: "POST",
+    path: "/v1/locks/cancel",
+    body: { keys: ["orders/42"], holder: "worker-a" },
+  });
+
   await client.lockRelease("orders/42", { holder: "worker-a", fencingToken: 11 });
   assert.deepEqual(calls.pop(), {
     method: "POST",
@@ -76,6 +100,19 @@ test("coordination SDK methods hide slash-safe wire routes", async () => {
     method: "POST",
     path: "/v1/semaphores/acquire",
     body: { key: "pools/db/primary", holder: "worker-b", wait: false, limit: 3 },
+  });
+
+  await client.semaphoreRenew("pools/db/primary", "worker-b", 12, 20_000);
+  assert.deepEqual(calls.pop(), {
+    method: "POST",
+    path: "/v1/semaphores/renew",
+    body: { key: "pools/db/primary", holder: "worker-b", fencing_token: 12, ttl_ms: 20_000 },
+  });
+  await client.semaphoreCancel("pools/db/primary", "worker-b");
+  assert.deepEqual(calls.pop(), {
+    method: "POST",
+    path: "/v1/semaphores/cancel",
+    body: { key: "pools/db/primary", holder: "worker-b" },
   });
 
   await client.semaphoreRelease("pools/db/primary", { holder: "worker-b", fencingToken: 12 });
@@ -492,6 +529,57 @@ test("request controls reject invalid timeout and retry values", () => {
     () => new FiduciaClient("https://fiducia.test", { retryDelayMs: -1 }),
     /retryDelayMs/,
   );
+});
+
+test("unsafe fencing tokens are rejected before send and after receive", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+  await assert.rejects(
+    () => client.lockRenew(["orders/42"], "worker-a", Number.MAX_SAFE_INTEGER + 1, 30_000),
+    /non-negative safe integer/,
+  );
+  assert.equal(calls.length, 0);
+
+  const unsafeResponse = (async () => new Response(
+    '{"result":{"output":{"acquired":true,"fencing_token":9007199254740992}}}',
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const reading = new FiduciaClient("https://fiducia.test", { fetch: unsafeResponse });
+  await assert.rejects(
+    () => reading.lockGet("orders/42"),
+    /non-negative safe integer/,
+  );
+
+  const zeroResponse = (async () => new Response(
+    '{"result":{"output":{"name":"task-1","fencing_token":0}}}',
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const zeroReading = new FiduciaClient("https://fiducia.test", { fetch: zeroResponse });
+  await assert.doesNotReject(() => zeroReading.taskGet("task-1"));
+
+  const unsafeHandoffResponse = (async () => new Response(
+    '{"result":{"output":{"from_token":9007199254740992}}}',
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const handoffReading = new FiduciaClient("https://fiducia.test", { fetch: unsafeHandoffResponse });
+  await assert.rejects(
+    () => handoffReading.handoffGet("handoff-1"),
+    /non-negative safe integer/,
+  );
+});
+
+test("attempt request ids are bounded and printable before send", async () => {
+  const calls: RecordedCall[] = [];
+  const client = new FiduciaClient("https://fiducia.test", { fetch: recordingFetch(calls) });
+  await assert.rejects(
+    () => client.lockAcquire("orders/42", { holder: "worker-a", requestId: "   " }),
+    /1-128 printable UTF-8 bytes/,
+  );
+  await assert.rejects(
+    () => client.semaphoreCancel("pool", "worker-a", { requestId: "x".repeat(129) }),
+    /1-128 printable UTF-8 bytes/,
+  );
+  assert.equal(calls.length, 0);
 });
 
 test("new coordination primitives remain layered onto the hardened transport", async () => {

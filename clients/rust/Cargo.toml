@@ -11,7 +11,8 @@ include = ["Cargo.toml", "LICENSE.txt", "src/**"]
 [dependencies]
 ureq = { version = "3.3", features = ["json"] }
 serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
 
 # Shared, generated payload/error contract — re-exported as `types` so callers
 # can deserialize responses into typed structs instead of poking at `Value`.
-fiducia-interfaces = { git = "https://github.com/fiducia-cloud/fiducia-interfaces.git", rev = "e3dba39566e036ad61de91e2e6c1d625ec2b5411" }
+fiducia-interfaces = { git = "https://github.com/fiducia-cloud/fiducia-interfaces.git", rev = "6e20a3f4df2e52b99a0ad6add83d4528262b5dbc" }

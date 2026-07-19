@@ -182,6 +182,19 @@ customer retry idempotency keys: TypeScript `idempotencyKey`, Python
 `idempotency_key`, Go `IdempotencyKey`, and Rust
 `RequestControl.idempotency_key`.
 
+The first-tier high-level lock clients generate two independent cryptographic
+identities: a holder for the worker (unless the caller supplies one), and a new
+`request_id` for each logical acquisition attempt. The request ID is reused for
+every queued retry and the matching cancel, then discarded. This makes an
+ambiguous acquire safe to cancel even when cancel reaches Raft first, without
+tombstoning a caller-supplied holder or blocking its next attempt. Thin methods
+accept an optional request ID for callers implementing their own retry loop;
+omitting it keeps the legacy wire behavior during rolling upgrades.
+If the node cannot durably record an attempt cancellation because its bounded
+tombstone table is full, it returns `reason:"cancellation_capacity"`. High-level
+clients surface that condition (and any failed raced-grant release) as an error;
+they never report a safe timeout while an ambiguous acquire could still commit.
+
 TypeScript, Python, and Go retry non-idempotent requests only when the caller
 supplies one stable `Idempotency-Key`; they never invent a header that could
 falsely imply replay safety at a direct node. That header is consumed by the
@@ -263,7 +276,7 @@ local development endpoint); it is not yet a hosted-customer login client.
 The Rust client lockfiles are committed, and CI/container Cargo commands use
 `--locked`. The Rust manifest pins `fiducia-interfaces` directly by Git revision;
 languages that consume the sibling checkout are tested against the same reviewed
-full commit `e3dba39566e036ad61de91e2e6c1d625ec2b5411`, never the moving default branch.
+full commit `6e20a3f4df2e52b99a0ad6add83d4528262b5dbc`, never the moving default branch.
 The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
 detached `HEAD`, and verifies it again; overrides that are branches, tags, short
 hashes, or a different object fail the build. Update the CI checkout pins, Rust

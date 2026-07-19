@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import fiducia  # noqa: E402
 import cli as fiducia_cli  # noqa: E402
+import locking as fiducia_locking  # noqa: E402
 
 
 class RecordingClient(fiducia.FiduciaClient):
@@ -38,6 +39,22 @@ class FiduciaPythonClientTests(unittest.TestCase):
 
     def assert_last_call_with_opts(self, client, method, path, body=None, request_opts=None):
         self.assertEqual(client.calls[-1], (method, path, body, request_opts or {}))
+
+    def test_omitted_holder_is_generated_securely(self):
+        client = RecordingClient()
+        client.try_lock("orders/42")
+        first = client.calls[-1][2]["holder"]
+        client.try_lock("orders/43")
+        second = client.calls[-1][2]["holder"]
+        self.assertRegex(first, r"^fdc-[0-9a-f]{32}$")
+        self.assertNotEqual(first, second)
+
+    def test_attempt_request_id_validation(self):
+        with self.assertRaisesRegex(ValueError, "1-128 printable UTF-8 bytes"):
+            fiducia._validate_attempt_request_ids({"request_id": "   "})
+        with self.assertRaisesRegex(ValueError, "1-128 printable UTF-8 bytes"):
+            fiducia._validate_attempt_request_ids({"request_id": "x" * 129})
+        fiducia._validate_attempt_request_ids({"request_id": "fdc-attempt-123"})
 
     def test_request_opts_send_idempotency_key_header(self):
         captured = {}
@@ -251,14 +268,26 @@ class FiduciaPythonClientTests(unittest.TestCase):
             c,
             "POST",
             "/v1/locks/acquire",
-            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True, "max": None},
+            {"key": "orders/42", "holder": "worker-a", "ttl_ms": 30_000, "wait": True,
+             "wait_timeout_ms": None, "request_id": None, "max": None},
         )
         c.lock_acquire_many(["orders/42", "inventory/sku-7"], holder="worker-a")
         self.assert_last_call(
             c,
             "POST",
             "/v1/locks/acquire",
-            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None, "wait": False},
+            {"keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": None,
+             "wait": False, "wait_timeout_ms": None, "request_id": None},
+        )
+        c.lock_renew(["orders/42"], "worker-a", 12, 30_000)
+        self.assert_last_call(
+            c, "POST", "/v1/locks/renew",
+            {"keys": ["orders/42"], "holder": "worker-a", "fencing_token": 12, "ttl_ms": 30_000},
+        )
+        c.lock_cancel(["orders/42"], "worker-a")
+        self.assert_last_call(
+            c, "POST", "/v1/locks/cancel",
+            {"keys": ["orders/42"], "holder": "worker-a", "request_id": None},
         )
         c.lock_release("worker-a", 12)
         self.assert_last_call(c, "POST", "/v1/locks/release", {"holder": "worker-a", "fencing_token": 12})
@@ -270,14 +299,27 @@ class FiduciaPythonClientTests(unittest.TestCase):
             c,
             "POST",
             "/v1/semaphores/acquire",
-            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": 20_000, "wait": True, "limit": 3},
+            {"key": "pools/db/primary", "holder": "worker-b", "ttl_ms": 20_000,
+             "wait": True, "wait_timeout_ms": None, "request_id": None, "limit": 3},
         )
         c.semaphore_acquire("pools/db/primary", 4, holder="worker-c", ttl_ms=20_000, wait=True)
         self.assert_last_call(
             c,
             "POST",
             "/v1/semaphores/acquire",
-            {"key": "pools/db/primary", "holder": "worker-c", "ttl_ms": 20_000, "wait": True, "limit": 4},
+            {"key": "pools/db/primary", "holder": "worker-c", "ttl_ms": 20_000,
+             "wait": True, "wait_timeout_ms": None, "request_id": None, "limit": 4},
+        )
+        c.semaphore_renew("pools/db/primary", "worker-b", 12, 20_000)
+        self.assert_last_call(
+            c, "POST", "/v1/semaphores/renew",
+            {"key": "pools/db/primary", "holder": "worker-b", "fencing_token": 12,
+             "ttl_ms": 20_000},
+        )
+        c.semaphore_cancel("pools/db/primary", "worker-b")
+        self.assert_last_call(
+            c, "POST", "/v1/semaphores/cancel",
+            {"key": "pools/db/primary", "holder": "worker-b", "request_id": None},
         )
         c.semaphore_release("pools/db/primary", "worker-b", 12)
         self.assert_last_call(
@@ -436,6 +478,153 @@ class FiduciaPythonClientTests(unittest.TestCase):
 
                 self.assertEqual(fake.calls, [expected])
                 self.assertEqual(json.loads(out.getvalue()), {"ok": expected[0]})
+
+
+class AttemptRecordingLockClient(fiducia_locking.FiduciaLockClient):
+    def __init__(self):
+        super().__init__("https://fiducia.test")
+        self.attempt_calls = []
+
+    def lock_acquire_many(self, keys, **kwargs):
+        self.attempt_calls.append(("lock_acquire", list(keys), kwargs))
+        return {"result": {"output": {"acquired": False, "queued": True}}}
+
+    def lock_cancel(self, keys, holder, request_id=None, **request_opts):
+        self.attempt_calls.append(("lock_cancel", list(keys), {
+            "holder": holder, "request_id": request_id, **request_opts,
+        }))
+        return {"result": {"output": {"cancelled": True, "acquired": False}}}
+
+    def semaphore_acquire(self, key, limit, **kwargs):
+        self.attempt_calls.append(("semaphore_acquire", (key, limit), kwargs))
+        return {"result": {"output": {"acquired": False, "queued": True}}}
+
+    def semaphore_cancel(self, key, holder, request_id=None, **request_opts):
+        self.attempt_calls.append(("semaphore_cancel", key, {
+            "holder": holder, "request_id": request_id, **request_opts,
+        }))
+        return {"result": {"output": {"cancelled": True, "acquired": False}}}
+
+
+class FiduciaAttemptIdentityTests(unittest.TestCase):
+    def test_lock_attempt_reuses_one_random_id_for_retries_and_cancel(self):
+        client = AttemptRecordingLockClient()
+        with self.assertRaises(fiducia_locking.LockTimeout):
+            client.lock(
+                ["orders/42"], holder="stable-worker", max_wait_ms=50,
+                retry_interval_ms=0, max_retries=1,
+            )
+
+        acquire_ids = [
+            call[2]["request_id"] for call in client.attempt_calls
+            if call[0] == "lock_acquire"
+        ]
+        cancel_id = next(call[2]["request_id"] for call in client.attempt_calls
+                         if call[0] == "lock_cancel")
+        self.assertEqual(len(acquire_ids), 2)
+        self.assertEqual(set(acquire_ids), {cancel_id})
+        self.assertRegex(cancel_id, r"^fdc-attempt-[0-9a-f]{32}$")
+
+    def test_cancellation_capacity_is_surfaced_as_unsafe(self):
+        class CapacityClient(AttemptRecordingLockClient):
+            def lock_cancel(self, keys, holder, request_id=None, **request_opts):
+                del keys, holder, request_id, request_opts
+                return {"result": {"output": {
+                    "cancelled": False,
+                    "acquired": False,
+                    "reason": "cancellation_capacity",
+                }}}
+
+            def semaphore_cancel(self, key, holder, request_id=None, **request_opts):
+                del key, holder, request_id, request_opts
+                return {"result": {"output": {
+                    "cancelled": False,
+                    "acquired": False,
+                    "reason": "cancellation_capacity",
+                }}}
+
+        client = CapacityClient()
+        with self.assertRaisesRegex(RuntimeError, "cancellation_capacity"):
+            client.lock(
+                "orders/42", holder="stable-worker", max_wait_ms=10,
+                retry_interval_ms=0, max_retries=0,
+            )
+        with self.assertRaisesRegex(RuntimeError, "cancellation_capacity"):
+            client.acquire_semaphore(
+                "pool", 2, holder="stable-worker", max_wait_ms=10,
+                retry_interval_ms=0, max_retries=0,
+            )
+    def test_semaphore_attempt_reuses_one_random_id_for_retries_and_cancel(self):
+        client = AttemptRecordingLockClient()
+        with self.assertRaises(fiducia_locking.LockTimeout):
+            client.acquire_semaphore(
+                "pool", 2, holder="stable-worker", max_wait_ms=50,
+                retry_interval_ms=0, max_retries=1,
+            )
+
+        acquire_ids = [
+            call[2]["request_id"] for call in client.attempt_calls
+            if call[0] == "semaphore_acquire"
+        ]
+        cancel_id = next(call[2]["request_id"] for call in client.attempt_calls
+                         if call[0] == "semaphore_cancel")
+        self.assertEqual(len(acquire_ids), 2)
+        self.assertEqual(set(acquire_ids), {cancel_id})
+
+
+class ReacquiredLockClient(AttemptRecordingLockClient):
+    def lock_acquire_many(self, keys, **kwargs):
+        self.attempt_calls.append(("lock_acquire", list(keys), kwargs))
+        return {"result": {"output": {
+            "acquired": True, "queued": False, "renewed": False,
+            "fencing_token": 71, "lease_expires_ms": 100,
+        }}}
+
+    def lock_renew(self, keys, holder, fencing_token, ttl_ms, **request_opts):
+        self.attempt_calls.append(("lock_renew", list(keys), {
+            "holder": holder, "fencing_token": fencing_token, "ttl_ms": ttl_ms,
+            **request_opts,
+        }))
+        return {"result": {"output": {
+            "renewed": True, "fencing_token": fencing_token,
+            "lease_expires_ms": 200,
+        }}}
+
+    def semaphore_acquire(self, key, limit, **kwargs):
+        self.attempt_calls.append(("semaphore_acquire", (key, limit), kwargs))
+        return {"result": {"output": {
+            "acquired": True, "queued": False, "renewed": False,
+            "fencing_token": 72, "lease_expires_ms": 300,
+        }}}
+
+    def semaphore_renew(self, key, holder, fencing_token, ttl_ms, **request_opts):
+        self.attempt_calls.append(("semaphore_renew", key, {
+            "holder": holder, "fencing_token": fencing_token, "ttl_ms": ttl_ms,
+            **request_opts,
+        }))
+        return {"result": {"output": {
+            "renewed": True, "fencing_token": fencing_token,
+            "lease_expires_ms": 400,
+        }}}
+
+
+class FiduciaInitialReacquireTests(unittest.TestCase):
+    def test_initial_idempotent_reacquire_is_token_renewed_before_return(self):
+        client = ReacquiredLockClient()
+        handle = client.try_lock("orders/42", holder="stable-worker", ttl_ms=30_000)
+        self.assertIsNotNone(handle)
+        self.assertEqual(handle.lease_expires_ms, 200)
+        self.assertEqual([call[0] for call in client.attempt_calls], [
+            "lock_acquire", "lock_renew",
+        ])
+
+        client.attempt_calls.clear()
+        permit = client.try_semaphore("pool", 2, holder="stable-worker", ttl_ms=30_000)
+        self.assertIsNotNone(permit)
+        self.assertEqual(permit.lease_expires_ms, 400)
+        self.assertEqual([call[0] for call in client.attempt_calls], [
+            "semaphore_acquire", "semaphore_renew",
+        ])
 
 
 class CliFake:

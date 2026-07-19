@@ -186,8 +186,20 @@ def emit_go(op):
     pp, qp, bp, req, opt = parts(op)
     sig = [("%s %s" % (camel(x["name"]), go_type(x["type"]))) for x in req]
     if opt:
-        sig.append("opts map[string]any")
+        # Variadic keeps source compatibility when an existing operation gains
+        # its first optional field: old calls can still omit the options map.
+        sig.append("optional ...map[string]any")
     lines = []
+    if opt:
+        lines.extend([
+            "\tif len(optional) > 1 {",
+            '\t\treturn nil, fmt.Errorf("fiducia: expected at most one options map")',
+            "\t}",
+            "\topts := map[string]any{}",
+            "\tif len(optional) == 1 && optional[0] != nil {",
+            "\t\topts = optional[0]",
+            "\t}",
+        ])
 
     fmt = op["path"]
     enc_args = []

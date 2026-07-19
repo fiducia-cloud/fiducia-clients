@@ -19,6 +19,7 @@ import json
 import os as _os
 import sys as _sys
 import time
+import uuid as _uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -94,6 +95,11 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_RefuseRedirects())
 
 
+def _generated_holder():
+    """Cryptographically strong holder identity used when callers omit one."""
+    return "fdc-%s" % _uuid.uuid4().hex
+
+
 def _urlopen(req, timeout):
     """Single transport seam: every request goes through the no-redirect opener."""
     return _OPENER.open(req, timeout=timeout)
@@ -125,6 +131,26 @@ def _metadata_query(metadata):
     }
 
 
+def _validate_attempt_request_ids(value, at="request"):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "request_id" and item is not None:
+                valid = (
+                    isinstance(item, str)
+                    and bool(item.strip())
+                    and len(item.encode("utf-8")) <= 128
+                    and not any(ord(ch) < 32 or ord(ch) == 127 for ch in item)
+                )
+                if not valid:
+                    raise ValueError(
+                        "fiducia: %s.request_id must be 1-128 printable UTF-8 bytes" % at
+                    )
+            _validate_attempt_request_ids(item, "%s.%s" % (at, key))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_attempt_request_ids(item, "%s[%s]" % (at, index))
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30, max_retries=0, retry_delay=0):
         self.base = base_url.rstrip("/")
@@ -154,6 +180,7 @@ class FiduciaClient:
         request_opts = request_opts or {}
         body = ({key: value for key, value in body.items() if value is not None}
                 if isinstance(body, dict) else body)
+        _validate_attempt_request_ids(body)
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         if data is not None:
@@ -254,9 +281,13 @@ class FiduciaClient:
     def lock_get(self, key):
         return self._request("GET", _query("/v1/locks", key=key))
 
-    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None, **request_opts):
+    def lock_acquire(self, key, holder=None, ttl_ms=None, wait=False, max=None,
+                     wait_timeout_ms=None, request_id=None, **request_opts):
+        holder = (holder or "").strip() or _generated_holder()
         return self._request("POST", "/v1/locks/acquire",
-                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "max": max},
+                             {"key": key, "holder": holder, "request_id": request_id,
+                              "ttl_ms": ttl_ms, "wait": wait,
+                              "wait_timeout_ms": wait_timeout_ms, "max": max},
                              **request_opts)
 
     def try_lock(self, key, holder=None, ttl_ms=None, max=None, **request_opts):
@@ -267,11 +298,15 @@ class FiduciaClient:
 
     lock = must_lock
 
-    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False, **request_opts):
+    def lock_acquire_many(self, keys, holder=None, ttl_ms=None, wait=False,
+                          wait_timeout_ms=None, request_id=None, **request_opts):
         # Multi-key UNION lock: all-or-nothing across the whole set; conflicts on
         # ANY member key block the grant.
+        holder = (holder or "").strip() or _generated_holder()
         return self._request("POST", "/v1/locks/acquire",
-                             {"keys": list(keys), "holder": holder, "ttl_ms": ttl_ms, "wait": wait},
+                             {"keys": list(keys), "holder": holder, "request_id": request_id,
+                              "ttl_ms": ttl_ms, "wait": wait,
+                              "wait_timeout_ms": wait_timeout_ms},
                              **request_opts)
 
     def try_lock_many(self, keys, holder=None, ttl_ms=None, **request_opts):
@@ -298,12 +333,16 @@ class FiduciaClient:
     def semaphore_get(self, key):
         return self._request("GET", _query("/v1/semaphores", key=key))
 
-    def semaphore_acquire(self, key, limit=None, holder=None, ttl_ms=None, max=None, wait=False, **request_opts):
+    def semaphore_acquire(self, key, limit=None, holder=None, ttl_ms=None, max=None, wait=False,
+                          wait_timeout_ms=None, request_id=None, **request_opts):
         if max is not None and limit is not None and max != limit:
             raise ValueError("semaphore limit and max disagree")
         limit = max if max is not None else (limit if limit is not None else 2)
+        holder = (holder or "").strip() or _generated_holder()
         return self._request("POST", "/v1/semaphores/acquire",
-                             {"key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": limit},
+                             {"key": key, "holder": holder, "request_id": request_id,
+                              "ttl_ms": ttl_ms, "wait": wait,
+                              "wait_timeout_ms": wait_timeout_ms, "limit": limit},
                              **request_opts)
 
     def try_semaphore(self, key, holder=None, ttl_ms=None, max=2, **request_opts):
@@ -459,6 +498,22 @@ class FiduciaClient:
     def service_watch(self, service, **request_opts):
         return self._watch("/v1/services/%s/watch" % _enc(service), **request_opts)
 
+
+    def lock_renew(self, keys, holder, fencing_token, ttl_ms, **request_opts):
+        """Renew a held union lock only when holder and fencing token still match; preserves the token."""
+        return self._request("POST", "/v1/locks/renew", {"keys": keys, "holder": holder, "fencing_token": fencing_token, "ttl_ms": ttl_ms}, **request_opts)
+
+    def lock_cancel(self, keys, holder, request_id=None, **request_opts):
+        """Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior."""
+        return self._request("POST", "/v1/locks/cancel", {"keys": keys, "holder": holder, "request_id": request_id}, **request_opts)
+
+    def semaphore_renew(self, key, holder, fencing_token, ttl_ms, **request_opts):
+        """Renew a held semaphore permit only when holder and fencing token still match; preserves the token."""
+        return self._request("POST", "/v1/semaphores/renew", {"key": key, "holder": holder, "fencing_token": fencing_token, "ttl_ms": ttl_ms}, **request_opts)
+
+    def semaphore_cancel(self, key, holder, request_id=None, **request_opts):
+        """Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior."""
+        return self._request("POST", "/v1/semaphores/cancel", {"key": key, "holder": holder, "request_id": request_id}, **request_opts)
 
     def counter_get(self, key, **request_opts):
         """Read a counter's value and revision; absent reads as found=false (treat as 0)."""
