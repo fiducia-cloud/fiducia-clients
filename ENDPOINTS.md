@@ -9,13 +9,13 @@ too. `?param` marks an optional argument.
 | `GET` | `/healthz` | — | Liveness probe. |
 | `GET` | `/v1/status` | — | Per-shard consensus status. |
 | `GET` | `/v1/locks` | `key` | Inspect a lock member key: holder, the held union, and the FIFO wait queue. |
-| `POST` | `/v1/locks/acquire` | `key`, `holder`, `request_id`?, `ttl_ms`?, `wait`?, `wait_timeout_ms`? | Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API. |
-| `POST` | `/v1/locks/acquire` | `keys`, `holder`, `request_id`?, `ttl_ms`?, `wait`?, `wait_timeout_ms`? | Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key. |
+| `POST` | `/v1/locks/acquire` | `key`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API. |
+| `POST` | `/v1/locks/acquire` | `keys`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key. |
 | `POST` | `/v1/locks/renew` | `keys`, `holder`, `fencing_token`, `ttl_ms` | Renew a held union lock only when holder and fencing token still match; preserves the token. |
 | `POST` | `/v1/locks/cancel` | `keys`, `holder`, `request_id`? | Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior. |
 | `POST` | `/v1/locks/release` | `holder`, `fencing_token` | Release the whole grant (every member key) by its fencing token. |
 | `GET` | `/v1/semaphores` | `key` | Inspect a semaphore: limit, holders, free permits, queue. |
-| `POST` | `/v1/semaphores/acquire` | `key`, `limit`, `holder`, `request_id`?, `ttl_ms`?, `wait`?, `wait_timeout_ms`? | Take a permit of a counting semaphore (up to limit holders). |
+| `POST` | `/v1/semaphores/acquire` | `key`, `limit`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Take a permit of a counting semaphore (up to limit holders). |
 | `POST` | `/v1/semaphores/renew` | `key`, `holder`, `fencing_token`, `ttl_ms` | Renew a held semaphore permit only when holder and fencing token still match; preserves the token. |
 | `POST` | `/v1/semaphores/cancel` | `key`, `holder`, `request_id`? | Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior. |
 | `POST` | `/v1/semaphores/release` | `key`, `holder`, `fencing_token` | Return one permit (admits the next FIFO waiter). |
