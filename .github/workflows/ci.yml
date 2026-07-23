@@ -34,7 +34,7 @@ jobs:
           repository: fiducia-cloud/fiducia-interfaces
           ref: 6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
           path: fiducia-interfaces
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: fiducia-clients/clients/go/go.mod
       - working-directory: fiducia-clients/clients/go
