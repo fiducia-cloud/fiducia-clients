@@ -17,3 +17,9 @@ trusted service-to-node calls. Both credential forms are debug-redacted,
 refuse redirects, and reject cleartext public hosts before sending a request.
 The separate `clients/rust-wasm` client is generated for WebAssembly and
 supports explicit default headers.
+
+`sync_write()` and `sync_pull()` use the generated
+`types::SyncQueuedWrite`, `types::SyncWriteAcknowledgement`, and
+`types::SyncPullPage` contracts. Sync writes always reuse the canonical
+`write.key` as `Idempotency-Key`, so retries remain safe for a durable
+fiducia-sync queue.

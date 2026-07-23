@@ -17,6 +17,11 @@ The production-tier templates under [`templates/`](templates/) retain transport
 hardening and language-idiomatic helpers while `generate.py` inserts newer
 manifest operations into explicit generated regions.
 
+The TypeScript, Dart, and Rust clients also expose local-first sync write/pull
+adapters. Their payloads come from the canonical sync schema in
+`fiducia-interfaces`; TypeScript callbacks are compile-checked directly against
+`@fiducia/sync`, while Dart composes through dependency-free JSON adapters.
+
 ## Languages
 
 First hard-gated tier: TypeScript, Go, Rust, and Python. The remaining languages

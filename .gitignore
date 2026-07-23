@@ -28,6 +28,7 @@ obj/
 # Dart
 .dart_tool/
 .packages
+clients/dart/pubspec.lock
 
 # Elixir
 _build/

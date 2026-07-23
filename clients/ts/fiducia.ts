@@ -12,6 +12,12 @@
 
 // Shared payload/error contract — re-exported from @fiducia/interfaces so callers
 // type responses from one source of truth (these are type-only; no runtime cost).
+import type {
+  SyncPullPage,
+  SyncQueuedWrite,
+  SyncWriteAcknowledgement,
+} from "@fiducia/interfaces/typescript";
+
 export type {
   IdempotencyRecord,
   KvEntry,
@@ -22,6 +28,10 @@ export type {
   ProposeOutcome,
   ServiceInstance,
   ServiceListResponse,
+  SyncChangeEvent,
+  SyncPullPage,
+  SyncQueuedWrite,
+  SyncWriteAcknowledgement,
 } from "@fiducia/interfaces/typescript";
 
 export interface RequestControlOpts {
@@ -39,6 +49,19 @@ export interface RequestControlOpts {
 export interface FiduciaClientOpts extends RequestControlOpts {
   fetch?: typeof fetch;
 }
+
+export interface SyncRequestOpts extends RequestControlOpts {
+  /** Customer or admin API prefix that owns the synced table. */
+  pathPrefix?: string;
+}
+
+export interface SyncPullOpts extends SyncRequestOpts {
+  /** Maximum committed changes requested from one catch-up page. */
+  limit?: number;
+}
+
+/** Canonical queued write plus support for pre-key durable queues. */
+export type SyncClientWrite = Omit<SyncQueuedWrite, "key"> & { key?: string };
 
 export interface AcquireOpts extends RequestControlOpts {
   holder?: string;
@@ -728,6 +751,99 @@ export class FiduciaClient {
   serviceList() { return this.request("GET", "/v1/services"); }
   serviceWatch(service: string, opts: RequestControlOpts = {}) {
     return this.watch(`/v1/services/${enc(service)}/watch`, opts);
+  }
+
+  /**
+   * Send one durable optimistic write using the canonical
+   * `@fiducia/interfaces` envelope. Canonical writes reuse their queued key as
+   * the HTTP idempotency key; pre-key durable queue entries use the stable
+   * legacy derivation implemented by `@fiducia/sync`.
+   */
+  async syncWrite(
+    write: SyncClientWrite,
+    opts: SyncRequestOpts = {},
+  ): Promise<SyncWriteAcknowledgement> {
+    if (!write || typeof write !== "object") throw new Error("fiducia: sync write must be an object");
+    if (typeof write.table !== "string" || !write.table.trim()) throw new Error("fiducia: sync table must be nonempty");
+    if (typeof write.id !== "string" || !write.id.trim()) throw new Error("fiducia: sync row id must be nonempty");
+    const key = write.key ?? `${write.table}:${write.id}:${write.op}:${write.base_version}`;
+    if (typeof key !== "string" || !key.trim()) throw new Error("fiducia: sync write key must be nonempty");
+    if (opts.idempotencyKey !== undefined && opts.idempotencyKey !== key) {
+      throw new Error("fiducia: explicit idempotency key must match the sync write key");
+    }
+    const prefix = (opts.pathPrefix ?? "/api/customer/sync").replace(/\/+$/, "");
+    const wireWrite: SyncQueuedWrite = {
+      id: write.id,
+      table: write.table,
+      op: write.op,
+      payload: write.payload,
+      base_version: write.base_version,
+      key,
+    };
+    const ack = await this.request(
+      "POST",
+      `${prefix}/${enc(write.table)}`,
+      wireWrite,
+      { ...opts, idempotencyKey: key },
+    ) as SyncWriteAcknowledgement;
+    if (!ack || typeof ack !== "object" || ack.id !== write.id) {
+      throw new Error("fiducia: sync acknowledgement id does not match the queued write");
+    }
+    if (!Number.isSafeInteger(ack.committed_version) || ack.committed_version < 0) {
+      throw new Error("fiducia: sync acknowledgement has an invalid committed_version");
+    }
+    return ack;
+  }
+
+  /**
+   * Read one ordered catch-up page. Legacy service pages using `sequence` are
+   * normalized to the canonical `sync_sequence`; missing commit timestamps are
+   * represented as zero, matching the realtime transport decoder.
+   */
+  async syncPull(
+    table: string,
+    cursor: number,
+    opts: SyncPullOpts = {},
+  ): Promise<SyncPullPage> {
+    if (typeof table !== "string" || !table.trim()) throw new Error("fiducia: sync table must be nonempty");
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("fiducia: sync cursor must be a non-negative safe integer");
+    const limit = opts.limit ?? 500;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error("fiducia: sync pull limit must be an integer between 1 and 1000");
+    }
+    const prefix = (opts.pathPrefix ?? "/api/customer/sync").replace(/\/+$/, "");
+    const raw = await this.request(
+      "GET",
+      `${prefix}/${enc(table)}?cursor=${cursor}&limit=${limit}`,
+      undefined,
+      opts,
+    ) as {
+      changes?: Array<Record<string, unknown>>;
+      next_cursor: number;
+      has_more: boolean;
+    };
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.changes)) {
+      throw new Error("fiducia: sync pull response has no changes array");
+    }
+    if (!Number.isSafeInteger(raw.next_cursor) || raw.next_cursor < cursor || typeof raw.has_more !== "boolean") {
+      throw new Error("fiducia: sync pull response has an invalid cursor");
+    }
+    const changes = raw.changes.map((change) => {
+      const { sequence, ...canonical } = change;
+      return {
+        ...canonical,
+        at_ms: Number.isSafeInteger(change.at_ms) ? change.at_ms : 0,
+        sync_sequence: Number.isSafeInteger(change.sync_sequence)
+          ? change.sync_sequence
+          : (Number.isSafeInteger(sequence) ? sequence : undefined),
+      };
+    }) as SyncPullPage["changes"];
+    return { changes, next_cursor: raw.next_cursor, has_more: raw.has_more };
+  }
+
+  /** Bind the sync write endpoint to the callback shape used by `@fiducia/sync`. */
+  syncSender(opts: SyncRequestOpts = {}) {
+    return (write: SyncClientWrite): Promise<SyncWriteAcknowledgement> => this.syncWrite(write, opts);
   }
 
   async lockRenew(keys: string[], holder: string, fencingToken: number, ttlMs: number, opts: RequestControlOpts = {}): Promise<any> {

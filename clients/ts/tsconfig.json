@@ -9,8 +9,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "paths": {
-      "@fiducia/interfaces/typescript": ["../../../fiducia-interfaces/generated/typescript/index.ts"]
+      "@fiducia/interfaces/typescript": ["../../../fiducia-interfaces/generated/typescript/index.ts"],
+      "@fiducia/sync": ["../../../fiducia-sync/sdk/src/index.d.ts"]
     }
   },
-  "files": ["fiducia.ts", "locking.ts"]
+  "files": ["fiducia.ts", "locking.ts", "sync-compatibility.ts"]
 }

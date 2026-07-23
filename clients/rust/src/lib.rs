@@ -934,6 +934,114 @@ impl FiduciaClient {
         )
     }
 
+    // --- local-first sync ---
+    /// Send the canonical `fiducia-interfaces` queued-write envelope. The
+    /// client always reuses `write.key` as the HTTP idempotency key, so this is
+    /// safe to bind to a durable fiducia-sync queue.
+    pub fn sync_write(
+        &self,
+        write: &types::SyncQueuedWrite,
+        path_prefix: Option<&str>,
+        control: Option<RequestControl>,
+    ) -> Result<types::SyncWriteAcknowledgement, Error> {
+        if write.table.trim().is_empty()
+            || write.id.trim().is_empty()
+            || write.key.trim().is_empty()
+            || write.base_version < 0
+        {
+            return Err(Error::Transport(
+                "sync write has an empty identity or negative base_version".to_string(),
+            ));
+        }
+        let mut control = control.unwrap_or_default();
+        if let Some(explicit) = control.idempotency_key.as_deref() {
+            if explicit != write.key {
+                return Err(Error::Transport(
+                    "explicit idempotency key does not match the sync write key".to_string(),
+                ));
+            }
+        } else {
+            control.idempotency_key = Some(write.key.clone());
+        }
+        let prefix = path_prefix
+            .unwrap_or("/api/customer/sync")
+            .trim_end_matches('/');
+        if prefix.is_empty() {
+            return Err(Error::Transport(
+                "sync path prefix must be nonempty".to_string(),
+            ));
+        }
+        let body = serde_json::to_value(write).map_err(|err| Error::Transport(err.to_string()))?;
+        let value = self.request_with_control(
+            "POST",
+            &format!("{prefix}/{}", enc(&write.table)),
+            Some(body),
+            control,
+            false,
+        )?;
+        let acknowledgement: types::SyncWriteAcknowledgement =
+            serde_json::from_value(value).map_err(|err| Error::Transport(err.to_string()))?;
+        if acknowledgement.id != write.id || acknowledgement.committed_version < 0 {
+            return Err(Error::Transport(
+                "sync acknowledgement does not match the queued write".to_string(),
+            ));
+        }
+        Ok(acknowledgement)
+    }
+
+    /// Fetch one globally ordered catch-up page using the canonical interface
+    /// type consumed by fiducia-sync.
+    pub fn sync_pull(
+        &self,
+        table: &str,
+        cursor: i64,
+        limit: u16,
+        path_prefix: Option<&str>,
+        control: Option<RequestControl>,
+    ) -> Result<types::SyncPullPage, Error> {
+        if table.trim().is_empty() || cursor < 0 || limit == 0 || limit > 1_000 {
+            return Err(Error::Transport(
+                "sync table, cursor, or limit is outside its valid range".to_string(),
+            ));
+        }
+        let prefix = path_prefix
+            .unwrap_or("/api/customer/sync")
+            .trim_end_matches('/');
+        if prefix.is_empty() {
+            return Err(Error::Transport(
+                "sync path prefix must be nonempty".to_string(),
+            ));
+        }
+        let mut value = self.request_with_control(
+            "GET",
+            &format!("{prefix}/{}?cursor={cursor}&limit={limit}", enc(table)),
+            None,
+            control.unwrap_or_default(),
+            false,
+        )?;
+        if let Some(changes) = value.get_mut("changes").and_then(Value::as_array_mut) {
+            for change in changes {
+                let Some(change) = change.as_object_mut() else {
+                    continue;
+                };
+                change.entry("at_ms").or_insert(json!(0));
+                if !change.contains_key("sync_sequence") {
+                    if let Some(sequence) = change.get("sequence").cloned() {
+                        change.insert("sync_sequence".to_string(), sequence);
+                    }
+                }
+            }
+        }
+        let page: types::SyncPullPage =
+            serde_json::from_value(value).map_err(|err| Error::Transport(err.to_string()))?;
+        if page.next_cursor < cursor {
+            return Err(Error::Transport(
+                "sync pull cursor moved backwards".to_string(),
+            ));
+        }
+        Ok(page)
+    }
+
     // --- idempotency keys ---
     pub fn idempotency_get(&self, key: &str) -> Result<Value, Error> {
         self.request("GET", &format!("/v1/idempotency?key={}", enc(key)), None)
@@ -1873,6 +1981,70 @@ mod tests {
         (base, rx)
     }
 
+    fn json_recording_server(responses: Vec<Value>) -> (String, Receiver<RecordedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 1024];
+                let mut header_end = None;
+                let mut content_len = 0_usize;
+                loop {
+                    let n = stream.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none() {
+                        if let Some(pos) = find_header_end(&buf) {
+                            header_end = Some(pos);
+                            content_len = content_length(&String::from_utf8_lossy(&buf[..pos]));
+                        }
+                    }
+                    if let Some(pos) = header_end {
+                        if buf.len() >= pos + 4 + content_len {
+                            break;
+                        }
+                    }
+                }
+
+                let header_end = header_end.unwrap();
+                let headers = String::from_utf8_lossy(&buf[..header_end]);
+                let mut first_line = headers.lines().next().unwrap().split_whitespace();
+                let method = first_line.next().unwrap().to_string();
+                let path = first_line.next().unwrap().to_string();
+                let body_start = header_end + 4;
+                let body = if content_len == 0 {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&buf[body_start..body_start + content_len]).unwrap()
+                };
+                tx.send(RecordedRequest {
+                    method,
+                    path,
+                    body,
+                    idempotency_key: header_value(&headers, "idempotency-key"),
+                    authorization: header_value(&headers, "authorization"),
+                })
+                .unwrap();
+
+                let response = serde_json::to_vec(&response).unwrap();
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response.len()
+                );
+                stream.write_all(headers.as_bytes()).unwrap();
+                stream.write_all(&response).unwrap();
+            }
+        });
+
+        (base, rx)
+    }
+
     /// A server that always answers `status`, counting the requests it received.
     /// Used to observe whether a failed request is retried.
     fn erroring_server(status: u16) -> (String, Arc<AtomicUsize>) {
@@ -2172,6 +2344,62 @@ mod tests {
             idempotency.status,
             types::IdempotencyRecordStatus::Claimed
         ));
+    }
+
+    #[test]
+    fn sync_methods_use_canonical_interface_types_and_durable_keys() {
+        let (base, rx) = json_recording_server(vec![
+            json!({ "id": "operation-7", "committed_version": 4 }),
+            json!({
+                "changes": [{
+                    "sequence": 41,
+                    "table": "infra_operations",
+                    "op": "upsert",
+                    "id": "operation-7",
+                    "version": 4,
+                    "row": { "state": "running" }
+                }],
+                "next_cursor": 41,
+                "has_more": false
+            }),
+        ]);
+        let client = FiduciaClient::new(&base);
+        let write = types::SyncQueuedWrite {
+            id: "operation-7".to_string(),
+            table: "infra_operations".to_string(),
+            op: types::SyncQueuedWriteOp::Upsert,
+            payload: Some(json!({ "state": "queued" })),
+            base_version: 3,
+            key: "write-operation-7-v4".to_string(),
+        };
+
+        let acknowledgement = client
+            .sync_write(&write, Some("/api/admin/sync"), None)
+            .unwrap();
+        assert_eq!(acknowledgement.id, write.id);
+        assert_eq!(acknowledgement.committed_version, 4);
+        let request = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/admin/sync/infra_operations");
+        assert_eq!(
+            request.idempotency_key.as_deref(),
+            Some("write-operation-7-v4")
+        );
+        assert_eq!(request.body["key"], write.key);
+
+        let page = client
+            .sync_pull("infra_operations", 40, 2, Some("/api/admin/sync"), None)
+            .unwrap();
+        assert_eq!(page.next_cursor, 41);
+        assert_eq!(page.changes.len(), 1);
+        assert_eq!(page.changes[0].at_ms, 0);
+        assert_eq!(page.changes[0].sync_sequence, Some(41));
+        let request = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(
+            request.path,
+            "/api/admin/sync/infra_operations?cursor=40&limit=2"
+        );
     }
 
     #[test]
