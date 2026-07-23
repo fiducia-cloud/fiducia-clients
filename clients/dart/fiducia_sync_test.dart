@@ -50,6 +50,11 @@ Future<void> main() async {
       'payload': {'state': 'queued'},
       'base_version': 3,
       'key': 'write-operation-7-v4',
+      'write_policy': {
+        'strategy': 'pessimistic',
+        'failure_mode': 'throw_error',
+        'telemetry': 'lifecycle',
+      },
     });
     _expect(acknowledgement['committed_version'] == 4, 'ack version');
     _expect(

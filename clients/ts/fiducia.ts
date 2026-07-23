@@ -15,6 +15,7 @@
 import type {
   SyncPullPage,
   SyncQueuedWrite,
+  SyncWritePolicy,
   SyncWriteAcknowledgement,
 } from "@fiducia/interfaces/typescript";
 
@@ -31,6 +32,9 @@ export type {
   SyncChangeEvent,
   SyncPullPage,
   SyncQueuedWrite,
+  SyncReplicaMetadata,
+  SyncTelemetryEvent,
+  SyncWritePolicy,
   SyncWriteAcknowledgement,
 } from "@fiducia/interfaces/typescript";
 
@@ -60,8 +64,14 @@ export interface SyncPullOpts extends SyncRequestOpts {
   limit?: number;
 }
 
-/** Canonical queued write plus support for pre-key durable queues. */
-export type SyncClientWrite = Omit<SyncQueuedWrite, "key"> & { key?: string };
+/**
+ * Canonical server envelope plus replica-only queue metadata accepted from
+ * `@fiducia/sync`. `write_policy` is deliberately stripped before HTTP IO.
+ */
+export type SyncClientWrite = Omit<SyncQueuedWrite, "key"> & {
+  key?: string;
+  write_policy?: SyncWritePolicy;
+};
 
 export interface AcquireOpts extends RequestControlOpts {
   holder?: string;

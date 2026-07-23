@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SyncQueuedWrite } from "@fiducia/interfaces/typescript";
-import { FiduciaClient } from "./fiducia.ts";
+import { FiduciaClient, type SyncClientWrite } from "./fiducia.ts";
 
-const write: SyncQueuedWrite = {
+const write: SyncClientWrite = {
   id: "operation-7",
   table: "infra_operations",
   op: "upsert",
   payload: { state: "queued" },
   base_version: 3,
   key: "write-operation-7-v4",
+  write_policy: {
+    strategy: "pessimistic",
+    failure_mode: "throw_error",
+    telemetry: "lifecycle",
+  },
 };
 
 test("syncSender sends the canonical interface envelope and durable key", async () => {
@@ -30,7 +34,14 @@ test("syncSender sends the canonical interface envelope and durable key", async 
   assert.equal(calls[0].url, "https://admin.fiducia.test/api/admin/sync/infra_operations");
   assert.equal(calls[0].init.method, "POST");
   assert.equal(new Headers(calls[0].init.headers).get("idempotency-key"), write.key);
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), write);
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    id: write.id,
+    table: write.table,
+    op: write.op,
+    payload: write.payload,
+    base_version: write.base_version,
+    key: write.key,
+  });
 });
 
 test("syncPull returns the canonical pull page consumed by fiducia-sync", async () => {
