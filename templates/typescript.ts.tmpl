@@ -21,6 +21,7 @@ export type {
   IdempotencyRecord,
   KvEntry,
   KvGetResponse,
+  KvListResponse,
   LockGrant,
   Leadership,
   ProposeError,
@@ -90,6 +91,24 @@ export interface KvPutOpts extends RequestControlOpts {
   prevRevision?: number;
   /** Explicitly opt this value out of cluster-side at-rest encryption. */
   plaintext?: boolean;
+}
+export interface SecretPutOpts extends RequestControlOpts {
+  ttlMs?: number;
+  /** Compare-and-swap guard; 0 requires the secret not to exist yet. */
+  prevRevision?: number;
+}
+/** One secret's name + metadata. Deliberately carries NO value. */
+export interface SecretSummary {
+  name: string;
+  modRevision?: number;
+  expiresAtMs?: number;
+  /** At-rest protection descriptor ({ at_rest, provider, key_id, ... }). */
+  protection?: unknown;
+}
+export interface SecretListResponse {
+  prefix: string;
+  count: number;
+  secrets: SecretSummary[];
 }
 export interface IdempotencyClaimOpts extends RequestControlOpts {
   owner?: string;
@@ -180,6 +199,18 @@ export class FiduciaTimeoutError extends Error {
 }
 
 const enc = encodeURIComponent;
+
+// Reserved keyspace for the end-user secrets API (see the secret* methods).
+// Secrets are ordinary encrypted config-KV entries under this prefix; the
+// prefix keeps them isolated from plain config keys and drives metadata-only
+// listing.
+const SECRET_PREFIX = "secret/";
+function secretKey(name: string): string {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error("fiducia: secret name must be a non-empty string");
+  }
+  return SECRET_PREFIX + name;
+}
 
 // Methods safe to retry without an idempotency key. Per RFC 7231 GET/HEAD/OPTIONS
 // and the idempotent-by-contract PUT/DELETE converge to the same server state when
@@ -674,6 +705,43 @@ export class FiduciaClient {
   }
   kvWatchPrefix(prefix: string, opts: RequestControlOpts = {}) {
     return this.watch(`/v1/kv?prefix=${enc(prefix)}&watch=true`, opts);
+  }
+
+  // --- secrets (write-only ergonomics over the encrypted config KV) ---
+  // Secrets live under the reserved "secret/" keyspace and are ALWAYS stored
+  // with at-rest encryption (never plaintext). `secretList` returns names and
+  // metadata only — a secret's value is exposed solely through the explicit
+  // `secretReveal`. This requires the cluster to have KV protection configured;
+  // otherwise the store cannot encrypt and the write is rejected server-side.
+  secretPut(name: string, value: string, opts: SecretPutOpts = {}) {
+    return this.request("PUT", `/v1/kv?key=${enc(secretKey(name))}`,
+      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision, plaintext: false }, opts);
+  }
+  /** Explicitly read (reveal) a secret's decrypted value. */
+  secretReveal(name: string, opts: RequestControlOpts = {}) {
+    return this.request("GET", `/v1/kv?key=${enc(secretKey(name))}`, undefined, opts);
+  }
+  secretDelete(name: string, opts: RequestControlOpts = {}) {
+    return this.request("DELETE", `/v1/kv?key=${enc(secretKey(name))}`, undefined, opts);
+  }
+  /** List secret names + metadata under an optional sub-prefix; never values. */
+  async secretList(prefix = "", opts: RequestControlOpts = {}): Promise<SecretListResponse> {
+    const res = (await this.request(
+      "GET", `/v1/kv?prefix=${enc(SECRET_PREFIX + prefix)}`, undefined, opts,
+    )) as { keys?: Array<{ key?: string; mod_revision?: number; expires_at_ms?: number; protection?: unknown }> };
+    const items = Array.isArray(res?.keys) ? res.keys : [];
+    return {
+      prefix,
+      count: items.length,
+      secrets: items.map((item) => ({
+        name: typeof item?.key === "string" && item.key.startsWith(SECRET_PREFIX)
+          ? item.key.slice(SECRET_PREFIX.length)
+          : String(item?.key ?? ""),
+        modRevision: item?.mod_revision,
+        expiresAtMs: item?.expires_at_ms,
+        protection: item?.protection,
+      })),
+    };
   }
 
   // --- rate limiting ---
