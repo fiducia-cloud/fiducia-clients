@@ -21,5 +21,9 @@ final pull = adaptJsonPuller(
 ```
 
 `syncSender()` sends the durable queued-write key as `Idempotency-Key`.
+Replica-only `write_policy` metadata may be present on the queued map; the
+client intentionally strips it from the canonical server request. Configure
+`SyncWritePolicy` on `FiduciaSyncClient.write()`—the transport does not choose
+optimism, failure, or telemetry behavior.
 `syncPuller()` returns ordered cursor pages and normalizes the legacy admin
 service `sequence` field to the canonical `sync_sequence` field.

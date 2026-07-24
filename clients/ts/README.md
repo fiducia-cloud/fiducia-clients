@@ -28,5 +28,7 @@ const pullFetch = (cursor: number, limit: number) =>
   });
 ```
 
-Pass `send` to `optimisticWrite()`/`flushQueue()` and `pullFetch` to
-`startSync()`.
+Pass `send` to policy-driven `write()`/`flushQueue()` and `pullFetch` to
+`startSync()`. The sender accepts `@fiducia/sync`'s replica-only
+`write_policy`, strips it before HTTP IO, and sends only the canonical
+`SyncQueuedWrite` envelope.
