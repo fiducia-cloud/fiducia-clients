@@ -17,6 +17,11 @@ The production-tier templates under [`templates/`](templates/) retain transport
 hardening and language-idiomatic helpers while `generate.py` inserts newer
 manifest operations into explicit generated regions.
 
+The TypeScript, Dart, and Rust clients also expose local-first sync write/pull
+adapters. Their payloads come from the canonical sync schema in
+`fiducia-interfaces`; TypeScript callbacks are compile-checked directly against
+`@fiducia/sync`, while Dart composes through dependency-free JSON adapters.
+
 ## Languages
 
 First hard-gated tier: TypeScript, Go, Rust, and Python. The remaining languages
@@ -182,6 +187,19 @@ customer retry idempotency keys: TypeScript `idempotencyKey`, Python
 `idempotency_key`, Go `IdempotencyKey`, and Rust
 `RequestControl.idempotency_key`.
 
+The first-tier high-level lock clients generate two independent cryptographic
+identities: a holder for the worker (unless the caller supplies one), and a new
+`request_id` for each logical acquisition attempt. The request ID is reused for
+every queued retry and the matching cancel, then discarded. This makes an
+ambiguous acquire safe to cancel even when cancel reaches Raft first, without
+tombstoning a caller-supplied holder or blocking its next attempt. Thin methods
+accept an optional request ID for callers implementing their own retry loop;
+omitting it keeps the legacy wire behavior during rolling upgrades.
+If the node cannot durably record an attempt cancellation because its bounded
+tombstone table is full, it returns `reason:"cancellation_capacity"`. High-level
+clients surface that condition (and any failed raced-grant release) as an error;
+they never report a safe timeout while an ambiguous acquire could still commit.
+
 TypeScript, Python, and Go retry non-idempotent requests only when the caller
 supplies one stable `Idempotency-Key`; they never invent a header that could
 falsely imply replay safety at a direct node. That header is consumed by the
@@ -261,13 +279,13 @@ local development endpoint); it is not yet a hosted-customer login client.
 ## Reproducible build inputs
 
 The Rust client lockfiles are committed, and CI/container Cargo commands use
-`--locked`. Languages that consume the sibling `fiducia-interfaces` checkout
-are tested against the reviewed full commit
-`487e470c45ab5851e8f6f3b1dc048fe067fbf408`, never the moving default branch.
+`--locked`. The Rust manifest pins `fiducia-interfaces` directly by Git revision;
+languages that consume the sibling checkout are tested against the same reviewed
+full commit `6e20a3f4df2e52b99a0ad6add83d4528262b5dbc`, never the moving default branch.
 The Dockerfile fetches that object directly, verifies `FETCH_HEAD`, checks out a
 detached `HEAD`, and verifies it again; overrides that are branches, tags, short
-hashes, or a different object fail the build. Update all four CI checkout pins
-and the Docker argument together when intentionally adopting a new contract.
+hashes, or a different object fail the build. Update the CI checkout pins, Rust
+manifest/lockfile, and Docker argument together when adopting a new contract.
 The multi-language test image installs system tools as root, then switches to
 numeric UID/GID `10001:10001` before fetching contracts, copying source,
 compiling, or running tests. CI audits the TypeScript and both Rust lockfiles in

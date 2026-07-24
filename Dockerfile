@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # CI/test image for the multi-language Fiducia clients.
-FROM rust:1.97.0-bookworm@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073
+FROM rust:1.97.1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates golang-go python3 nodejs npm
 RUN useradd --create-home --uid 10001 ci \
@@ -9,7 +9,7 @@ ENV HOME=/home/ci \
     CARGO_HOME=/home/ci/.cargo \
     GOCACHE=/home/ci/.cache/go
 USER 10001:10001
-ARG INTERFACES_REF=487e470c45ab5851e8f6f3b1dc048fe067fbf408
+ARG INTERFACES_REF=6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
 RUN git init /fiducia-interfaces \
     && git -C /fiducia-interfaces remote add origin https://github.com/fiducia-cloud/fiducia-interfaces.git \
     && git -C /fiducia-interfaces fetch --depth 1 origin "$INTERFACES_REF" \

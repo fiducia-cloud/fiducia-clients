@@ -11,6 +11,13 @@
 
 // Shared payload/error contract — re-exported from @fiducia/interfaces so callers
 // type responses from one source of truth (these are type-only; no runtime cost).
+import type {
+  SyncPullPage,
+  SyncQueuedWrite,
+  SyncWritePolicy,
+  SyncWriteAcknowledgement,
+} from "@fiducia/interfaces/typescript";
+
 export type {
   IdempotencyRecord,
   KvEntry,
@@ -21,6 +28,13 @@ export type {
   ProposeOutcome,
   ServiceInstance,
   ServiceListResponse,
+  SyncChangeEvent,
+  SyncPullPage,
+  SyncQueuedWrite,
+  SyncReplicaMetadata,
+  SyncTelemetryEvent,
+  SyncWritePolicy,
+  SyncWriteAcknowledgement,
 } from "@fiducia/interfaces/typescript";
 
 export interface RequestControlOpts {
@@ -39,22 +53,54 @@ export interface FiduciaClientOpts extends RequestControlOpts {
   fetch?: typeof fetch;
 }
 
+export interface SyncRequestOpts extends RequestControlOpts {
+  /** Customer or admin API prefix that owns the synced table. */
+  pathPrefix?: string;
+}
+
+export interface SyncPullOpts extends SyncRequestOpts {
+  /** Maximum committed changes requested from one catch-up page. */
+  limit?: number;
+}
+
+/**
+ * Canonical server envelope plus replica-only queue metadata accepted from
+ * `@fiducia/sync`. `write_policy` is deliberately stripped before HTTP IO.
+ */
+export type SyncClientWrite = Omit<SyncQueuedWrite, "key"> & {
+  key?: string;
+  write_policy?: SyncWritePolicy;
+};
+
 export interface AcquireOpts extends RequestControlOpts {
   holder?: string;
+  /** Stable identity for one logical acquire/retry/cancel attempt. */
+  requestId?: string;
   ttlMs?: number;
   wait?: boolean;
+  /** Maximum time a queued request may remain eligible for promotion. */
+  waitTimeoutMs?: number;
   max?: number;
 }
 
 export interface AcquireManyOpts extends RequestControlOpts {
   keys: string[];
   holder?: string;
+  /** Stable identity for one logical acquire/retry/cancel attempt. */
+  requestId?: string;
   ttlMs?: number;
   wait?: boolean;
+  /** Maximum time a queued request may remain eligible for promotion. */
+  waitTimeoutMs?: number;
 }
 export interface ReleaseOpts extends RequestControlOpts { holder: string; fencingToken: number; }
 export interface RwOpts extends RequestControlOpts { ttlMs?: number; wait?: boolean; }
-export interface KvPutOpts extends RequestControlOpts { ttlMs?: number; prevRevision?: number; }
+export interface KvPutOpts extends RequestControlOpts {
+  ttlMs?: number;
+  prevRevision?: number;
+  /** Explicitly opt this value out of cluster-side at-rest encryption. */
+  plaintext?: boolean;
+}
 export interface IdempotencyClaimOpts extends RequestControlOpts {
   owner?: string;
   ttlMs?: number;
@@ -94,6 +140,19 @@ export interface WatchEvent<T = any> {
   event: string;
   data: T;
   id?: string;
+}
+
+/** Generate an unguessable holder id. Never fall back to Math.random: holder
+ * identity is part of lock/semaphore exclusion and release authority. */
+function generatedHolder(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return `fdc-${cryptoApi.randomUUID()}`;
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    return `fdc-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  throw new Error("fiducia: secure randomness is unavailable; provide an explicit nonempty holder");
 }
 
 export class FiduciaError extends Error {
@@ -174,6 +233,61 @@ function assertHeaderValueSafe(name: string, value: string): void {
   if (/[\r\n]/.test(value)) {
     throw new TypeError(`fiducia: ${name} header value contains an illegal CR/LF character`);
   }
+}
+
+/** Reject authority tokens that JavaScript cannot represent exactly. Running
+ * this both before serialization and after parsing prevents a caller or server
+ * from silently crossing the JSON safe-integer boundary. */
+function assertSafeFencingTokens(value: unknown, at = "response"): void {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertSafeFencingTokens(item, `${at}[${index}]`));
+    return;
+  }
+  if (typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if ((key === "fencing_token" || key === "from_token" || key === "to_token")
+      && item !== null && item !== undefined) {
+      if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 0) {
+        throw new TypeError(`fiducia: ${at}.${key} must be a non-negative safe integer`);
+      }
+    } else if (key === "fencing_tokens" && item && typeof item === "object") {
+      for (const [member, token] of Object.entries(item as Record<string, unknown>)) {
+        if (typeof token !== "number" || !Number.isSafeInteger(token) || token < 0) {
+          throw new TypeError(`fiducia: ${at}.${key}.${member} must be a safe integer`);
+        }
+      }
+    }
+    assertSafeFencingTokens(item, `${at}.${key}`);
+  }
+}
+
+function assertValidAttemptRequestIds(value: unknown, at = "request"): void {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertValidAttemptRequestIds(item, `${at}[${index}]`));
+    return;
+  }
+  if (typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "request_id" && item !== null && item !== undefined) {
+      if (
+        typeof item !== "string"
+        || item.trim().length === 0
+        || new TextEncoder().encode(item).length > 128
+        || /[\x00-\x1f\x7f]/.test(item)
+      ) {
+        throw new TypeError(`fiducia: ${at}.${key} must be 1-128 printable UTF-8 bytes`);
+      }
+    }
+    assertValidAttemptRequestIds(item, `${at}.${key}`);
+  }
+}
+
+function parseJson(text: string): any {
+  const value = JSON.parse(text);
+  assertSafeFencingTokens(value);
+  return value;
 }
 
 function serviceMetadataQuery(metadata: ServiceMetadataFilter = {}) {
@@ -324,6 +438,8 @@ export class FiduciaClient {
     }
 
     try {
+      assertValidAttemptRequestIds(body);
+      assertSafeFencingTokens(body, "request");
       const headers: Record<string, string> = {};
       if (body !== undefined) headers["content-type"] = "application/json";
       if (opts.idempotencyKey) {
@@ -344,7 +460,7 @@ export class FiduciaClient {
       // status; browsers yield an opaque redirect (type "opaqueredirect", status 0).
       if (isRedirect(res)) throw redirectError(res, method, path);
       const text = await res.text();
-      const data = text ? JSON.parse(text) : null;
+      const data = text ? parseJson(text) : null;
       if (!res.ok) throw new FiduciaError(res.status, data, res.headers);
       return data;
     } catch (err) {
@@ -381,7 +497,7 @@ export class FiduciaClient {
       if (isRedirect(res)) throw redirectError(res, "GET", path);
       if (!res.ok) {
         const text = await res.text();
-        const data = text ? JSON.parse(text) : null;
+        const data = text ? parseJson(text) : null;
         throw new FiduciaError(res.status, data, res.headers);
       }
       if (!res.body?.getReader) throw new Error("fiducia: response body is not streamable");
@@ -416,8 +532,9 @@ export class FiduciaClient {
   }
 
   private lockAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/locks/acquire",
-      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+      { key, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs }, opts, true);
   }
 
   private acquireOptsFromArgs(optsOrTtlMs?: AcquireOpts | number, maxOrOpts?: number | AcquireOpts, maybeOpts: AcquireOpts = {}): AcquireOpts {
@@ -429,13 +546,15 @@ export class FiduciaClient {
   }
 
   private lockAcquireManyWithWait(opts: AcquireManyOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/locks/acquire",
-      { keys: opts.keys, holder: opts.holder, ttl_ms: opts.ttlMs, wait }, opts, true);
+      { keys: opts.keys, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs }, opts, true);
   }
 
   private semaphoreAcquireWithWait(key: string, opts: AcquireOpts, wait: boolean) {
+    const holder = opts.holder?.trim() || generatedHolder();
     return this.request("POST", "/v1/semaphores/acquire",
-      { key, holder: opts.holder, ttl_ms: opts.ttlMs, wait, limit: opts.max ?? 2 }, opts, true);
+      { key, holder, request_id: opts.requestId, ttl_ms: opts.ttlMs, wait, wait_timeout_ms: opts.waitTimeoutMs, limit: opts.max ?? 2 }, opts, true);
   }
 
   // --- misc ---
@@ -556,7 +675,7 @@ export class FiduciaClient {
   kvGet(key: string) { return this.request("GET", `/v1/kv?key=${enc(key)}`); }
   kvPut(key: string, value: string, opts: KvPutOpts = {}) {
     return this.request("PUT", `/v1/kv?key=${enc(key)}`,
-      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision }, opts);
+      { value, ttl_ms: opts.ttlMs, prev_revision: opts.prevRevision, plaintext: opts.plaintext }, opts);
   }
   kvDelete(key: string, opts: RequestControlOpts = {}) { return this.request("DELETE", `/v1/kv?key=${enc(key)}`, undefined, opts); }
   kvList(prefix: string) { return this.request("GET", `/v1/kv?prefix=${enc(prefix)}`); }
@@ -643,6 +762,99 @@ export class FiduciaClient {
     return this.watch(`/v1/services/${enc(service)}/watch`, opts);
   }
 
+  /**
+   * Send one durable optimistic write using the canonical
+   * `@fiducia/interfaces` envelope. Canonical writes reuse their queued key as
+   * the HTTP idempotency key; pre-key durable queue entries use the stable
+   * legacy derivation implemented by `@fiducia/sync`.
+   */
+  async syncWrite(
+    write: SyncClientWrite,
+    opts: SyncRequestOpts = {},
+  ): Promise<SyncWriteAcknowledgement> {
+    if (!write || typeof write !== "object") throw new Error("fiducia: sync write must be an object");
+    if (typeof write.table !== "string" || !write.table.trim()) throw new Error("fiducia: sync table must be nonempty");
+    if (typeof write.id !== "string" || !write.id.trim()) throw new Error("fiducia: sync row id must be nonempty");
+    const key = write.key ?? `${write.table}:${write.id}:${write.op}:${write.base_version}`;
+    if (typeof key !== "string" || !key.trim()) throw new Error("fiducia: sync write key must be nonempty");
+    if (opts.idempotencyKey !== undefined && opts.idempotencyKey !== key) {
+      throw new Error("fiducia: explicit idempotency key must match the sync write key");
+    }
+    const prefix = (opts.pathPrefix ?? "/api/customer/sync").replace(/\/+$/, "");
+    const wireWrite: SyncQueuedWrite = {
+      id: write.id,
+      table: write.table,
+      op: write.op,
+      payload: write.payload,
+      base_version: write.base_version,
+      key,
+    };
+    const ack = await this.request(
+      "POST",
+      `${prefix}/${enc(write.table)}`,
+      wireWrite,
+      { ...opts, idempotencyKey: key },
+    ) as SyncWriteAcknowledgement;
+    if (!ack || typeof ack !== "object" || ack.id !== write.id) {
+      throw new Error("fiducia: sync acknowledgement id does not match the queued write");
+    }
+    if (!Number.isSafeInteger(ack.committed_version) || ack.committed_version < 0) {
+      throw new Error("fiducia: sync acknowledgement has an invalid committed_version");
+    }
+    return ack;
+  }
+
+  /**
+   * Read one ordered catch-up page. Legacy service pages using `sequence` are
+   * normalized to the canonical `sync_sequence`; missing commit timestamps are
+   * represented as zero, matching the realtime transport decoder.
+   */
+  async syncPull(
+    table: string,
+    cursor: number,
+    opts: SyncPullOpts = {},
+  ): Promise<SyncPullPage> {
+    if (typeof table !== "string" || !table.trim()) throw new Error("fiducia: sync table must be nonempty");
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("fiducia: sync cursor must be a non-negative safe integer");
+    const limit = opts.limit ?? 500;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new Error("fiducia: sync pull limit must be an integer between 1 and 1000");
+    }
+    const prefix = (opts.pathPrefix ?? "/api/customer/sync").replace(/\/+$/, "");
+    const raw = await this.request(
+      "GET",
+      `${prefix}/${enc(table)}?cursor=${cursor}&limit=${limit}`,
+      undefined,
+      opts,
+    ) as {
+      changes?: Array<Record<string, unknown>>;
+      next_cursor: number;
+      has_more: boolean;
+    };
+    if (!raw || typeof raw !== "object" || !Array.isArray(raw.changes)) {
+      throw new Error("fiducia: sync pull response has no changes array");
+    }
+    if (!Number.isSafeInteger(raw.next_cursor) || raw.next_cursor < cursor || typeof raw.has_more !== "boolean") {
+      throw new Error("fiducia: sync pull response has an invalid cursor");
+    }
+    const changes = raw.changes.map((change) => {
+      const { sequence, ...canonical } = change;
+      return {
+        ...canonical,
+        at_ms: Number.isSafeInteger(change.at_ms) ? change.at_ms : 0,
+        sync_sequence: Number.isSafeInteger(change.sync_sequence)
+          ? change.sync_sequence
+          : (Number.isSafeInteger(sequence) ? sequence : undefined),
+      };
+    }) as SyncPullPage["changes"];
+    return { changes, next_cursor: raw.next_cursor, has_more: raw.has_more };
+  }
+
+  /** Bind the sync write endpoint to the callback shape used by `@fiducia/sync`. */
+  syncSender(opts: SyncRequestOpts = {}) {
+    return (write: SyncClientWrite): Promise<SyncWriteAcknowledgement> => this.syncWrite(write, opts);
+  }
+
 {{GENERATED_OPERATIONS}}
 }
 
@@ -664,7 +876,7 @@ function parseSseBlock(block: string): WatchEvent | undefined {
   const raw = data.join("\n");
   let decoded: any = raw;
   try {
-    decoded = JSON.parse(raw);
+    decoded = parseJson(raw);
   } catch {
     decoded = raw;
   }

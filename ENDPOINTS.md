@@ -9,17 +9,21 @@ too. `?param` marks an optional argument.
 | `GET` | `/healthz` | — | Liveness probe. |
 | `GET` | `/v1/status` | — | Per-shard consensus status. |
 | `GET` | `/v1/locks` | `key` | Inspect a lock member key: holder, the held union, and the FIFO wait queue. |
-| `POST` | `/v1/locks/acquire` | `key`, `holder`?, `ttl_ms`?, `wait`? | Acquire a single-key lock (try-lock unless wait). |
-| `POST` | `/v1/locks/acquire` | `keys`, `holder`?, `ttl_ms`?, `wait`? | Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key. |
+| `POST` | `/v1/locks/acquire` | `key`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API. |
+| `POST` | `/v1/locks/acquire` | `keys`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key. |
+| `POST` | `/v1/locks/renew` | `keys`, `holder`, `fencing_token`, `ttl_ms` | Renew a held union lock only when holder and fencing token still match; preserves the token. |
+| `POST` | `/v1/locks/cancel` | `keys`, `holder`, `request_id`? | Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior. |
 | `POST` | `/v1/locks/release` | `holder`, `fencing_token` | Release the whole grant (every member key) by its fencing token. |
 | `GET` | `/v1/semaphores` | `key` | Inspect a semaphore: limit, holders, free permits, queue. |
-| `POST` | `/v1/semaphores/acquire` | `key`, `limit`, `holder`?, `ttl_ms`?, `wait`? | Take a permit of a counting semaphore (up to limit holders). |
+| `POST` | `/v1/semaphores/acquire` | `key`, `limit`, `holder`, `ttl_ms`?, `wait`?, `wait_timeout_ms`?, `request_id`? | Take a permit of a counting semaphore (up to limit holders). |
+| `POST` | `/v1/semaphores/renew` | `key`, `holder`, `fencing_token`, `ttl_ms` | Renew a held semaphore permit only when holder and fencing token still match; preserves the token. |
+| `POST` | `/v1/semaphores/cancel` | `key`, `holder`, `request_id`? | Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior. |
 | `POST` | `/v1/semaphores/release` | `key`, `holder`, `fencing_token` | Return one permit (admits the next FIFO waiter). |
 | `GET` | `/v1/idempotency` | `key` | Inspect an active idempotency record. |
 | `POST` | `/v1/idempotency/claim` | `key`, `owner`?, `ttl_ms`?, `ttl`?, `metadata`? | Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record. |
 | `POST` | `/v1/idempotency/complete` | `key`, `owner`, `fencing_token`, `result`? | Mark a claimed idempotency key complete and optionally store a replayable result. |
 | `GET` | `/v1/kv` | `key` | Read a config key. |
-| `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`? | Write a config key; prev_revision is a compare-and-swap guard (0 = must-not-exist). |
+| `PUT` | `/v1/kv` | `key`, `value`, `ttl_ms`?, `prev_revision`?, `plaintext`? | Write a config key; values are encrypted at rest when the cluster has KV protection configured. plaintext=true explicitly opts this value out. prev_revision is a compare-and-swap guard (0 = must-not-exist). |
 | `DELETE` | `/v1/kv` | `key` | Delete a config key. |
 | `GET` | `/v1/counters` | `key` | Read a counter's value and revision; absent reads as found=false (treat as 0). |
 | `POST` | `/v1/counters/add` | `key`, `delta`, `prev_revision`? | Atomically add delta (may be negative); prev_revision makes it a compare-and-set. |

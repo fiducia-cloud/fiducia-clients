@@ -29,7 +29,7 @@ pub enum Error {
 
 fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
     let mut header = HeaderValue::from_str(value)
-        .map_err(|err| Error::Transport(format!("invalid trusted-hop header: {err}")))?;
+        .map_err(|err| Error::Transport(format!("invalid sensitive request header: {err}")))?;
     // Defense in depth: ureq 3 redacts non-allowlisted headers from its debug
     // logs, and http::HeaderValue also redacts values explicitly marked
     // sensitive if another layer formats the request directly.
@@ -53,11 +53,12 @@ fn cleartext_http_host(base: &str) -> Option<&str> {
     Some(host_port.split(':').next().unwrap_or(host_port))
 }
 
-/// Whether `host` is one the internal-auth secret may travel to in cleartext:
+/// Whether `host` is one an authentication credential may travel to in cleartext:
 /// loopback, a private/link-local IP, a single-label service name (compose /
 /// same-namespace k8s), or a cluster-internal DNS suffix. Public DNS names and
 /// public IPs are refused — a bearer-equivalent secret must not cross a path an
-/// on-path observer could watch (see [`FiduciaClient::internal`]).
+/// on-path observer could watch (see [`FiduciaClient::internal`] and
+/// [`FiduciaClient::bearer`]).
 fn cleartext_internal_host_allowed(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
@@ -75,7 +76,7 @@ fn cleartext_internal_host_allowed(host: &str) -> bool {
     if !host.contains('.') {
         return true;
     }
-    [".svc", ".svc.cluster.local", ".cluster.local", ".internal", ".local"]
+    [".svc", ".svc.cluster.local", ".cluster.local", ".internal"]
         .iter()
         .any(|suffix| host.ends_with(suffix))
 }
@@ -154,6 +155,9 @@ pub struct FiduciaClient {
     /// Org scope (`x-fiducia-org-id`) attached to internal-hop calls so the node
     /// can attribute/scope the request to a tenant.
     org_scope: Option<String>,
+    /// API key sent as a bearer credential to an edge/load-balancer endpoint.
+    /// This is mutually exclusive with the trusted internal-hop headers.
+    bearer_auth: Option<String>,
     /// Explicit opt-in to sending the internal-auth secret over cleartext http
     /// to a host that is not recognizably local/in-cluster. See
     /// [`allow_cleartext_internal`](Self::allow_cleartext_internal).
@@ -173,6 +177,10 @@ impl fmt::Debug for FiduciaClient {
                 &self.internal_auth.as_ref().map(|_| "<redacted>"),
             )
             .field("org_scope", &self.org_scope.as_ref().map(|_| "<redacted>"))
+            .field(
+                "bearer_auth",
+                &self.bearer_auth.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -195,6 +203,7 @@ impl FiduciaClient {
             retry_delay: Duration::ZERO,
             internal_auth: None,
             org_scope: None,
+            bearer_auth: None,
             allow_cleartext_internal: false,
         }
     }
@@ -225,8 +234,8 @@ impl FiduciaClient {
     ///
     /// **Enforced:** an `http://` base is accepted only for hosts that are
     /// recognizably local or in-cluster (loopback, private/link-local IPs,
-    /// single-label service names, `*.svc` / `*.cluster.local` / `*.internal` /
-    /// `*.local`). A cleartext request to any other host — a public DNS name or
+    /// single-label service names, `*.svc` / `*.cluster.local` / `*.internal`).
+    /// A cleartext request to any other host — a public DNS name or
     /// public IP — is refused with a typed error before anything is sent. Use
     /// `https://`, or opt in explicitly with
     /// [`allow_cleartext_internal`](Self::allow_cleartext_internal) for an
@@ -235,6 +244,17 @@ impl FiduciaClient {
         let mut client = Self::new(base_url);
         client.internal_auth = Some(internal_secret.to_string());
         client.org_scope = Some(org_id.to_string());
+        client
+    }
+
+    /// A client for a public edge or load-balancer endpoint authenticated with a
+    /// Fiducia API key. The bearer credential is redacted in debug output and is
+    /// never replayed through a redirect. For a non-loopback/non-cluster target,
+    /// the base URL must use `https://`; cleartext public endpoints are refused
+    /// before a request is sent.
+    pub fn bearer(base_url: &str, api_key: &str) -> Self {
+        let mut client = Self::new(base_url);
+        client.bearer_auth = Some(api_key.to_string());
         client
     }
 
@@ -252,17 +272,24 @@ impl FiduciaClient {
     /// configured base. Pure — checked before every request; factored out so the
     /// policy is unit-testable without a socket.
     fn cleartext_refusal(&self) -> Option<Error> {
-        if self.internal_auth.is_none() || self.allow_cleartext_internal {
+        let credential_kind = if self.internal_auth.is_some() {
+            if self.allow_cleartext_internal {
+                return None;
+            }
+            "internal-auth secret"
+        } else if self.bearer_auth.is_some() {
+            "bearer credential"
+        } else {
             return None;
-        }
+        };
         let host = cleartext_http_host(&self.base)?;
         if cleartext_internal_host_allowed(host) {
             return None;
         }
         Some(Error::Transport(format!(
-            "refusing to send the internal-auth secret over cleartext http to \
+            "refusing to send the {credential_kind} over cleartext http to \
              public host '{host}': use an https:// base_url, an in-cluster \
-             address, or opt in explicitly with allow_cleartext_internal()"
+             address, or loopback"
         )))
     }
 
@@ -315,8 +342,8 @@ impl FiduciaClient {
         control: RequestControl,
         lock_acquire: bool,
     ) -> Result<Value, Error> {
-        // Never let the bearer-equivalent internal secret travel a cleartext hop
-        // to a public host — refuse before anything is sent (or resolved).
+        // Never let an authentication credential travel a cleartext hop to a
+        // public host — refuse before anything is sent (or resolved).
         if let Some(refusal) = self.cleartext_refusal() {
             return Err(refusal);
         }
@@ -331,6 +358,12 @@ impl FiduciaClient {
         }
         if let Some(org) = self.org_scope.as_deref() {
             builder = builder.header("x-fiducia-org-id", sensitive_header_value(org)?);
+        }
+        if let Some(api_key) = self.bearer_auth.as_deref() {
+            builder = builder.header(
+                "authorization",
+                sensitive_header_value(&format!("Bearer {api_key}"))?,
+            );
         }
         let timeout = self.resolve_timeout(&control, lock_acquire);
         let resp = match body {
@@ -405,6 +438,8 @@ impl FiduciaClient {
         }
     }
 
+    // Mirrors the compatibility surface's independent acquire controls.
+    #[allow(clippy::too_many_arguments)]
     fn lock_acquire_with_wait(
         &self,
         key: &str,
@@ -412,15 +447,16 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
         _max: Option<u32>,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.request_with_control(
-            "POST",
-            "/v1/locks/acquire",
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
-            control,
-            true,
-        )
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request_with_control("POST", "/v1/locks/acquire", Some(body), control, true)
     }
 
     fn lock_acquire_many_with_wait(
@@ -429,17 +465,20 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
         wait: bool,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.request_with_control(
-            "POST",
-            "/v1/locks/acquire",
-            Some(json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait })),
-            control,
-            true,
-        )
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "keys": keys, "holder": holder, "ttl_ms": ttl_ms, "wait": wait });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request_with_control("POST", "/v1/locks/acquire", Some(body), control, true)
     }
 
+    // Mirrors the compatibility surface's independent acquire controls.
+    #[allow(clippy::too_many_arguments)]
     fn semaphore_acquire_with_wait(
         &self,
         key: &str,
@@ -447,8 +486,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
         max: u32,
+        request_id: Option<&str>,
         control: RequestControl,
     ) -> Result<Value, Error> {
+        let holder = locking::holder_or_generated(holder);
+        let mut body = json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(1) });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
         self.request_with_control(
             "POST",
             "/v1/semaphores/acquire",
@@ -456,7 +502,7 @@ impl FiduciaClient {
             // is a mutex (per the shared LockAcquireRequest contract), and the
             // old `.max(2)` silently turned a mutex into a capacity-2 semaphore,
             // letting two holders enter a section that must admit exactly one.
-            Some(json!({ "key": key, "holder": holder, "ttl_ms": ttl_ms, "wait": wait, "limit": max.max(1) })),
+            Some(body),
             control,
             true,
         )
@@ -468,6 +514,18 @@ impl FiduciaClient {
     }
     pub fn status(&self) -> Result<Value, Error> {
         self.request("GET", "/v1/status", None)
+    }
+    /// Read one supported node observability inventory. This remains read-only
+    /// and validates `kind` rather than interpolating arbitrary path segments.
+    pub fn observe(&self, kind: &str) -> Result<Value, Error> {
+        match kind {
+            "locks" | "semaphores" | "elections" | "shards" | "metrics" => {
+                self.request("GET", &format!("/v1/observe/{kind}"), None)
+            }
+            _ => Err(Error::Transport(format!(
+                "unknown observe kind {kind:?}; expected locks, semaphores, elections, shards, or metrics"
+            ))),
+        }
     }
 
     // --- locks ---
@@ -482,7 +540,37 @@ impl FiduciaClient {
         wait: bool,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a single lock under an attempt-scoped request identity. Reuse
+    /// the same request_id for retries and cancellation, never for a later
+    /// logical attempt. Passing None preserves the legacy wire contract.
+    pub fn lock_acquire_with_request_id(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: Option<u32>,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn lock_acquire_with_options(
         &self,
@@ -493,7 +581,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, wait, max, None, control)
     }
     pub fn try_lock(
         &self,
@@ -502,7 +590,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            false,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn try_lock_with_options(
         &self,
@@ -512,7 +608,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, false, max, None, control)
     }
     pub fn must_lock(
         &self,
@@ -521,7 +617,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: Option<u32>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, RequestControl::default())
+        self.lock_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            true,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_lock_with_options(
         &self,
@@ -531,7 +635,7 @@ impl FiduciaClient {
         max: Option<u32>,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, control)
+        self.lock_acquire_with_wait(key, holder, ttl_ms, true, max, None, control)
     }
     pub fn lock(
         &self,
@@ -549,7 +653,32 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         wait: bool,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            wait,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a union lock under an attempt-scoped request identity.
+    pub fn lock_acquire_many_with_request_id(
+        &self,
+        keys: &[&str],
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            wait,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn lock_acquire_many_with_options(
         &self,
@@ -559,7 +688,7 @@ impl FiduciaClient {
         wait: bool,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, control)
+        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, wait, None, control)
     }
     pub fn try_lock_many(
         &self,
@@ -567,7 +696,14 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, false, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            false,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_lock_many(
         &self,
@@ -575,7 +711,14 @@ impl FiduciaClient {
         holder: Option<&str>,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
-        self.lock_acquire_many_with_wait(keys, holder, ttl_ms, true, RequestControl::default())
+        self.lock_acquire_many_with_wait(
+            keys,
+            holder,
+            ttl_ms,
+            true,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn lock_many(
         &self,
@@ -585,16 +728,63 @@ impl FiduciaClient {
     ) -> Result<Value, Error> {
         self.must_lock_many(keys, holder, ttl_ms)
     }
+    pub fn lock_renew(
+        &self,
+        keys: &[&str],
+        holder: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/locks/renew",
+            Some(json!({
+                "keys": keys,
+                "holder": holder,
+                "fencing_token": fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )
+    }
+    pub fn lock_cancel(&self, keys: &[&str], holder: &str) -> Result<Value, Error> {
+        self.lock_cancel_with_request_id(keys, holder, None)
+    }
+    /// Cancel exactly one logical union-lock acquisition attempt. None keeps
+    /// the legacy holder/key cancellation behavior for rolling upgrades.
+    pub fn lock_cancel_with_request_id(
+        &self,
+        keys: &[&str],
+        holder: &str,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({ "keys": keys, "holder": holder });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request("POST", "/v1/locks/cancel", Some(body))
+    }
     pub fn lock_release(
         &self,
         _key: &str,
         holder: &str,
         fencing_token: u64,
     ) -> Result<Value, Error> {
-        self.request(
+        self.lock_release_with_options(_key, holder, fencing_token, RequestControl::default())
+    }
+    pub fn lock_release_with_options(
+        &self,
+        _key: &str,
+        holder: &str,
+        fencing_token: u64,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
+        self.request_with_control(
             "POST",
             "/v1/locks/release",
             Some(json!({ "holder": holder, "fencing_token": fencing_token })),
+            control,
+            false,
         )
     }
     pub fn lock_release_many(&self, lock_id: &str) -> Result<Value, Error> {
@@ -612,7 +802,35 @@ impl FiduciaClient {
         wait: bool,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            None,
+            RequestControl::default(),
+        )
+    }
+    /// Acquire a semaphore permit under an attempt-scoped request identity.
+    pub fn semaphore_acquire_with_request_id(
+        &self,
+        key: &str,
+        holder: Option<&str>,
+        ttl_ms: Option<u64>,
+        wait: bool,
+        max: u32,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            wait,
+            max,
+            request_id,
+            RequestControl::default(),
+        )
     }
     pub fn semaphore_acquire_with_options(
         &self,
@@ -623,7 +841,7 @@ impl FiduciaClient {
         max: u32,
         control: RequestControl,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, control)
+        self.semaphore_acquire_with_wait(key, holder, ttl_ms, wait, max, None, control)
     }
     pub fn try_semaphore(
         &self,
@@ -632,7 +850,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, false, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            false,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn must_semaphore(
         &self,
@@ -641,7 +867,15 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         max: u32,
     ) -> Result<Value, Error> {
-        self.semaphore_acquire_with_wait(key, holder, ttl_ms, true, max, RequestControl::default())
+        self.semaphore_acquire_with_wait(
+            key,
+            holder,
+            ttl_ms,
+            true,
+            max,
+            None,
+            RequestControl::default(),
+        )
     }
     pub fn semaphore(
         &self,
@@ -651,6 +885,41 @@ impl FiduciaClient {
         max: u32,
     ) -> Result<Value, Error> {
         self.must_semaphore(key, holder, ttl_ms, max)
+    }
+    pub fn semaphore_renew(
+        &self,
+        key: &str,
+        holder: &str,
+        fencing_token: u64,
+        ttl_ms: u64,
+    ) -> Result<Value, Error> {
+        self.request(
+            "POST",
+            "/v1/semaphores/renew",
+            Some(json!({
+                "key": key,
+                "holder": holder,
+                "fencing_token": fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )
+    }
+    pub fn semaphore_cancel(&self, key: &str, holder: &str) -> Result<Value, Error> {
+        self.semaphore_cancel_with_request_id(key, holder, None)
+    }
+    /// Cancel exactly one logical semaphore acquisition attempt.
+    pub fn semaphore_cancel_with_request_id(
+        &self,
+        key: &str,
+        holder: &str,
+        request_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let mut body = json!({ "key": key, "holder": holder });
+        if let Some(request_id) = request_id {
+            locking::validate_request_id(request_id)?;
+            body["request_id"] = Value::String(request_id.to_string());
+        }
+        self.request("POST", "/v1/semaphores/cancel", Some(body))
     }
     pub fn semaphore_release(
         &self,
@@ -663,6 +932,114 @@ impl FiduciaClient {
             "/v1/semaphores/release",
             Some(json!({ "key": key, "holder": holder, "fencing_token": fencing_token })),
         )
+    }
+
+    // --- local-first sync ---
+    /// Send the canonical `fiducia-interfaces` queued-write envelope. The
+    /// client always reuses `write.key` as the HTTP idempotency key, so this is
+    /// safe to bind to a durable fiducia-sync queue.
+    pub fn sync_write(
+        &self,
+        write: &types::SyncQueuedWrite,
+        path_prefix: Option<&str>,
+        control: Option<RequestControl>,
+    ) -> Result<types::SyncWriteAcknowledgement, Error> {
+        if write.table.trim().is_empty()
+            || write.id.trim().is_empty()
+            || write.key.trim().is_empty()
+            || write.base_version < 0
+        {
+            return Err(Error::Transport(
+                "sync write has an empty identity or negative base_version".to_string(),
+            ));
+        }
+        let mut control = control.unwrap_or_default();
+        if let Some(explicit) = control.idempotency_key.as_deref() {
+            if explicit != write.key {
+                return Err(Error::Transport(
+                    "explicit idempotency key does not match the sync write key".to_string(),
+                ));
+            }
+        } else {
+            control.idempotency_key = Some(write.key.clone());
+        }
+        let prefix = path_prefix
+            .unwrap_or("/api/customer/sync")
+            .trim_end_matches('/');
+        if prefix.is_empty() {
+            return Err(Error::Transport(
+                "sync path prefix must be nonempty".to_string(),
+            ));
+        }
+        let body = serde_json::to_value(write).map_err(|err| Error::Transport(err.to_string()))?;
+        let value = self.request_with_control(
+            "POST",
+            &format!("{prefix}/{}", enc(&write.table)),
+            Some(body),
+            control,
+            false,
+        )?;
+        let acknowledgement: types::SyncWriteAcknowledgement =
+            serde_json::from_value(value).map_err(|err| Error::Transport(err.to_string()))?;
+        if acknowledgement.id != write.id || acknowledgement.committed_version < 0 {
+            return Err(Error::Transport(
+                "sync acknowledgement does not match the queued write".to_string(),
+            ));
+        }
+        Ok(acknowledgement)
+    }
+
+    /// Fetch one globally ordered catch-up page using the canonical interface
+    /// type consumed by fiducia-sync.
+    pub fn sync_pull(
+        &self,
+        table: &str,
+        cursor: i64,
+        limit: u16,
+        path_prefix: Option<&str>,
+        control: Option<RequestControl>,
+    ) -> Result<types::SyncPullPage, Error> {
+        if table.trim().is_empty() || cursor < 0 || limit == 0 || limit > 1_000 {
+            return Err(Error::Transport(
+                "sync table, cursor, or limit is outside its valid range".to_string(),
+            ));
+        }
+        let prefix = path_prefix
+            .unwrap_or("/api/customer/sync")
+            .trim_end_matches('/');
+        if prefix.is_empty() {
+            return Err(Error::Transport(
+                "sync path prefix must be nonempty".to_string(),
+            ));
+        }
+        let mut value = self.request_with_control(
+            "GET",
+            &format!("{prefix}/{}?cursor={cursor}&limit={limit}", enc(table)),
+            None,
+            control.unwrap_or_default(),
+            false,
+        )?;
+        if let Some(changes) = value.get_mut("changes").and_then(Value::as_array_mut) {
+            for change in changes {
+                let Some(change) = change.as_object_mut() else {
+                    continue;
+                };
+                change.entry("at_ms").or_insert(json!(0));
+                if !change.contains_key("sync_sequence") {
+                    if let Some(sequence) = change.get("sequence").cloned() {
+                        change.insert("sync_sequence".to_string(), sequence);
+                    }
+                }
+            }
+        }
+        let page: types::SyncPullPage =
+            serde_json::from_value(value).map_err(|err| Error::Transport(err.to_string()))?;
+        if page.next_cursor < cursor {
+            return Err(Error::Transport(
+                "sync pull cursor moved backwards".to_string(),
+            ));
+        }
+        Ok(page)
     }
 
     // --- idempotency keys ---
@@ -742,11 +1119,7 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?key={}", enc(key)), None)
     }
     pub fn kv_put(&self, key: &str, value: &str, ttl_ms: Option<u64>) -> Result<Value, Error> {
-        self.request(
-            "PUT",
-            &format!("/v1/kv?key={}", enc(key)),
-            Some(json!({ "value": value, "ttl_ms": ttl_ms })),
-        )
+        self.kv_put_with_options(key, value, ttl_ms, None, false)
     }
     pub fn kv_put_cas(
         &self,
@@ -755,10 +1128,28 @@ impl FiduciaClient {
         ttl_ms: Option<u64>,
         prev_revision: Option<u64>,
     ) -> Result<Value, Error> {
+        self.kv_put_with_options(key, value, ttl_ms, prev_revision, false)
+    }
+    /// Write KV with compare-and-swap and storage-protection controls.
+    /// `plaintext=true` explicitly opts this value out of cluster-side at-rest
+    /// encryption; callers should normally leave it false.
+    pub fn kv_put_with_options(
+        &self,
+        key: &str,
+        value: &str,
+        ttl_ms: Option<u64>,
+        prev_revision: Option<u64>,
+        plaintext: bool,
+    ) -> Result<Value, Error> {
         self.request(
             "PUT",
             &format!("/v1/kv?key={}", enc(key)),
-            Some(json!({ "value": value, "ttl_ms": ttl_ms, "prev_revision": prev_revision })),
+            Some(json!({
+                "value": value,
+                "ttl_ms": ttl_ms,
+                "prev_revision": prev_revision,
+                "plaintext": plaintext,
+            })),
         )
     }
     pub fn kv_delete(&self, key: &str) -> Result<Value, Error> {
@@ -1284,14 +1675,32 @@ impl FiduciaClient {
         ttl_ms: u64,
         metadata: Option<Value>,
     ) -> Result<Value, Error> {
+        self.election_campaign_with_options(
+            name,
+            candidate,
+            ttl_ms,
+            metadata,
+            RequestControl::default(),
+        )
+    }
+    pub fn election_campaign_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        ttl_ms: u64,
+        metadata: Option<Value>,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
         let mut body = json!({ "candidate": candidate, "ttl_ms": ttl_ms });
         if let Some(metadata) = metadata {
             body["metadata"] = metadata;
         }
-        self.request(
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/campaign", enc(name)),
             Some(body),
+            control,
+            false,
         )
     }
     pub fn election_campaign_with_metadata(
@@ -1312,14 +1721,32 @@ impl FiduciaClient {
         fencing_token: u64,
         ttl_ms: Option<u64>,
     ) -> Result<Value, Error> {
+        self.election_renew_with_options(
+            name,
+            candidate,
+            fencing_token,
+            ttl_ms,
+            RequestControl::default(),
+        )
+    }
+    pub fn election_renew_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+        ttl_ms: Option<u64>,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
         let mut body = json!({ "candidate": candidate, "fencing_token": fencing_token });
         if let Some(ttl_ms) = ttl_ms {
             body["ttl_ms"] = json!(ttl_ms);
         }
-        self.request(
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/renew", enc(name)),
             Some(body),
+            control,
+            false,
         )
     }
     pub fn election_resign(
@@ -1328,10 +1755,21 @@ impl FiduciaClient {
         candidate: &str,
         fencing_token: u64,
     ) -> Result<Value, Error> {
-        self.request(
+        self.election_resign_with_options(name, candidate, fencing_token, RequestControl::default())
+    }
+    pub fn election_resign_with_options(
+        &self,
+        name: &str,
+        candidate: &str,
+        fencing_token: u64,
+        control: RequestControl,
+    ) -> Result<Value, Error> {
+        self.request_with_control(
             "POST",
             &format!("/v1/elections/{}/resign", enc(name)),
             Some(json!({ "candidate": candidate, "fencing_token": fencing_token })),
+            control,
+            false,
         )
     }
     pub fn election_get(&self, name: &str) -> Result<Value, Error> {
@@ -1474,6 +1912,7 @@ mod tests {
         path: String,
         body: Value,
         idempotency_key: Option<String>,
+        authorization: Option<String>,
     }
 
     fn recording_server() -> (String, Receiver<RecordedRequest>) {
@@ -1515,6 +1954,7 @@ mod tests {
                 let method = first_line.next().unwrap().to_string();
                 let path = first_line.next().unwrap().to_string();
                 let idempotency_key = header_value(&headers, "idempotency-key");
+                let authorization = header_value(&headers, "authorization");
                 let body_start = header_end + 4;
                 let body = if content_len == 0 {
                     Value::Null
@@ -1527,6 +1967,7 @@ mod tests {
                     path,
                     body,
                     idempotency_key,
+                    authorization,
                 })
                 .unwrap();
                 stream
@@ -1534,6 +1975,70 @@ mod tests {
                         b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}",
                     )
                     .unwrap();
+            }
+        });
+
+        (base, rx)
+    }
+
+    fn json_recording_server(responses: Vec<Value>) -> (String, Receiver<RecordedRequest>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut tmp = [0_u8; 1024];
+                let mut header_end = None;
+                let mut content_len = 0_usize;
+                loop {
+                    let n = stream.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if header_end.is_none() {
+                        if let Some(pos) = find_header_end(&buf) {
+                            header_end = Some(pos);
+                            content_len = content_length(&String::from_utf8_lossy(&buf[..pos]));
+                        }
+                    }
+                    if let Some(pos) = header_end {
+                        if buf.len() >= pos + 4 + content_len {
+                            break;
+                        }
+                    }
+                }
+
+                let header_end = header_end.unwrap();
+                let headers = String::from_utf8_lossy(&buf[..header_end]);
+                let mut first_line = headers.lines().next().unwrap().split_whitespace();
+                let method = first_line.next().unwrap().to_string();
+                let path = first_line.next().unwrap().to_string();
+                let body_start = header_end + 4;
+                let body = if content_len == 0 {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&buf[body_start..body_start + content_len]).unwrap()
+                };
+                tx.send(RecordedRequest {
+                    method,
+                    path,
+                    body,
+                    idempotency_key: header_value(&headers, "idempotency-key"),
+                    authorization: header_value(&headers, "authorization"),
+                })
+                .unwrap();
+
+                let response = serde_json::to_vec(&response).unwrap();
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response.len()
+                );
+                stream.write_all(headers.as_bytes()).unwrap();
+                stream.write_all(&response).unwrap();
             }
         });
 
@@ -1671,6 +2176,33 @@ mod tests {
     }
 
     #[test]
+    fn bearer_credential_is_redacted_and_never_crosses_a_redirect() {
+        let attacker = TcpListener::bind("127.0.0.1:0").unwrap();
+        attacker.set_nonblocking(true).unwrap();
+        let location = format!("http://{}/steal", attacker.local_addr().unwrap());
+        let (base, origin_headers) = redirecting_server(location);
+        let api_key = "fiducia-api-key-must-not-leak";
+        let client = FiduciaClient::bearer(&base, api_key);
+
+        let err = client.health().unwrap_err();
+        assert!(matches!(err, Error::Http { status: 302, .. }));
+        let headers = origin_headers.recv_timeout(Duration::from_secs(2)).unwrap();
+        let expected_header = format!("Bearer {api_key}");
+        assert_eq!(
+            header_value(&headers, "authorization").as_deref(),
+            Some(expected_header.as_str())
+        );
+        assert!(
+            matches!(attacker.accept(), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock),
+            "redirect target received a bearer-authenticated request"
+        );
+
+        let debug = format!("{client:?}");
+        assert!(!debug.contains(api_key));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
     fn cleartext_internal_host_policy() {
         // Local / in-cluster shapes the secret may travel to over http.
         for ok in [
@@ -1688,7 +2220,6 @@ mod tests {
             "fiducia-node.fiducia.svc",
             "fiducia-node.fiducia.svc.cluster.local",
             "node-0.corp.internal",
-            "node.local",
         ] {
             assert!(cleartext_internal_host_allowed(ok), "should allow {ok}");
         }
@@ -1699,6 +2230,7 @@ mod tests {
             "8.8.8.8",
             "172.32.0.1", // just past the RFC1918 172.16/12 range
             "2001:db8::1",
+            "node.local", // mDNS is not a cluster-identity guarantee
         ] {
             assert!(!cleartext_internal_host_allowed(bad), "should refuse {bad}");
         }
@@ -1706,10 +2238,33 @@ mod tests {
         // Host extraction: only http:// yields a host; https and userinfo/ports
         // parse correctly; IPv6 brackets are stripped.
         assert_eq!(cleartext_http_host("http://host:8090/v1"), Some("host"));
-        assert_eq!(cleartext_http_host("HTTP://Host.Example.com"), Some("Host.Example.com"));
+        assert_eq!(
+            cleartext_http_host("HTTP://Host.Example.com"),
+            Some("Host.Example.com")
+        );
         assert_eq!(cleartext_http_host("http://user@host:1"), Some("host"));
         assert_eq!(cleartext_http_host("http://[::1]:8090"), Some("::1"));
         assert_eq!(cleartext_http_host("https://host:8090"), None);
+    }
+
+    #[test]
+    fn bearer_client_authenticates_supported_observe_calls() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::bearer(&base, "api-key-sensitive");
+
+        client.observe("locks").unwrap();
+        let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(got.method, "GET");
+        assert_eq!(got.path, "/v1/observe/locks");
+        assert_eq!(got.body, Value::Null);
+        assert_eq!(
+            got.authorization.as_deref(),
+            Some("Bearer api-key-sensitive")
+        );
+        assert!(matches!(
+            client.observe("unknown"),
+            Err(Error::Transport(_))
+        ));
     }
 
     #[test]
@@ -1734,18 +2289,22 @@ mod tests {
         assert!(FiduciaClient::internal("http://127.0.0.1:8090", "s", "o")
             .cleartext_refusal()
             .is_none());
-        assert!(FiduciaClient::internal("http://fiducia-node:8090", "s", "o")
-            .cleartext_refusal()
-            .is_none());
-        assert!(FiduciaClient::new("http://api.example.com")
-            .cleartext_refusal()
-            .is_none());
         assert!(
-            FiduciaClient::internal("http://api.example.com", "s", "o")
-                .allow_cleartext_internal()
+            FiduciaClient::internal("http://fiducia-node:8090", "s", "o")
                 .cleartext_refusal()
                 .is_none()
         );
+        assert!(FiduciaClient::new("http://api.example.com")
+            .cleartext_refusal()
+            .is_none());
+        assert!(FiduciaClient::internal("http://api.example.com", "s", "o")
+            .allow_cleartext_internal()
+            .cleartext_refusal()
+            .is_none());
+        assert!(matches!(
+            FiduciaClient::bearer("http://api.example.com", "api-key").health(),
+            Err(Error::Transport(_))
+        ));
     }
 
     fn assert_next(rx: &Receiver<RecordedRequest>, method: &str, path: &str, body: Value) {
@@ -1788,6 +2347,62 @@ mod tests {
     }
 
     #[test]
+    fn sync_methods_use_canonical_interface_types_and_durable_keys() {
+        let (base, rx) = json_recording_server(vec![
+            json!({ "id": "operation-7", "committed_version": 4 }),
+            json!({
+                "changes": [{
+                    "sequence": 41,
+                    "table": "infra_operations",
+                    "op": "upsert",
+                    "id": "operation-7",
+                    "version": 4,
+                    "row": { "state": "running" }
+                }],
+                "next_cursor": 41,
+                "has_more": false
+            }),
+        ]);
+        let client = FiduciaClient::new(&base);
+        let write = types::SyncQueuedWrite {
+            id: "operation-7".to_string(),
+            table: "infra_operations".to_string(),
+            op: types::SyncQueuedWriteOp::Upsert,
+            payload: Some(json!({ "state": "queued" })),
+            base_version: 3,
+            key: "write-operation-7-v4".to_string(),
+        };
+
+        let acknowledgement = client
+            .sync_write(&write, Some("/api/admin/sync"), None)
+            .unwrap();
+        assert_eq!(acknowledgement.id, write.id);
+        assert_eq!(acknowledgement.committed_version, 4);
+        let request = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/admin/sync/infra_operations");
+        assert_eq!(
+            request.idempotency_key.as_deref(),
+            Some("write-operation-7-v4")
+        );
+        assert_eq!(request.body["key"], write.key);
+
+        let page = client
+            .sync_pull("infra_operations", 40, 2, Some("/api/admin/sync"), None)
+            .unwrap();
+        assert_eq!(page.next_cursor, 41);
+        assert_eq!(page.changes.len(), 1);
+        assert_eq!(page.changes[0].at_ms, 0);
+        assert_eq!(page.changes[0].sync_sequence, Some(41));
+        let request = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(
+            request.path,
+            "/api/admin/sync/infra_operations?cursor=40&limit=2"
+        );
+    }
+
+    #[test]
     fn coordination_routes_match_node_contract() {
         let (base, rx) = recording_server();
         let client = FiduciaClient::new(&base);
@@ -1819,6 +2434,53 @@ mod tests {
             json!({ "keys": ["orders/42", "inventory/sku-7"], "holder": "worker-a", "ttl_ms": 30_000, "wait": true }),
         );
 
+        client
+            .lock_renew(&["orders/42"], "worker-a", 11, 30_000)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/renew",
+            json!({ "keys": ["orders/42"], "holder": "worker-a", "fencing_token": 11, "ttl_ms": 30_000 }),
+        );
+        client.lock_cancel(&["orders/42"], "worker-a").unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/cancel",
+            json!({ "keys": ["orders/42"], "holder": "worker-a" }),
+        );
+        client
+            .lock_acquire_many_with_request_id(
+                &["orders/42"],
+                Some("worker-a"),
+                Some(30_000),
+                true,
+                Some("fdc-attempt-lock-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/acquire",
+            json!({
+                "keys": ["orders/42"], "holder": "worker-a", "ttl_ms": 30_000,
+                "wait": true, "request_id": "fdc-attempt-lock-1"
+            }),
+        );
+        client
+            .lock_cancel_with_request_id(&["orders/42"], "worker-a", Some("fdc-attempt-lock-1"))
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/locks/cancel",
+            json!({
+                "keys": ["orders/42"], "holder": "worker-a",
+                "request_id": "fdc-attempt-lock-1"
+            }),
+        );
+
         client.lock_release("orders/42", "worker-a", 11).unwrap();
         assert_next(
             &rx,
@@ -1830,14 +2492,68 @@ mod tests {
         assert!(client.lock_release_many("legacy-lock-id").is_err());
 
         client
-            .try_semaphore("pools/db/primary", None, None, 0)
+            .try_semaphore("pools/db/primary", Some("worker-b"), None, 0)
             .unwrap();
         assert_next(
             &rx,
             "POST",
             "/v1/semaphores/acquire",
             // max=0 is invalid and clamped to 1 (a mutex); higher values pass through.
-            json!({ "key": "pools/db/primary", "holder": null, "ttl_ms": null, "wait": false, "limit": 1 }),
+            json!({ "key": "pools/db/primary", "holder": "worker-b", "ttl_ms": null, "wait": false, "limit": 1 }),
+        );
+
+        client
+            .semaphore_renew("pools/db/primary", "worker-b", 12, 30_000)
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/renew",
+            json!({ "key": "pools/db/primary", "holder": "worker-b", "fencing_token": 12, "ttl_ms": 30_000 }),
+        );
+        client
+            .semaphore_cancel("pools/db/primary", "worker-b")
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/cancel",
+            json!({ "key": "pools/db/primary", "holder": "worker-b" }),
+        );
+        client
+            .semaphore_acquire_with_request_id(
+                "pools/db/primary",
+                Some("worker-b"),
+                Some(30_000),
+                true,
+                2,
+                Some("fdc-attempt-semaphore-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/acquire",
+            json!({
+                "key": "pools/db/primary", "holder": "worker-b", "ttl_ms": 30_000,
+                "wait": true, "limit": 2, "request_id": "fdc-attempt-semaphore-1"
+            }),
+        );
+        client
+            .semaphore_cancel_with_request_id(
+                "pools/db/primary",
+                "worker-b",
+                Some("fdc-attempt-semaphore-1"),
+            )
+            .unwrap();
+        assert_next(
+            &rx,
+            "POST",
+            "/v1/semaphores/cancel",
+            json!({
+                "key": "pools/db/primary", "holder": "worker-b",
+                "request_id": "fdc-attempt-semaphore-1"
+            }),
         );
 
         client
@@ -1918,6 +2634,23 @@ mod tests {
                 "metadata": { "address": "10.2.4.18:8080", "region": "us-east-1" }
             }),
         );
+    }
+
+    #[test]
+    fn omitted_lock_holder_becomes_a_unique_uuid_capability() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+        client.try_lock("orders/42", None, None, None).unwrap();
+        client
+            .try_lock("orders/43", Some("   "), None, None)
+            .unwrap();
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let first_holder = first.body["holder"].as_str().unwrap();
+        let second_holder = second.body["holder"].as_str().unwrap();
+        assert!(first_holder.starts_with("fdc-"));
+        assert_eq!(first_holder.len(), 36);
+        assert_ne!(first_holder, second_holder);
     }
 
     #[test]
@@ -2353,6 +3086,53 @@ mod tests {
         assert_eq!(got.path, "/v1/locks/acquire");
         assert_eq!(got.idempotency_key.as_deref(), Some("req_order_42"));
         assert!(got.body.get("idempotency_key").is_none());
+    }
+
+    #[test]
+    fn lock_and_election_mutations_accept_idempotency_controls() {
+        let (base, rx) = recording_server();
+        let client = FiduciaClient::new(&base);
+        let control = |key: &str| RequestControl {
+            idempotency_key: Some(key.to_string()),
+            ..RequestControl::default()
+        };
+
+        client
+            .lock_release_with_options("orders/42", "worker-a", 7, control("release-7"))
+            .unwrap();
+        client
+            .election_campaign_with_options(
+                "billing/tenant-a",
+                "worker-a",
+                30_000,
+                None,
+                control("campaign-7"),
+            )
+            .unwrap();
+        client
+            .election_renew_with_options(
+                "billing/tenant-a",
+                "worker-a",
+                7,
+                Some(30_000),
+                control("renew-7"),
+            )
+            .unwrap();
+        client
+            .election_resign_with_options("billing/tenant-a", "worker-a", 7, control("resign-7"))
+            .unwrap();
+
+        for (path, key) in [
+            ("/v1/locks/release", "release-7"),
+            ("/v1/elections/billing%2Ftenant-a/campaign", "campaign-7"),
+            ("/v1/elections/billing%2Ftenant-a/renew", "renew-7"),
+            ("/v1/elections/billing%2Ftenant-a/resign", "resign-7"),
+        ] {
+            let got = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(got.method, "POST");
+            assert_eq!(got.path, path);
+            assert_eq!(got.idempotency_key.as_deref(), Some(key));
+        }
     }
 
     #[test]

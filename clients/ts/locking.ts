@@ -17,7 +17,7 @@
 // cadence (retryInterval), the total budget (maxWaitTime), and the attempt cap
 // (maxRetries) all live here, giving the caller full control.
 
-import { FiduciaClient } from "./fiducia";
+import { FiduciaClient } from "./fiducia.ts";
 
 type LockClientBase = new (
   ...args: ConstructorParameters<typeof FiduciaClient>
@@ -76,6 +76,8 @@ export interface Lock {
   fencingToken: number;
   /** When the lease expires (ms since epoch), if the server reported it. */
   leaseExpiresMs?: number;
+  /** Extend this exact fenced grant. Throws if authority has been lost. */
+  renew(ttlMs?: number): Promise<any>;
   /** Release the whole grant. Idempotent-ish; safe to call once. */
   unlock(): Promise<any>;
   /** Alias of `unlock`. */
@@ -87,6 +89,8 @@ export interface SemaphoreHandle {
   holder: string;
   fencingToken: number;
   leaseExpiresMs?: number;
+  /** Extend this exact fenced permit. Throws if authority has been lost. */
+  renew(ttlMs?: number): Promise<any>;
   unlock(): Promise<any>;
   release(): Promise<any>;
 }
@@ -96,9 +100,22 @@ const DEFAULT_MAX_WAIT = 30_000;
 const DEFAULT_RETRY_INTERVAL = 250;
 
 function genId(): string {
-  const g: any = globalThis as any;
-  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
-  return `fdc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return `fdc-${cryptoApi.randomUUID()}`;
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    return `fdc-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  throw new Error("fiducia: secure randomness is unavailable; provide an explicit nonempty holder");
+}
+
+function fencingToken(output: any, primitive: string): number {
+  const token = output?.fencing_token;
+  if (!Number.isSafeInteger(token) || token <= 0) {
+    throw new Error(`fiducia: acquired ${primitive} carried no valid fencing token`);
+  }
+  return token;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -166,35 +183,94 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     wait: boolean,
     opts: LockOptions,
   ): Promise<Lock | null> {
-    const holder = opts.holder ?? genId();
+    const holder = opts.holder?.trim() || genId();
+    const requestId = genId();
     const ttl = opts.ttl ?? DEFAULT_TTL;
 
-    const first = await this.lockAcquireMany({ keys, holder, ttlMs: ttl, wait });
+    const maxWait = opts.maxWaitTime ?? DEFAULT_MAX_WAIT;
+    let first: any;
+    try {
+      first = await this.lockAcquireMany({
+        keys,
+        holder,
+        requestId,
+        ttlMs: ttl,
+        wait,
+        waitTimeoutMs: wait ? maxWait : undefined,
+      });
+    } catch (error) {
+      // The request may have committed even when its response was lost. Cancel
+      // the identity and release any raced grant before surfacing ambiguity.
+      await this.cancelLockWait(keys, holder, requestId);
+      throw error;
+    }
     const out = first?.result?.output ?? {};
     if (out.acquired) {
-      return this.lockHandle(keys, holder, out.fencing_token, out.lease_expires_ms);
+      const token = fencingToken(out, "lock");
+      if (out.renewed === false) {
+        try {
+          const renewed = await this.lockRenew(keys, holder, token, ttl);
+          const renewedOut = renewed?.result?.output ?? {};
+          if (!renewedOut.renewed) {
+            throw new Error("fiducia: reacquired lock lost fenced authority during renewal");
+          }
+          return this.lockHandle(keys, holder, token, renewedOut.lease_expires_ms, ttl);
+        } catch (error) {
+          await this.cancelLockWait(keys, holder, requestId);
+          throw error;
+        }
+      }
+      return this.lockHandle(keys, holder, token, out.lease_expires_ms, ttl);
     }
     if (!wait) return null; // tryLock: held right now → fail fast
 
-    // Queued (FIFO). Poll a member key until we've been promoted to holder.
-    const deadline = Date.now() + (opts.maxWaitTime ?? DEFAULT_MAX_WAIT);
+    // Re-submit the exact queued identity with bounded backoff. A committed
+    // retry advances expiry/promotion in the Raft state machine, while queue
+    // dedup preserves the original FIFO position.
+    const deadline = Date.now() + maxWait;
     const interval = opts.retryInterval ?? DEFAULT_RETRY_INTERVAL;
     const maxRetries = opts.maxRetries ?? Infinity;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      try {
-        await sleep(Math.min(interval, remaining), opts.signal);
-      } catch {
-        throw new LockAbortedError(keys);
+    let acquired = false;
+    try {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        try {
+          const delay = Math.min(interval * (2 ** Math.min(attempt, 3)), 2_000, remaining);
+          await sleep(delay, opts.signal);
+        } catch {
+          throw new LockAbortedError(keys);
+        }
+        const retried = await this.lockAcquireMany({
+          keys,
+          holder,
+          requestId,
+          ttlMs: ttl,
+          wait: true,
+          waitTimeoutMs: maxWait,
+        });
+        const retryOut = retried?.result?.output ?? {};
+        if (retryOut.acquired) {
+          const token = fencingToken(retryOut, "lock");
+          const renewed = await this.lockRenew(keys, holder, token, ttl);
+          const renewedOut = renewed?.result?.output ?? {};
+          if (!renewedOut.renewed) {
+            throw new Error("fiducia: retry-discovered lock lost fenced authority during renewal");
+          }
+          acquired = true;
+          return this.lockHandle(
+            keys,
+            holder,
+            token,
+            renewedOut.lease_expires_ms,
+            ttl,
+          );
+        }
       }
-      const got = await this.lockGet(keys[0]);
-      const lock = got?.lock;
-      if (lock && lock.holder === holder && lock.fencing_token != null) {
-        return this.lockHandle(keys, holder, lock.fencing_token, lock.lease_expires_ms);
-      }
+      throw new LockTimeoutError(keys, maxWait);
+    } finally {
+      if (!acquired) await this.cancelLockWait(keys, holder, requestId);
     }
-    throw new LockTimeoutError(keys, opts.maxWaitTime ?? DEFAULT_MAX_WAIT);
   }
 
   private lockHandle(
@@ -202,15 +278,45 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     holder: string,
     fencingToken: number,
     leaseExpiresMs?: number,
+    defaultTtlMs: number = DEFAULT_TTL,
   ): Lock {
-    return {
+    let currentTtlMs = defaultTtlMs;
+    const handle: Lock = {
       keys,
       holder,
       fencingToken,
       leaseExpiresMs,
+      renew: async (ttlMs = currentTtlMs) => {
+        const response = await this.lockRenew(keys, holder, fencingToken, ttlMs);
+        const output = response?.result?.output ?? {};
+        if (!output.renewed) throw new Error("fiducia: lock renewal lost fenced authority");
+        handle.leaseExpiresMs = output.lease_expires_ms;
+        currentTtlMs = ttlMs;
+        return response;
+      },
       unlock: () => this.lockRelease(keys[0], { holder, fencingToken }),
       release: () => this.lockRelease(keys[0], { holder, fencingToken }),
     };
+    return handle;
+  }
+
+  private async cancelLockWait(keys: string[], holder: string, requestId: string): Promise<void> {
+    const response = await this.lockCancel(keys, holder, { requestId });
+    const output = response?.result?.output ?? {};
+    if (output.acquired && output.fencing_token != null) {
+      const released = await this.lockRelease(keys[0], {
+        holder,
+        fencingToken: fencingToken(output, "raced lock"),
+      });
+      if (released?.result?.output?.released === false) {
+        throw new Error("fiducia: raced lock could not be released safely");
+      }
+      return;
+    }
+    if (output.cancelled === true) return;
+    throw new Error(
+      `fiducia: lock cancellation did not establish safety (${String(output.reason ?? "invalid_response")})`,
+    );
   }
 
   // --- counting semaphores -------------------------------------------------
@@ -260,34 +366,115 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     wait: boolean,
     opts: LockOptions,
   ): Promise<SemaphoreHandle | null> {
-    const holder = opts.holder ?? genId();
+    const holder = opts.holder?.trim() || genId();
+    const requestId = genId();
     const ttl = opts.ttl ?? DEFAULT_TTL;
 
-    const first = await this.semaphoreAcquire(key, { max: limit, holder, ttlMs: ttl, wait });
+    const maxWait = opts.maxWaitTime ?? DEFAULT_MAX_WAIT;
+    let first: any;
+    try {
+      first = await this.semaphoreAcquire(key, {
+        max: limit,
+        holder,
+        requestId,
+        ttlMs: ttl,
+        wait,
+        waitTimeoutMs: wait ? maxWait : undefined,
+      });
+    } catch (error) {
+      await this.cancelSemaphoreWait(key, holder, requestId);
+      throw error;
+    }
     const out = first?.result?.output ?? {};
     if (out.acquired) {
-      return this.semaphoreHandle(key, holder, out.fencing_token, out.lease_expires_ms);
+      const token = fencingToken(out, "semaphore permit");
+      if (out.renewed === false) {
+        try {
+          const renewed = await this.semaphoreRenew(key, holder, token, ttl);
+          const renewedOut = renewed?.result?.output ?? {};
+          if (!renewedOut.renewed) {
+            throw new Error(
+              "fiducia: reacquired semaphore permit lost fenced authority during renewal",
+            );
+          }
+          return this.semaphoreHandle(
+            key,
+            holder,
+            token,
+            renewedOut.lease_expires_ms,
+            ttl,
+          );
+        } catch (error) {
+          await this.cancelSemaphoreWait(key, holder, requestId);
+          throw error;
+        }
+      }
+      return this.semaphoreHandle(
+        key,
+        holder,
+        token,
+        out.lease_expires_ms,
+        ttl,
+      );
+    }
+    if (out.reason === "limit_mismatch") {
+      throw new Error(
+        `fiducia: semaphore limit mismatch (requested ${limit}, configured ${String(out.limit)})`,
+      );
     }
     if (!wait) return null;
 
-    const deadline = Date.now() + (opts.maxWaitTime ?? DEFAULT_MAX_WAIT);
+    const deadline = Date.now() + maxWait;
     const interval = opts.retryInterval ?? DEFAULT_RETRY_INTERVAL;
     const maxRetries = opts.maxRetries ?? Infinity;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      try {
-        await sleep(Math.min(interval, remaining), opts.signal);
-      } catch {
-        throw new LockAbortedError([key]);
+    let acquired = false;
+    try {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        try {
+          const delay = Math.min(interval * (2 ** Math.min(attempt, 3)), 2_000, remaining);
+          await sleep(delay, opts.signal);
+        } catch {
+          throw new LockAbortedError([key]);
+        }
+        const retried = await this.semaphoreAcquire(key, {
+          max: limit,
+          holder,
+          requestId,
+          ttlMs: ttl,
+          wait: true,
+          waitTimeoutMs: maxWait,
+        });
+        const retryOut = retried?.result?.output ?? {};
+        if (retryOut.acquired) {
+          const token = fencingToken(retryOut, "semaphore permit");
+          const renewed = await this.semaphoreRenew(key, holder, token, ttl);
+          const renewedOut = renewed?.result?.output ?? {};
+          if (!renewedOut.renewed) {
+            throw new Error(
+              "fiducia: retry-discovered semaphore permit lost fenced authority during renewal",
+            );
+          }
+          acquired = true;
+          return this.semaphoreHandle(
+            key,
+            holder,
+            token,
+            renewedOut.lease_expires_ms,
+            ttl,
+          );
+        }
+        if (retryOut.reason === "limit_mismatch") {
+          throw new Error(
+            `fiducia: semaphore limit mismatch (requested ${limit}, configured ${String(retryOut.limit)})`,
+          );
+        }
       }
-      const got = await this.semaphoreGet(key);
-      const slot = (got?.semaphore?.holders ?? []).find((h: any) => h.holder === holder);
-      if (slot && slot.fencing_token != null) {
-        return this.semaphoreHandle(key, holder, slot.fencing_token, slot.lease_expires_ms);
-      }
+      throw new LockTimeoutError([key], maxWait);
+    } finally {
+      if (!acquired) await this.cancelSemaphoreWait(key, holder, requestId);
     }
-    throw new LockTimeoutError([key], opts.maxWaitTime ?? DEFAULT_MAX_WAIT);
   }
 
   private semaphoreHandle(
@@ -295,15 +482,45 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     holder: string,
     fencingToken: number,
     leaseExpiresMs?: number,
+    defaultTtlMs: number = DEFAULT_TTL,
   ): SemaphoreHandle {
-    return {
+    let currentTtlMs = defaultTtlMs;
+    const handle: SemaphoreHandle = {
       key,
       holder,
       fencingToken,
       leaseExpiresMs,
+      renew: async (ttlMs = currentTtlMs) => {
+        const response = await this.semaphoreRenew(key, holder, fencingToken, ttlMs);
+        const output = response?.result?.output ?? {};
+        if (!output.renewed) throw new Error("fiducia: semaphore renewal lost fenced authority");
+        handle.leaseExpiresMs = output.lease_expires_ms;
+        currentTtlMs = ttlMs;
+        return response;
+      },
       unlock: () => this.semaphoreRelease(key, { holder, fencingToken }),
       release: () => this.semaphoreRelease(key, { holder, fencingToken }),
     };
+    return handle;
+  }
+
+  private async cancelSemaphoreWait(key: string, holder: string, requestId: string): Promise<void> {
+    const response = await this.semaphoreCancel(key, holder, { requestId });
+    const output = response?.result?.output ?? {};
+    if (output.acquired && output.fencing_token != null) {
+      const released = await this.semaphoreRelease(key, {
+        holder,
+        fencingToken: fencingToken(output, "raced semaphore permit"),
+      });
+      if (released?.result?.output?.released === false) {
+        throw new Error("fiducia: raced semaphore permit could not be released safely");
+      }
+      return;
+    }
+    if (output.cancelled === true) return;
+    throw new Error(
+      `fiducia: semaphore cancellation did not establish safety (${String(output.reason ?? "invalid_response")})`,
+    );
   }
 }
 

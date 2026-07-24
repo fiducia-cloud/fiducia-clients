@@ -7,3 +7,23 @@ import 'package:fiducia_client/fiducia_client.dart';
 
 final client = FiduciaClient('https://api.fiducia.cloud');
 ```
+
+The dependency-free JSON sync methods compose with the strongly typed
+`fiducia_sync` Flutter package through its adapters:
+
+```dart
+final send = adaptJsonSender(
+  client.syncSender(pathPrefix: '/api/admin/sync'),
+);
+final pull = adaptJsonPuller(
+  client.syncPuller('infra_operations', pathPrefix: '/api/admin/sync'),
+);
+```
+
+`syncSender()` sends the durable queued-write key as `Idempotency-Key`.
+Replica-only `write_policy` metadata may be present on the queued map; the
+client intentionally strips it from the canonical server request. Configure
+`SyncWritePolicy` on `FiduciaSyncClient.write()`—the transport does not choose
+optimism, failure, or telemetry behavior.
+`syncPuller()` returns ordered cursor pages and normalizes the legacy admin
+service `sequence` field to the canonical `sync_sequence` field.

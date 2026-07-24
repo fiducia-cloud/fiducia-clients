@@ -40,12 +40,24 @@ class LockTimeout(Exception):
 class Lock:
     """A held lock grant. Call ``release()`` (alias ``unlock()``) when done."""
 
-    def __init__(self, client, keys, holder, fencing_token, lease_expires_ms=None):
+    def __init__(self, client, keys, holder, fencing_token, lease_expires_ms=None, ttl_ms=60000):
         self._client = client
         self.keys = keys
         self.holder = holder
         self.fencing_token = fencing_token
         self.lease_expires_ms = lease_expires_ms
+        self._ttl_ms = ttl_ms
+
+    def renew(self, ttl_ms=None):
+        response = self._client.lock_renew(
+            self.keys, self.holder, self.fencing_token, ttl_ms or self._ttl_ms
+        )
+        output = _output(response)
+        if not output.get("renewed"):
+            raise RuntimeError("fiducia: lock renewal lost fenced authority")
+        self.lease_expires_ms = output.get("lease_expires_ms")
+        self._ttl_ms = ttl_ms or self._ttl_ms
+        return response
 
     def release(self):
         return self._client.lock_release(self.holder, self.fencing_token)
@@ -65,12 +77,24 @@ class Lock:
 
 
 class SemaphoreHandle:
-    def __init__(self, client, key, holder, fencing_token, lease_expires_ms=None):
+    def __init__(self, client, key, holder, fencing_token, lease_expires_ms=None, ttl_ms=60000):
         self._client = client
         self.key = key
         self.holder = holder
         self.fencing_token = fencing_token
         self.lease_expires_ms = lease_expires_ms
+        self._ttl_ms = ttl_ms
+
+    def renew(self, ttl_ms=None):
+        response = self._client.semaphore_renew(
+            self.key, self.holder, self.fencing_token, ttl_ms or self._ttl_ms
+        )
+        output = _output(response)
+        if not output.get("renewed"):
+            raise RuntimeError("fiducia: semaphore renewal lost fenced authority")
+        self.lease_expires_ms = output.get("lease_expires_ms")
+        self._ttl_ms = ttl_ms or self._ttl_ms
+        return response
 
     def release(self):
         return self._client.semaphore_release(self.key, self.holder, self.fencing_token)
@@ -92,8 +116,19 @@ def _gen_holder():
     return "fdc-%s" % _uuid.uuid4().hex
 
 
+def _gen_request_id():
+    return "fdc-attempt-%s" % _uuid.uuid4().hex
+
+
 def _output(resp):
     return ((resp or {}).get("result") or {}).get("output") or {}
+
+
+def _fencing_token(output, primitive):
+    token = output.get("fencing_token")
+    if not isinstance(token, int) or isinstance(token, bool) or token <= 0:
+        raise RuntimeError("fiducia: acquired %s carried no valid fencing token" % primitive)
+    return token
 
 
 class FiduciaLockClient(FiduciaClient):
@@ -128,26 +163,97 @@ class FiduciaLockClient(FiduciaClient):
 
     def _acquire_lock(self, keys, wait, ttl_ms, holder,
                       max_wait_ms=30000, retry_interval_ms=250, max_retries=None):
-        holder = holder or _gen_holder()
-        first = self.lock_acquire_many(keys, holder=holder, ttl_ms=ttl_ms, wait=wait)
+        holder = (holder or "").strip() or _gen_holder()
+        request_id = _gen_request_id()
+        try:
+            first = self.lock_acquire_many(
+                keys,
+                holder=holder,
+                request_id=request_id,
+                ttl_ms=ttl_ms,
+                wait=wait,
+                wait_timeout_ms=max_wait_ms if wait else None,
+            )
+        except Exception:
+            self._cancel_lock_wait(keys, holder, request_id)
+            raise
         out = _output(first)
         if out.get("acquired"):
-            return Lock(self, keys, holder, out.get("fencing_token"), out.get("lease_expires_ms"))
+            token = _fencing_token(out, "lock")
+            if out.get("renewed") is False:
+                try:
+                    renewed = _output(self.lock_renew(keys, holder, token, ttl_ms))
+                    if not renewed.get("renewed"):
+                        raise RuntimeError(
+                            "fiducia: reacquired lock lost fenced authority during renewal"
+                        )
+                    return Lock(
+                        self, keys, holder, token, renewed.get("lease_expires_ms"), ttl_ms
+                    )
+                except Exception:
+                    self._cancel_lock_wait(keys, holder, request_id)
+                    raise
+            return Lock(
+                self, keys, holder, token, out.get("lease_expires_ms"), ttl_ms
+            )
         if not wait:
             return None  # try_lock: held now → fail fast
 
         deadline = _time.monotonic() + max_wait_ms / 1000.0
         attempts = 0
-        while max_retries is None or attempts < max_retries:
-            attempts += 1
-            remaining = deadline - _time.monotonic()
-            if remaining <= 0:
-                break
-            _time.sleep(min(retry_interval_ms / 1000.0, remaining))
-            lk = (self.lock_get(keys[0]) or {}).get("lock") or {}
-            if lk.get("holder") == holder and lk.get("fencing_token") is not None:
-                return Lock(self, keys, holder, lk.get("fencing_token"), lk.get("lease_expires_ms"))
-        return None
+        acquired = False
+        try:
+            while max_retries is None or attempts < max_retries:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                delay_ms = min(retry_interval_ms * (2 ** min(attempts, 3)), 2000)
+                _time.sleep(min(delay_ms / 1000.0, remaining))
+                attempts += 1
+                retried = self.lock_acquire_many(
+                    keys,
+                    holder=holder,
+                    request_id=request_id,
+                    ttl_ms=ttl_ms,
+                    wait=True,
+                    wait_timeout_ms=max_wait_ms,
+                )
+                out = _output(retried)
+                if out.get("acquired"):
+                    token = _fencing_token(out, "lock")
+                    renewed = _output(self.lock_renew(keys, holder, token, ttl_ms))
+                    if not renewed.get("renewed"):
+                        raise RuntimeError(
+                            "fiducia: retry-discovered lock lost fenced authority during renewal"
+                        )
+                    acquired = True
+                    return Lock(
+                        self,
+                        keys,
+                        holder,
+                        token,
+                        renewed.get("lease_expires_ms"),
+                        ttl_ms,
+                    )
+            return None
+        finally:
+            if not acquired:
+                self._cancel_lock_wait(keys, holder, request_id)
+
+    def _cancel_lock_wait(self, keys, holder, request_id):
+        out = _output(self.lock_cancel(keys, holder, request_id=request_id))
+        if out.get("acquired"):
+            token = _fencing_token(out, "raced lock")
+            released = _output(self.lock_release(holder, token))
+            if released.get("released") is False:
+                raise RuntimeError("fiducia: raced lock could not be released safely")
+            return
+        if out.get("cancelled") is True:
+            return
+        raise RuntimeError(
+            "fiducia: lock cancellation did not establish safety (%s)"
+            % out.get("reason", "invalid_response")
+        )
 
     # --- counting semaphores -------------------------------------------------
 
@@ -166,27 +272,112 @@ class FiduciaLockClient(FiduciaClient):
 
     def _acquire_semaphore(self, key, limit, wait, ttl_ms, holder,
                            max_wait_ms=30000, retry_interval_ms=250, max_retries=None):
-        holder = holder or _gen_holder()
-        first = self.semaphore_acquire(key, limit, holder=holder, ttl_ms=ttl_ms, wait=wait)
+        holder = (holder or "").strip() or _gen_holder()
+        request_id = _gen_request_id()
+        try:
+            first = self.semaphore_acquire(
+                key,
+                limit,
+                holder=holder,
+                request_id=request_id,
+                ttl_ms=ttl_ms,
+                wait=wait,
+                wait_timeout_ms=max_wait_ms if wait else None,
+            )
+        except Exception:
+            self._cancel_semaphore_wait(key, holder, request_id)
+            raise
         out = _output(first)
         if out.get("acquired"):
-            return SemaphoreHandle(self, key, holder, out.get("fencing_token"), out.get("lease_expires_ms"))
+            token = _fencing_token(out, "semaphore permit")
+            if out.get("renewed") is False:
+                try:
+                    renewed = _output(self.semaphore_renew(key, holder, token, ttl_ms))
+                    if not renewed.get("renewed"):
+                        raise RuntimeError(
+                            "fiducia: reacquired semaphore permit lost fenced authority during renewal"
+                        )
+                    return SemaphoreHandle(
+                        self, key, holder, token, renewed.get("lease_expires_ms"), ttl_ms
+                    )
+                except Exception:
+                    self._cancel_semaphore_wait(key, holder, request_id)
+                    raise
+            return SemaphoreHandle(
+                self, key, holder, token,
+                out.get("lease_expires_ms"), ttl_ms
+            )
+        if out.get("reason") == "limit_mismatch":
+            raise RuntimeError(
+                "fiducia: semaphore limit mismatch (requested %s, configured %s)"
+                % (limit, out.get("limit"))
+            )
         if not wait:
             return None
 
         deadline = _time.monotonic() + max_wait_ms / 1000.0
         attempts = 0
-        while max_retries is None or attempts < max_retries:
-            attempts += 1
-            remaining = deadline - _time.monotonic()
-            if remaining <= 0:
-                break
-            _time.sleep(min(retry_interval_ms / 1000.0, remaining))
-            sem = (self.semaphore_get(key) or {}).get("semaphore") or {}
-            for slot in sem.get("holders") or []:
-                if slot.get("holder") == holder and slot.get("fencing_token") is not None:
-                    return SemaphoreHandle(self, key, holder, slot.get("fencing_token"), slot.get("lease_expires_ms"))
-        return None
+        acquired = False
+        try:
+            while max_retries is None or attempts < max_retries:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                delay_ms = min(retry_interval_ms * (2 ** min(attempts, 3)), 2000)
+                _time.sleep(min(delay_ms / 1000.0, remaining))
+                attempts += 1
+                retried = self.semaphore_acquire(
+                    key,
+                    limit,
+                    holder=holder,
+                    request_id=request_id,
+                    ttl_ms=ttl_ms,
+                    wait=True,
+                    wait_timeout_ms=max_wait_ms,
+                )
+                out = _output(retried)
+                if out.get("acquired"):
+                    token = _fencing_token(out, "semaphore permit")
+                    renewed = _output(self.semaphore_renew(key, holder, token, ttl_ms))
+                    if not renewed.get("renewed"):
+                        raise RuntimeError(
+                            "fiducia: retry-discovered semaphore permit lost fenced authority during renewal"
+                        )
+                    acquired = True
+                    return SemaphoreHandle(
+                        self,
+                        key,
+                        holder,
+                        token,
+                        renewed.get("lease_expires_ms"),
+                        ttl_ms,
+                    )
+                if out.get("reason") == "limit_mismatch":
+                    raise RuntimeError(
+                        "fiducia: semaphore limit mismatch (requested %s, configured %s)"
+                        % (limit, out.get("limit"))
+                    )
+            return None
+        finally:
+            if not acquired:
+                self._cancel_semaphore_wait(key, holder, request_id)
+
+    def _cancel_semaphore_wait(self, key, holder, request_id):
+        out = _output(self.semaphore_cancel(key, holder, request_id=request_id))
+        if out.get("acquired"):
+            token = _fencing_token(out, "raced semaphore permit")
+            released = _output(self.semaphore_release(key, holder, token))
+            if released.get("released") is False:
+                raise RuntimeError(
+                    "fiducia: raced semaphore permit could not be released safely"
+                )
+            return
+        if out.get("cancelled") is True:
+            return
+        raise RuntimeError(
+            "fiducia: semaphore cancellation did not establish safety (%s)"
+            % out.get("reason", "invalid_response")
+        )
 
 
 def _as_list(key_or_keys):

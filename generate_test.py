@@ -48,6 +48,24 @@ class RustWasmEmitter(unittest.TestCase):
         # wire form is an integer (30000, never 30000.0). lock_acquire has ttl_ms.
         self.assertIn("as i64)", self.src)
 
+    def test_lock_attempt_fields_preserve_the_existing_wasm_positional_prefix(self):
+        # wasm-bindgen exports positional JavaScript functions. New optional
+        # fields must be appended after the established key/holder/ttl/wait
+        # prefix or an old `lockAcquire(key, holder, 30000, false)` call would
+        # pass a number into a newly inserted string argument.
+        self.assertIn(
+            "pub async fn lock_acquire(&self, key: String, holder: String, "
+            "ttl_ms: Option<f64>, wait: Option<bool>, wait_timeout_ms: Option<f64>, "
+            "request_id: Option<String>)",
+            self.src,
+        )
+        self.assertIn(
+            "pub async fn semaphore_acquire(&self, key: String, limit: f64, holder: String, "
+            "ttl_ms: Option<f64>, wait: Option<bool>, wait_timeout_ms: Option<f64>, "
+            "request_id: Option<String>)",
+            self.src,
+        )
+
     def test_object_query_expands_to_dotted_pairs(self):
         # service_instances' `metadata` object query must expand to
         # metadata.KEY=VALUE pairs (PROTOCOL.md), not a JSON blob under `metadata`.

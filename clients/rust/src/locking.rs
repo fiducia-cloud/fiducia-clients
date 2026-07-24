@@ -23,14 +23,12 @@
 //! path-style low-level helpers in [`crate`].
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 use std::thread::sleep;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::{enc, Error, FiduciaClient};
+use crate::{Error, FiduciaClient};
 
 /// Tuning for acquisition. `Default` gives a 60s lease, a 30s wait budget, and a
 /// 250ms poll interval.
@@ -73,6 +71,7 @@ pub struct LockHandle {
     /// single-key grant (release then uses the scalar `fencing_token`).
     pub fencing_tokens: BTreeMap<String, u64>,
     pub lease_expires_ms: Option<u64>,
+    pub ttl_ms: u64,
 }
 
 /// A held semaphore permit. Release with [`FiduciaClient::release_semaphore`].
@@ -82,6 +81,7 @@ pub struct SemaphoreHandle {
     pub holder: String,
     pub fencing_token: u64,
     pub lease_expires_ms: Option<u64>,
+    pub ttl_ms: u64,
 }
 
 /// Why an acquisition failed.
@@ -115,44 +115,37 @@ impl std::fmt::Display for LockError {
 
 impl std::error::Error for LockError {}
 
-static HOLDER_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// A per-process random nonce, seeded once. Two processes that generate their
-/// first holder in the same nanosecond would otherwise collide because their
-/// wall-clock nanos and process-local counters can match. Mixing in the pid and
-/// a nonce derived from a stack address makes the id distinct across processes.
-fn process_nonce() -> u64 {
-    static NONCE: OnceLock<u64> = OnceLock::new();
-    *NONCE.get_or_init(|| {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let pid = std::process::id() as u64;
-        let stack_local = 0_u8;
-        let addr = &stack_local as *const u8 as u64;
-        // splitmix64 finalizer over the mixed entropy — good avalanche, no deps.
-        let mut h = pid ^ nanos ^ addr;
-        h ^= h >> 30;
-        h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        h ^= h >> 27;
-        h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
-        h ^= h >> 31;
-        h
-    })
+/// An unguessable holder identity. Holder names participate in queue identity
+/// and cancellation authority, so a clock/pid/counter value is not sufficient.
+pub(crate) fn gen_holder() -> String {
+    format!("fdc-{}", uuid::Uuid::new_v4().simple())
 }
 
-/// A process-unique holder id (no external uuid dependency). Includes the pid and
-/// a per-process random nonce so ids never collide across processes.
-fn gen_holder() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = HOLDER_SEQ.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let nonce = process_nonce();
-    format!("fdc-{pid:x}-{nonce:x}-{nanos:x}-{seq:x}")
+/// A distinct capability for one logical acquire/retry/cancel attempt. It is
+/// deliberately independent of holder so cancelling one attempt cannot
+/// tombstone a later attempt by the same long-lived worker identity.
+pub(crate) fn gen_request_id() -> String {
+    format!("fdc-attempt-{}", uuid::Uuid::new_v4().simple())
+}
+
+pub(crate) fn validate_request_id(request_id: &str) -> Result<(), Error> {
+    if request_id.trim().is_empty()
+        || request_id.len() > 128
+        || request_id.chars().any(|ch| ch.is_control())
+    {
+        return Err(Error::Transport(
+            "fiducia: request_id must be 1-128 printable UTF-8 bytes".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn holder_or_generated(holder: Option<&str>) -> String {
+    holder
+        .map(str::trim)
+        .filter(|holder| !holder.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(gen_holder)
 }
 
 fn out(resp: &Value) -> &Value {
@@ -208,6 +201,30 @@ impl FiduciaClient {
         Ok(last)
     }
 
+    /// Extend a held union-lock lease without changing its fencing token.
+    pub fn renew_lock(&self, handle: &mut LockHandle, ttl_ms: Option<u64>) -> Result<Value, Error> {
+        let ttl_ms = ttl_ms.unwrap_or(handle.ttl_ms);
+        let response = self.request(
+            "POST",
+            "/v1/locks/renew",
+            Some(json!({
+                "keys": handle.keys,
+                "holder": handle.holder,
+                "fencing_token": handle.fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )?;
+        let output = out(&response);
+        if !output["renewed"].as_bool().unwrap_or(false) {
+            return Err(Error::Transport(
+                "fiducia: lock renewal lost fenced authority".to_string(),
+            ));
+        }
+        handle.lease_expires_ms = output["lease_expires_ms"].as_u64();
+        handle.ttl_ms = ttl_ms;
+        Ok(response)
+    }
+
     /// Acquire the union of `keys`, run `f`, then always release.
     pub fn with_lock<T>(
         &self,
@@ -227,49 +244,148 @@ impl FiduciaClient {
         wait: bool,
         opts: LockOptions,
     ) -> Result<Option<LockHandle>, LockError> {
-        let holder = opts.holder.clone().unwrap_or_else(gen_holder);
+        let holder = holder_or_generated(opts.holder.as_deref());
+        let request_id = gen_request_id();
         let first = self.request(
             "POST",
             "/v1/locks/acquire",
-            Some(json!({ "keys": keys, "holder": holder, "ttl_ms": opts.ttl_ms, "wait": wait })),
-        )?;
+            Some(json!({
+                "keys": keys,
+                "holder": holder,
+                "request_id": request_id,
+                "ttl_ms": opts.ttl_ms,
+                "wait": wait,
+                "wait_timeout_ms": wait.then_some(opts.max_wait.as_millis() as u64),
+            })),
+        );
+        let first = match first {
+            Ok(response) => response,
+            Err(error) => {
+                if let Err(cancel_error) = self.cancel_lock_wait(keys, &holder, &request_id) {
+                    return Err(LockError::Client(cancel_error));
+                }
+                return Err(LockError::Client(error));
+            }
+        };
         let o = out(&first);
         if o["acquired"].as_bool().unwrap_or(false) {
-            return Ok(Some(lock_handle(keys, &holder, o)?));
+            let mut handle = lock_handle(keys, &holder, opts.ttl_ms, o)?;
+            if o["renewed"].as_bool() == Some(false) {
+                if let Err(error) = self.renew_lock(&mut handle, Some(opts.ttl_ms)) {
+                    if let Err(cancel_error) = self.cancel_lock_wait(keys, &holder, &request_id) {
+                        return Err(LockError::Client(cancel_error));
+                    }
+                    return Err(LockError::Client(error));
+                }
+            }
+            return Ok(Some(handle));
         }
         if !wait {
             return Ok(None); // try_lock_handle: held now -> fail fast
         }
 
-        // Queued (FIFO). Poll a member key until we're promoted to holder.
+        // Re-submit the exact queued identity. This replicated command performs
+        // expiry/promotion and reports a raced grant atomically; a GET alone
+        // cannot advance the state machine.
         let deadline = Instant::now() + opts.max_wait;
         let max_retries = opts.max_retries.unwrap_or(u32::MAX);
-        let probe = keys.first().copied().unwrap_or("");
-        for _ in 0..max_retries {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            sleep(opts.retry_interval.min(remaining));
-            let got = self.request("GET", &format!("/v1/locks?key={}", enc(probe)), None)?;
-            let lock = &got["lock"];
-            if lock["holder"].as_str() == Some(holder.as_str()) {
-                let fencing_tokens = extract_fencing_tokens(lock);
-                if let Some(token) = lock["fencing_token"]
-                    .as_u64()
-                    .or_else(|| fencing_tokens.values().copied().next())
-                {
-                    return Ok(Some(LockHandle {
-                        keys: keys.iter().map(|k| k.to_string()).collect(),
-                        holder,
-                        fencing_token: token,
-                        fencing_tokens,
-                        lease_expires_ms: lock["lease_expires_ms"].as_u64(),
-                    }));
+        let wait_result = (|| -> Result<Option<LockHandle>, LockError> {
+            for attempt in 0..max_retries {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let backoff = opts.retry_interval.saturating_mul(1_u32 << attempt.min(3));
+                sleep(backoff.min(Duration::from_secs(2)).min(remaining));
+                let retried = self.request(
+                    "POST",
+                    "/v1/locks/acquire",
+                    Some(json!({
+                        "keys": keys,
+                        "holder": holder,
+                        "request_id": request_id,
+                        "ttl_ms": opts.ttl_ms,
+                        "wait": true,
+                        "wait_timeout_ms": opts.max_wait.as_millis() as u64,
+                    })),
+                )?;
+                let output = out(&retried);
+                if output["acquired"].as_bool().unwrap_or(false) {
+                    let token = output["fencing_token"].as_u64().ok_or_else(|| {
+                        LockError::Client(Error::Transport(
+                            "fiducia lock: retry-discovered grant carried no fencing token"
+                                .to_string(),
+                        ))
+                    })?;
+                    let renewed = self.request(
+                        "POST",
+                        "/v1/locks/renew",
+                        Some(json!({
+                            "keys": keys,
+                            "holder": holder,
+                            "fencing_token": token,
+                            "ttl_ms": opts.ttl_ms,
+                        })),
+                    )?;
+                    let renewed_output = out(&renewed);
+                    if !renewed_output["renewed"].as_bool().unwrap_or(false) {
+                        return Err(LockError::Client(Error::Transport(
+                            "fiducia: retry-discovered lock lost fenced authority during renewal"
+                                .to_string(),
+                        )));
+                    }
+                    return Ok(Some(lock_handle(
+                        keys,
+                        &holder,
+                        opts.ttl_ms,
+                        renewed_output,
+                    )?));
                 }
             }
+            Ok(None)
+        })();
+
+        // Timeouts and transport failures must not leave zombie queue entries.
+        // If promotion won the race, cancel returns the active token and we
+        // immediately release the grant.
+        if !matches!(wait_result, Ok(Some(_))) {
+            if let Err(cancel_error) = self.cancel_lock_wait(keys, &holder, &request_id) {
+                return Err(LockError::Client(cancel_error));
+            }
         }
-        Ok(None)
+        wait_result
+    }
+
+    fn cancel_lock_wait(&self, keys: &[&str], holder: &str, request_id: &str) -> Result<(), Error> {
+        let response = self.request(
+            "POST",
+            "/v1/locks/cancel",
+            Some(json!({ "keys": keys, "holder": holder, "request_id": request_id })),
+        )?;
+        let output = out(&response);
+        if output["acquired"].as_bool().unwrap_or(false) {
+            let token = output["fencing_token"].as_u64().ok_or_else(|| {
+                Error::Transport("fiducia: raced lock carried no fencing token".to_string())
+            })?;
+            let released = self.request(
+                "POST",
+                "/v1/locks/release",
+                Some(json!({ "holder": holder, "fencing_token": token })),
+            )?;
+            if out(&released)["released"].as_bool() == Some(false) {
+                return Err(Error::Transport(
+                    "fiducia: raced lock could not be released safely".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        if output["cancelled"].as_bool() == Some(true) {
+            return Ok(());
+        }
+        Err(Error::Transport(format!(
+            "fiducia: lock cancellation did not establish safety ({})",
+            output["reason"].as_str().unwrap_or("invalid_response")
+        )))
     }
 
     // --- counting semaphores -------------------------------------------------
@@ -313,6 +429,34 @@ impl FiduciaClient {
         )
     }
 
+    /// Extend a held semaphore permit without changing its fencing token.
+    pub fn renew_semaphore(
+        &self,
+        handle: &mut SemaphoreHandle,
+        ttl_ms: Option<u64>,
+    ) -> Result<Value, Error> {
+        let ttl_ms = ttl_ms.unwrap_or(handle.ttl_ms);
+        let response = self.request(
+            "POST",
+            "/v1/semaphores/renew",
+            Some(json!({
+                "key": handle.key,
+                "holder": handle.holder,
+                "fencing_token": handle.fencing_token,
+                "ttl_ms": ttl_ms,
+            })),
+        )?;
+        let output = out(&response);
+        if !output["renewed"].as_bool().unwrap_or(false) {
+            return Err(Error::Transport(
+                "fiducia: semaphore renewal lost fenced authority".to_string(),
+            ));
+        }
+        handle.lease_expires_ms = output["lease_expires_ms"].as_u64();
+        handle.ttl_ms = ttl_ms;
+        Ok(response)
+    }
+
     fn acquire_semaphore_inner(
         &self,
         key: &str,
@@ -320,23 +464,58 @@ impl FiduciaClient {
         wait: bool,
         opts: LockOptions,
     ) -> Result<Option<SemaphoreHandle>, LockError> {
-        let holder = opts.holder.clone().unwrap_or_else(gen_holder);
+        let holder = holder_or_generated(opts.holder.as_deref());
+        let request_id = gen_request_id();
         let first = self.request(
             "POST",
             "/v1/semaphores/acquire",
             Some(json!({
                 "key": key, "limit": limit, "holder": holder,
+                "request_id": request_id,
                 "ttl_ms": opts.ttl_ms, "wait": wait,
+                "wait_timeout_ms": wait.then_some(opts.max_wait.as_millis() as u64),
             })),
-        )?;
+        );
+        let first = match first {
+            Ok(response) => response,
+            Err(error) => {
+                if let Err(cancel_error) = self.cancel_semaphore_wait(key, &holder, &request_id) {
+                    return Err(LockError::Client(cancel_error));
+                }
+                return Err(LockError::Client(error));
+            }
+        };
         let o = out(&first);
         if o["acquired"].as_bool().unwrap_or(false) {
-            return Ok(Some(SemaphoreHandle {
+            let Some(token) = o["fencing_token"].as_u64() else {
+                return Err(LockError::Client(Error::Transport(
+                    "fiducia semaphore: acquired permit carried no fencing token".to_string(),
+                )));
+            };
+            let mut handle = SemaphoreHandle {
                 key: key.to_string(),
                 holder,
-                fencing_token: o["fencing_token"].as_u64().unwrap_or(0),
+                fencing_token: token,
                 lease_expires_ms: o["lease_expires_ms"].as_u64(),
-            }));
+                ttl_ms: opts.ttl_ms,
+            };
+            if o["renewed"].as_bool() == Some(false) {
+                if let Err(error) = self.renew_semaphore(&mut handle, Some(opts.ttl_ms)) {
+                    if let Err(cancel_error) =
+                        self.cancel_semaphore_wait(key, &handle.holder, &request_id)
+                    {
+                        return Err(LockError::Client(cancel_error));
+                    }
+                    return Err(LockError::Client(error));
+                }
+            }
+            return Ok(Some(handle));
+        }
+        if o["reason"].as_str() == Some("limit_mismatch") {
+            return Err(LockError::Client(Error::Transport(format!(
+                "fiducia semaphore limit mismatch: requested {limit}, configured {}",
+                o["limit"].as_u64().unwrap_or_default()
+            ))));
         }
         if !wait {
             return Ok(None);
@@ -344,30 +523,118 @@ impl FiduciaClient {
 
         let deadline = Instant::now() + opts.max_wait;
         let max_retries = opts.max_retries.unwrap_or(u32::MAX);
-        for _ in 0..max_retries {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            sleep(opts.retry_interval.min(remaining));
-            let got = self.request("GET", &format!("/v1/semaphores?key={}", enc(key)), None)?;
-            if let Some(holders) = got["semaphore"]["holders"].as_array() {
-                if let Some(slot) = holders
-                    .iter()
-                    .find(|h| h["holder"].as_str() == Some(holder.as_str()))
-                {
-                    if let Some(token) = slot["fencing_token"].as_u64() {
-                        return Ok(Some(SemaphoreHandle {
-                            key: key.to_string(),
-                            holder,
-                            fencing_token: token,
-                            lease_expires_ms: slot["lease_expires_ms"].as_u64(),
-                        }));
+        let wait_result = (|| -> Result<Option<SemaphoreHandle>, LockError> {
+            for attempt in 0..max_retries {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let backoff = opts.retry_interval.saturating_mul(1_u32 << attempt.min(3));
+                sleep(backoff.min(Duration::from_secs(2)).min(remaining));
+                let retried = self.request(
+                    "POST",
+                    "/v1/semaphores/acquire",
+                    Some(json!({
+                        "key": key,
+                        "limit": limit,
+                        "holder": holder,
+                        "request_id": request_id,
+                        "ttl_ms": opts.ttl_ms,
+                        "wait": true,
+                        "wait_timeout_ms": opts.max_wait.as_millis() as u64,
+                    })),
+                )?;
+                let output = out(&retried);
+                if output["acquired"].as_bool().unwrap_or(false) {
+                    let Some(token) = output["fencing_token"].as_u64() else {
+                        return Err(LockError::Client(Error::Transport(
+                            "fiducia semaphore: acquired permit carried no fencing token"
+                                .to_string(),
+                        )));
+                    };
+                    let renewed = self.request(
+                        "POST",
+                        "/v1/semaphores/renew",
+                        Some(json!({
+                            "key": key,
+                            "holder": holder,
+                            "fencing_token": token,
+                            "ttl_ms": opts.ttl_ms,
+                        })),
+                    )?;
+                    let renewed_output = out(&renewed);
+                    if !renewed_output["renewed"].as_bool().unwrap_or(false) {
+                        return Err(LockError::Client(Error::Transport(
+                            "fiducia: retry-discovered semaphore permit lost fenced authority during renewal"
+                                .to_string(),
+                        )));
                     }
+                    return Ok(Some(SemaphoreHandle {
+                        key: key.to_string(),
+                        holder: holder.clone(),
+                        fencing_token: token,
+                        lease_expires_ms: renewed_output["lease_expires_ms"].as_u64(),
+                        ttl_ms: opts.ttl_ms,
+                    }));
+                }
+                if output["reason"].as_str() == Some("limit_mismatch") {
+                    return Err(LockError::Client(Error::Transport(format!(
+                        "fiducia semaphore limit mismatch: requested {limit}, configured {}",
+                        output["limit"].as_u64().unwrap_or_default()
+                    ))));
                 }
             }
+            Ok(None)
+        })();
+        if !matches!(wait_result, Ok(Some(_))) {
+            if let Err(cancel_error) = self.cancel_semaphore_wait(key, &holder, &request_id) {
+                return Err(LockError::Client(cancel_error));
+            }
         }
-        Ok(None)
+        wait_result
+    }
+
+    fn cancel_semaphore_wait(
+        &self,
+        key: &str,
+        holder: &str,
+        request_id: &str,
+    ) -> Result<(), Error> {
+        let response = self.request(
+            "POST",
+            "/v1/semaphores/cancel",
+            Some(json!({ "key": key, "holder": holder, "request_id": request_id })),
+        )?;
+        let output = out(&response);
+        if output["acquired"].as_bool().unwrap_or(false) {
+            let token = output["fencing_token"].as_u64().ok_or_else(|| {
+                Error::Transport(
+                    "fiducia: raced semaphore permit carried no fencing token".to_string(),
+                )
+            })?;
+            let released = self.request(
+                "POST",
+                "/v1/semaphores/release",
+                Some(json!({
+                    "key": key,
+                    "holder": holder,
+                    "fencing_token": token,
+                })),
+            )?;
+            if out(&released)["released"].as_bool() == Some(false) {
+                return Err(Error::Transport(
+                    "fiducia: raced semaphore permit could not be released safely".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        if output["cancelled"].as_bool() == Some(true) {
+            return Ok(());
+        }
+        Err(Error::Transport(format!(
+            "fiducia: semaphore cancellation did not establish safety ({})",
+            output["reason"].as_str().unwrap_or("invalid_response")
+        )))
     }
 }
 
@@ -390,7 +657,12 @@ fn extract_fencing_tokens(value: &Value) -> BTreeMap<String, u64> {
 /// (multi-key union). Errors if a granted lock carries no resolvable token at
 /// all — silently defaulting to `0` would make release fail and leak the lock
 /// until its lease TTL expires.
-fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> Result<LockHandle, LockError> {
+fn lock_handle(
+    keys: &[&str],
+    holder: &str,
+    ttl_ms: u64,
+    output: &Value,
+) -> Result<LockHandle, LockError> {
     let scalar = output["fencing_token"].as_u64();
     let fencing_tokens = extract_fencing_tokens(output);
     if scalar.is_none() && fencing_tokens.is_empty() {
@@ -409,6 +681,7 @@ fn lock_handle(keys: &[&str], holder: &str, output: &Value) -> Result<LockHandle
         fencing_token,
         fencing_tokens,
         lease_expires_ms: output["lease_expires_ms"].as_u64(),
+        ttl_ms,
     })
 }
 
@@ -444,21 +717,29 @@ mod tests {
     }
 
     #[test]
-    fn holder_id_contains_pid() {
-        // The pid segment is what makes ids distinct across processes that would
-        // otherwise share the same first-nanosecond + seq-0.
+    fn holder_id_is_a_uuid_capability() {
         let id = gen_holder();
-        let pid = format!("{:x}", std::process::id());
-        assert!(
-            id.contains(&format!("-{pid}-")),
-            "id {id} should contain pid {pid}"
-        );
+        assert_eq!(id.len(), 36);
+        assert!(id[4..].chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn request_id_is_a_distinct_uuid_capability() {
+        let a = gen_request_id();
+        let b = gen_request_id();
+        assert_ne!(a, b);
+        assert!(a.starts_with("fdc-attempt-"));
+        assert_eq!(a.len(), 44);
+        assert!(validate_request_id(&a).is_ok());
+        assert!(validate_request_id("   ").is_err());
+        assert!(validate_request_id(&"x".repeat(129)).is_err());
+        assert!(validate_request_id("bad\0id").is_err());
     }
 
     #[test]
     fn single_key_grant_uses_scalar_token() {
         let output = json!({ "acquired": true, "fencing_token": 5, "lease_expires_ms": 100 });
-        let handle = lock_handle(&["orders/42"], "worker-a", &output).unwrap();
+        let handle = lock_handle(&["orders/42"], "worker-a", 30_000, &output).unwrap();
         assert_eq!(handle.fencing_token, 5);
         assert!(handle.fencing_tokens.is_empty());
         // Single-key release body is unchanged: no `key`, scalar token.
@@ -476,7 +757,7 @@ mod tests {
             "keys": ["a", "b"],
             "fencing_tokens": { "a": 7, "b": 9 },
         });
-        let handle = lock_handle(&["a", "b"], "worker-a", &output).unwrap();
+        let handle = lock_handle(&["a", "b"], "worker-a", 30_000, &output).unwrap();
         assert_eq!(handle.fencing_tokens.get("a"), Some(&7));
         assert_eq!(handle.fencing_tokens.get("b"), Some(&9));
         // The scalar is no longer 0 (which broke release); it mirrors a real token.
@@ -496,7 +777,7 @@ mod tests {
         // A successful acquire that resolves no token at all must error rather
         // than silently carry token 0 (which release can never match).
         let output = json!({ "acquired": true, "keys": ["a"] });
-        assert!(lock_handle(&["a"], "worker-a", &output).is_err());
+        assert!(lock_handle(&["a"], "worker-a", 30_000, &output).is_err());
     }
 
     #[test]

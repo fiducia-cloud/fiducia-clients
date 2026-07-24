@@ -61,6 +61,8 @@ def build_parser():
     kv = sub.add_parser("kv").add_subparsers(dest="action", required=True)
     pu = kv.add_parser("put"); pu.add_argument("--key", required=True); pu.add_argument("--value", required=True)
     pu.add_argument("--ttl-ms", type=int); pu.add_argument("--prev-revision", type=int)
+    pu.add_argument("--plaintext", action="store_true", default=None,
+                    help="explicitly opt this value out of at-rest encryption")
     g = kv.add_parser("get"); g.add_argument("--key", required=True)
     d = kv.add_parser("delete"); d.add_argument("--key", required=True)
 
@@ -118,7 +120,8 @@ def run(args, c):
             return c.semaphore_get(args.key)
     if g == "kv":
         if act == "put":
-            return c.kv_put(args.key, args.value, ttl_ms=args.ttl_ms, prev_revision=args.prev_revision)
+            return c.kv_put(args.key, args.value, ttl_ms=args.ttl_ms,
+                            prev_revision=args.prev_revision, plaintext=args.plaintext)
         if act == "get":
             return c.kv_get(args.key)
         if act == "delete":
