@@ -1,0 +1,110 @@
+# zed package manifest. This repo is POLYGLOT: each [targets.<lang>]
+# below publishes as its own package `fiducia/fiducia-clients-<lang>` at this
+# single shared version, so a consumer installs (and downloads) only
+# the language it actually uses. See zed-docs doc 17.
+
+[package]
+org = "fiducia"
+name = "fiducia-clients"
+version = "0.1.0"
+description = "fiducia API clients, one package per language"
+license = "MIT"
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/fiducia-cloud/fiducia-clients"
+
+[targets.c]
+dir = "clients/c"
+
+[targets.clojure]
+dir = "clients/clojure"
+adapter = "java"
+
+[targets.cpp]
+dir = "clients/cpp"
+
+[targets.crystal]
+dir = "clients/crystal"
+
+[targets.csharp]
+dir = "clients/csharp"
+
+[targets.dart]
+dir = "clients/dart"
+
+[targets.elixir]
+dir = "clients/elixir"
+
+[targets.erlang]
+dir = "clients/erlang"
+
+[targets.fsharp]
+dir = "clients/fsharp"
+
+[targets.gleam]
+dir = "clients/gleam"
+
+[targets.golang]
+dir = "clients/go"
+
+[targets.haskell]
+dir = "clients/haskell"
+
+[targets.java]
+dir = "clients/java"
+adapter = "java"
+
+[targets.julia]
+dir = "clients/julia"
+
+[targets.kotlin]
+dir = "clients/kotlin"
+adapter = "java"
+
+[targets.lua]
+dir = "clients/lua"
+
+[targets.matlab]
+dir = "clients/matlab"
+
+[targets.nim]
+dir = "clients/nim"
+
+[targets.nodejs]
+dir = "clients/ts"
+adapter = "node"
+
+[targets.ocaml]
+dir = "clients/ocaml"
+
+[targets.php]
+dir = "clients/php"
+
+[targets.powershell]
+dir = "clients/powershell"
+
+[targets.python]
+dir = "clients/python"
+
+[targets.r]
+dir = "clients/r"
+
+[targets.ruby]
+dir = "clients/ruby"
+
+[targets.rust]
+dir = "clients/rust"
+
+[targets.rust-wasm]
+dir = "clients/rust-wasm"
+
+[targets.scala]
+dir = "clients/scala"
+adapter = "java"
+
+[targets.swift]
+dir = "clients/swift"
+
+[targets.zig]
+dir = "clients/zig"
