@@ -125,6 +125,25 @@ node runtime does not expose them yet.
 | `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
 | `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
+### Secrets — client convenience over the encrypted config KV
+End-user secrets are ordinary config-KV entries under the reserved `secret/`
+keyspace, always written with `plaintext:false` so the cluster encrypts them at
+rest (requires KV protection to be configured). The client enforces **write-only
+ergonomics**: `secretList` returns names + metadata only, stripping every value
+and the `secret/` prefix, so a value is exposed *solely* through the explicit
+`secretReveal`. These are not new endpoints — they map onto `/v1/kv`.
+
+| Method | Endpoint | Body | Returns |
+|--------|----------|------|---------|
+| `secretPut(name, value, {ttlMs, prevRevision})` | `PUT /v1/kv?key=secret/{name}` | `{value, ttl_ms, prev_revision, plaintext:false}` | `{committed, result}` |
+| `secretReveal(name)` | `GET /v1/kv?key=secret/{name}` | — | `{key, found, entry}` (decrypted value) |
+| `secretList(prefix?)` | `GET /v1/kv?prefix=secret/{prefix}` | — | `{prefix, count, secrets:[{name, modRevision, ...}]}` (no values) |
+| `secretDelete(name)` | `DELETE /v1/kv?key=secret/{name}` | — | `{committed, result}` |
+
+Available in the local-first trio (TypeScript, Dart, native Rust). The thin
+generated clients (Python, Go, rust-wasm) expose the underlying `kv*` operations
+and can compose the same convention.
+
 ### Counters — live
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|

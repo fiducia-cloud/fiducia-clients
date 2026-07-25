@@ -1159,6 +1159,49 @@ impl FiduciaClient {
         self.request("GET", &format!("/v1/kv?prefix={}", enc(prefix)), None)
     }
 
+    // --- secrets (write-only ergonomics over the encrypted config KV) ---
+    // Secrets live under the reserved "secret/" keyspace and are ALWAYS stored
+    // with at-rest encryption (never plaintext). `secret_list` returns names +
+    // metadata only; a value is exposed solely through `secret_reveal`. This
+    // requires the cluster to have KV protection configured.
+    pub fn secret_put(
+        &self,
+        name: &str,
+        value: &str,
+        ttl_ms: Option<u64>,
+        prev_revision: Option<u64>,
+    ) -> Result<Value, Error> {
+        let key = secret_key(name)?;
+        self.request(
+            "PUT",
+            &format!("/v1/kv?key={}", enc(&key)),
+            Some(json!({
+                "value": value,
+                "ttl_ms": ttl_ms,
+                "prev_revision": prev_revision,
+                "plaintext": false,
+            })),
+        )
+    }
+    /// Explicitly read (reveal) a secret's decrypted value.
+    pub fn secret_reveal(&self, name: &str) -> Result<Value, Error> {
+        let key = secret_key(name)?;
+        self.request("GET", &format!("/v1/kv?key={}", enc(&key)), None)
+    }
+    pub fn secret_delete(&self, name: &str) -> Result<Value, Error> {
+        let key = secret_key(name)?;
+        self.request("DELETE", &format!("/v1/kv?key={}", enc(&key)), None)
+    }
+    /// List secret names + metadata under an optional sub-prefix; never values.
+    pub fn secret_list(&self, prefix: &str) -> Result<Value, Error> {
+        let raw = self.request(
+            "GET",
+            &format!("/v1/kv?prefix={}", enc(&format!("secret/{prefix}"))),
+            None,
+        )?;
+        Ok(strip_secret_values(raw))
+    }
+
     // --- counters ---
     /// Read a counter's current value and revision. An absent counter reports
     /// `found: false`; callers treat that as value 0.
@@ -1867,6 +1910,35 @@ impl FiduciaClient {
 }
 
 /// Percent-encode a single path segment (unreserved chars pass through).
+/// The reserved key for a named secret; rejects an empty name.
+fn secret_key(name: &str) -> Result<String, Error> {
+    if name.is_empty() {
+        return Err(Error::Transport(
+            "secret name must be non-empty".to_string(),
+        ));
+    }
+    Ok(format!("secret/{name}"))
+}
+
+/// Enforce write-only listing: drop every `value`, strip the `secret/` prefix
+/// into a `name` field, so a `secret_list` response can never leak a value.
+fn strip_secret_values(mut raw: Value) -> Value {
+    if let Some(keys) = raw.get_mut("keys").and_then(Value::as_array_mut) {
+        for item in keys.iter_mut() {
+            if let Some(obj) = item.as_object_mut() {
+                obj.remove("value");
+                if let Some(Value::String(key)) = obj.get("key") {
+                    if let Some(stripped) = key.strip_prefix("secret/") {
+                        let name = Value::String(stripped.to_string());
+                        obj.insert("name".to_string(), name);
+                    }
+                }
+            }
+        }
+    }
+    raw
+}
+
 fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -1905,6 +1977,30 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver};
     use std::sync::Arc;
+
+    #[test]
+    fn secret_key_namespaces_and_rejects_empty() {
+        assert_eq!(secret_key("api-key").unwrap(), "secret/api-key");
+        assert_eq!(secret_key("db/password").unwrap(), "secret/db/password");
+        assert!(matches!(secret_key(""), Err(Error::Transport(_))));
+    }
+
+    #[test]
+    fn strip_secret_values_never_leaks_a_value() {
+        let raw = json!({
+            "prefix": "secret/",
+            "count": 1,
+            "keys": [
+                { "key": "secret/api-key", "value": "LEAK", "mod_revision": 2 }
+            ]
+        });
+        let stripped = strip_secret_values(raw);
+        let item = &stripped["keys"][0];
+        assert_eq!(item.get("value"), None, "list must never expose a value");
+        assert_eq!(item["name"], "api-key");
+        assert_eq!(item["mod_revision"], 2);
+        assert!(!stripped.to_string().contains("LEAK"));
+    }
 
     #[derive(Debug)]
     struct RecordedRequest {

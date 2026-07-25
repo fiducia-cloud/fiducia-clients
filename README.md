@@ -158,6 +158,14 @@ await c.kvPut("flags/new-ui", "on", {
 });
 const v = await c.kvGet("flags/new-ui");
 
+// secrets — write-only ergonomics over the encrypted config KV. Stored under
+// the reserved "secret/" keyspace, ALWAYS encrypted at rest. List returns names
+// + metadata only; a value is exposed solely through the explicit reveal.
+await c.secretPut("stripe/api-key", "sk-live-…", { prevRevision: 0 });
+const { secrets } = await c.secretList();     // [{ name, modRevision, ... }] — no values
+const revealed = await c.secretReveal("stripe/api-key");
+await c.secretDelete("stripe/api-key");
+
 // leader election
 const campaign = await c.electionCampaign("prod/invoice-reconciler/leader", "pod-a", 15000, {
   metadata: {

@@ -458,15 +458,84 @@ class FiduciaClient {
   // --- config KV ---
   Future<dynamic> kvGet(String key) =>
       _request('GET', '/v1/kv?key=${_enc(key)}');
-  Future<dynamic> kvPut(String key, String value, {int? ttlMs}) => _request(
-        'PUT',
-        '/v1/kv?key=${_enc(key)}',
-        {'value': value, 'ttl_ms': ttlMs},
-      );
+
+  /// Write a config key. `prevRevision` is a compare-and-swap guard
+  /// (0 = must-not-exist). `plaintext: true` explicitly opts the value out of
+  /// cluster-side at-rest encryption; leave it null/false for protected values.
+  Future<dynamic> kvPut(
+    String key,
+    String value, {
+    int? ttlMs,
+    int? prevRevision,
+    bool? plaintext,
+  }) =>
+      _request('PUT', '/v1/kv?key=${_enc(key)}', {
+        'value': value,
+        'ttl_ms': ttlMs,
+        'prev_revision': prevRevision,
+        'plaintext': plaintext,
+      });
   Future<dynamic> kvDelete(String key) =>
       _request('DELETE', '/v1/kv?key=${_enc(key)}');
   Future<dynamic> kvList(String prefix) =>
       _request('GET', '/v1/kv?prefix=${_enc(prefix)}');
+
+  // --- secrets (write-only ergonomics over the encrypted config KV) ---
+  // Secrets live under the reserved "secret/" keyspace and are ALWAYS stored
+  // with at-rest encryption (never plaintext). secretList returns names +
+  // metadata only; a value is exposed solely through the explicit secretReveal.
+  // Requires the cluster to have KV protection configured.
+  String _secretKey(String name) {
+    if (name.isEmpty) {
+      throw ArgumentError.value(name, 'name', 'secret name must be non-empty');
+    }
+    return 'secret/$name';
+  }
+
+  Future<dynamic> secretPut(
+    String name,
+    String value, {
+    int? ttlMs,
+    int? prevRevision,
+  }) =>
+      _request('PUT', '/v1/kv?key=${_enc(_secretKey(name))}', {
+        'value': value,
+        'ttl_ms': ttlMs,
+        'prev_revision': prevRevision,
+        'plaintext': false,
+      });
+
+  /// Explicitly read (reveal) a secret's decrypted value.
+  Future<dynamic> secretReveal(String name) =>
+      _request('GET', '/v1/kv?key=${_enc(_secretKey(name))}');
+
+  Future<dynamic> secretDelete(String name) =>
+      _request('DELETE', '/v1/kv?key=${_enc(_secretKey(name))}');
+
+  /// List secret names + metadata under an optional sub-prefix; never values.
+  Future<Map<String, dynamic>> secretList([String prefix = '']) async {
+    final res = await _request('GET', '/v1/kv?prefix=${_enc('secret/$prefix')}');
+    final keys = (res is Map && res['keys'] is List)
+        ? res['keys'] as List
+        : const [];
+    return {
+      'prefix': prefix,
+      'count': keys.length,
+      'secrets': [
+        for (final item in keys)
+          if (item is Map)
+            {
+              'name': (item['key'] is String &&
+                      (item['key'] as String).startsWith('secret/'))
+                  ? (item['key'] as String).substring('secret/'.length)
+                  : item['key'],
+              'mod_revision': item['mod_revision'],
+              'expires_at_ms': item['expires_at_ms'],
+              'protection': item['protection'],
+            },
+      ],
+    };
+  }
 
   // --- leader election ---
   Future<dynamic> electionCampaign(String name, String candidate, int ttlMs) =>
