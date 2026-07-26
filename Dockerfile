@@ -16,7 +16,7 @@ ENV HOME=/home/ci \
     GOTOOLCHAIN=local \
     PATH=/usr/local/go/bin:${PATH}
 USER 10001:10001
-ARG INTERFACES_REF=6e20a3f4df2e52b99a0ad6add83d4528262b5dbc
+ARG INTERFACES_REF=2c5c806174e067fbe83ad48b724366323ba390a2
 RUN git init /fiducia-interfaces \
     && git -C /fiducia-interfaces remote add origin https://github.com/fiducia-cloud/fiducia-interfaces.git \
     && git -C /fiducia-interfaces fetch --depth 1 origin "$INTERFACES_REF" \
