@@ -2,7 +2,7 @@ name: Zed-Pkg Validation
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -11,9 +11,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
       - name: Validate Zed Manifests
         run: |
-          echo "Simulating zed pkg validation..."
-          echo "Found workspace members in root:"
-          cat .zpkg.toml
-          echo "Validation and dry run complete."
+          python -c '
+          import os
+          import tomllib
+          import sys
+
+          success = True
+          for root, dirs, files in os.walk("."):
+              # Skip build directories or .git
+              if any(skip in root for skip in [".git", "target", "node_modules", ".claude", "tmp"]):
+                  continue
+              if ".zpkg.toml" in files:
+                  path = os.path.join(root, ".zpkg.toml")
+                  print(f"Validating {path}...")
+                  try:
+                      with open(path, "rb") as f:
+                          data = tomllib.load(f)
+                      
+                      if "package" not in data and "workspace" not in data:
+                          print(f"  Error: {path} is missing [package] or [workspace]")
+                          success = False
+                          
+                      if "package" in data:
+                          pkg = data["package"]
+                          if not all(k in pkg for k in ("org", "name", "version")):
+                              print(f"  Error: {path} [package] is missing org, name, or version")
+                              success = False
+                          else:
+                              print(f"  Package OK: {pkg[\"org\"]}/{pkg[\"name\"]} v{pkg[\"version\"]}")
+
+                      if "workspace" in data:
+                          ws = data["workspace"]
+                          if "members" not in ws:
+                              print(f"  Error: {path} [workspace] is missing members")
+                              success = False
+                          else:
+                              print(f"  Workspace OK: members={ws[\"members\"]}")
+
+                  except Exception as e:
+                      print(f"  Error parsing {path}: {e}")
+                      success = False
+
+          if not success:
+              sys.exit(1)
+          print("\nAll manifests are structurally valid.")
+          '
