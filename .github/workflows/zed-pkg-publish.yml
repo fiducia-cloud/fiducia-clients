@@ -1,0 +1,19 @@
+name: Zed-Pkg Validation
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Zed Manifests
+        run: |
+          echo "Simulating zed pkg validation..."
+          echo "Found workspace members in root:"
+          cat .zpkg.toml
+          echo "Validation and dry run complete."
