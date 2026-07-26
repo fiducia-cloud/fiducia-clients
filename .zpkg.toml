@@ -13,8 +13,15 @@ url = "https://github.com/fiducia-cloud/fiducia-clients"
 [publish]
 include_readme = true
 tag_format = "v{version}"
+exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", "tmp/**", "**/*.log", ".DS_Store"]
 
-# Convention: each target publishes as fiducia-clients-<target>.
+# The repository target publishes the complete multi-language source snapshot.
+# Every other target is re-rooted and published as one isolated language package.
+[targets.repository]
+dir = "."
+name = "fiducia-clients-repository"
+
+# Convention: each language target publishes as fiducia-clients-<target>.
 # Explicit names freeze public names where the source directory differs.
 [targets.nodejs]
 dir = "clients/ts"
