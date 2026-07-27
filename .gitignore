@@ -71,3 +71,4 @@ Thumbs.db
 .direnv/
 **/.gradle/
 .zed/
+.zed-pack/
