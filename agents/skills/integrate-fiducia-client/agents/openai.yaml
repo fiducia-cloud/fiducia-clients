@@ -1,0 +1,4 @@
+interface:
+  display_name: "Integrate Fiducia Client"
+  short_description: "Add Fiducia coordination to an application"
+  default_prompt: "Use $integrate-fiducia-client to integrate the right Fiducia SDK safely."

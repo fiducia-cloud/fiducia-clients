@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Fiducia Clients"
+  short_description: "Preserve Fiducia polyglot contract parity"
+  default_prompt: "Use $maintain-fiducia-clients to update Fiducia clients and prove contract parity."
