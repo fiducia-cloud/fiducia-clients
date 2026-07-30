@@ -364,6 +364,12 @@ func isIdempotentMethod(method string) bool {
 }
 
 func retryable(err error, replaySafe bool) bool {
+	var httpErr *Error
+	if errors.As(err, &httpErr) && explicitNotLeader(httpErr) {
+		// The server rejected this operation before applying it, so retrying the
+		// configured endpoint is safe even without an idempotency key.
+		return true
+	}
 	// Never retry a non-idempotent mutation that carries no idempotency key —
 	// replaying it could duplicate a committed-but-unacked effect.
 	// The caller must opt into the hosted gateway's replay ledger by supplying
@@ -374,7 +380,6 @@ func retryable(err error, replaySafe bool) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	var httpErr *Error
 	if errors.As(err, &httpErr) {
 		switch httpErr.Status {
 		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests,
@@ -386,6 +391,23 @@ func retryable(err error, replaySafe bool) bool {
 		}
 	}
 	return true
+}
+
+func explicitNotLeader(err *Error) bool {
+	if err == nil || err.Status != http.StatusServiceUnavailable {
+		return false
+	}
+	retryable, _ := err.Body["retryable"].(bool)
+	if code, _ := err.Body["error"].(string); code == "not_leader" {
+		return retryable
+	}
+	nested, _ := err.Body["error"].(map[string]any)
+	code, _ := nested["code"].(string)
+	if code == "" {
+		code, _ = nested["reason"].(string)
+	}
+	retryable, _ = nested["retryable"].(bool)
+	return code == "not_leader" && retryable
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

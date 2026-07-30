@@ -258,6 +258,15 @@ class FiduciaClient:
         return self.retry_delay or 0
 
     def _retryable(self, exc, replay_safe):
+        if isinstance(exc, FiduciaError) and exc.status == 503:
+            body = exc.body if isinstance(exc.body, dict) else {}
+            nested = body.get("error") if isinstance(body.get("error"), dict) else {}
+            if ((body.get("error") == "not_leader" and body.get("retryable") is True)
+                    or (nested.get("code", nested.get("reason")) == "not_leader"
+                        and nested.get("retryable") is True)):
+                # The server rejected this operation before applying it. Retrying
+                # the configured endpoint is therefore safe without a replay key.
+                return True
         # Never retry a non-idempotent mutation that carries no idempotency key —
         # replaying it could duplicate a committed-but-unacked effect. The
         # caller must explicitly opt into the hosted gateway replay ledger.
