@@ -14,13 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out package source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: source
           persist-credentials: false
 
       - name: Check out pinned zed CLI
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-cli
           ref: cc1a8fbb203070ccfa09f32e38bff5818fd3675b
@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out pinned zed interfaces
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-interfaces
           ref: 90534dd8468d98281356f2767f1a0b498598f868
