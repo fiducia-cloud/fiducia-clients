@@ -4,7 +4,7 @@ name = "fiducia-client-wasm"
 version = "0.1.0"
 edition = "2021"
 description = "Fiducia HTTP client compiled to WebAssembly (browser fetch transport)."
-license-file = "../rust/LICENSE.txt"
+license-file = "LICENSE.txt"
 repository = "https://github.com/fiducia-cloud/fiducia-clients"
 include = ["Cargo.toml", "src/**"]
 
