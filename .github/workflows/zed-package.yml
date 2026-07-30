@@ -1,9 +1,18 @@
 name: Zed package interoperability
 
+# Verifies the per-language publish model on every push, and publishes on a tag.
+#
+# One repo, one version, N packages: each language subtree is packed as its own
+# artifact named `<package.name>-<target>`, re-rooted at that subtree, carrying
+# its native package-manager manifest and a derived `.zpkg.toml` that declares
+# which language and ecosystem it is for. That last part is what lets a consumer
+# install refuse a `-java` client in a Node project.
+
 on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -18,12 +27,16 @@ jobs:
         with:
           path: source
           persist-credentials: false
+          fetch-depth: 0
 
+      # NOTE: these pins must be bumped to a commit that includes the
+      # language/ecosystem manifest fields and the go/python/rust/dart adapters,
+      # otherwise `[targets.*].adapter = "go"` fails manifest validation.
       - name: Check out pinned zed CLI
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: zed-pkg/zed-cli
-          ref: cc1a8fbb203070ccfa09f32e38bff5818fd3675b
+          ref: main
           path: zed-cli
           persist-credentials: false
 
@@ -31,7 +44,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: zed-pkg/zed-interfaces
-          ref: 90534dd8468d98281356f2767f1a0b498598f868
+          ref: main
           path: zed-interfaces
           persist-credentials: false
 
@@ -50,7 +63,7 @@ jobs:
         working-directory: source
         run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- pack --out "$ZED_PACK_OUT"
 
-      - name: Verify whole-repository and isolated language artifacts
+      - name: Verify one isolated, self-describing package per language
         working-directory: source
         run: |
           python3 - <<'PY'
@@ -70,8 +83,16 @@ jobs:
 
           package = manifest["package"]
           targets = manifest.get("targets", {})
-          assert "repository" in targets, "whole-repository target is required"
-          assert targets["repository"]["dir"] == ".", "repository target must package the repo root"
+          assert targets, "a clients repo must declare one target per language"
+
+          # No target may package the whole repo: a fat artifact holding every
+          # language is exactly what per-language packages exist to avoid, and
+          # being language-agnostic it would not be ecosystem-gated either.
+          for target, section in targets.items():
+              assert section["dir"].strip("./") not in ("", "."), (
+                  f"target `{target}` packages the repository root; "
+                  "every target must be re-rooted at one language subtree"
+              )
 
           expected = {}
           for target, section in targets.items():
@@ -97,9 +118,18 @@ jobs:
               expected_name = targets[target].get("name", f"{package['name']}-{target}")
               assert derived["package"]["name"] == expected_name
               assert not derived.get("targets"), f"{target} artifact is still polyglot"
+              # Each published package must state what it is for. Without this a
+              # consumer install has nothing to check, and a -java client can be
+              # dropped into a Node project with no complaint.
+              declared = derived["package"].get("language")
+              assert declared, (
+                  f"{target} artifact declares no language; consumers cannot be guarded"
+              )
+              assert derived["package"].get("ecosystem") or declared, (
+                  f"{target} artifact declares no ecosystem"
+              )
               archive_members[target] = names
 
-          repository_files = archive_members["repository"]
           native_manifests = {
               "nodejs": ["package.json"],
               "python": ["pyproject.toml", "setup.py"],
@@ -132,9 +162,8 @@ jobs:
               "powershell": ["*.psd1"],
           }
           for target, section in targets.items():
-              if target == "repository":
-                  continue
               source = root / section["dir"]
+              assert source.is_dir(), f"target `{target}` dir `{section['dir']}` is missing"
               patterns = native_manifests.get(target)
               if patterns:
                   native_files = sorted({
@@ -150,18 +179,51 @@ jobs:
                       f"pkg/{path.relative_to(source).as_posix()}" in archive_members[target]
                       for path in native_files
                   ), f"{target} artifact omitted its native package-manager manifest"
-              source_dir = section["dir"].strip("./")
-              prefix = f"pkg/{source_dir}/"
-              assert any(name.startswith(prefix) for name in repository_files), (
-                  f"repository artifact does not contain {target} at {section['dir']}"
-              )
+              # Re-rooted: the artifact must not still carry its own source path.
+              prefix = f"pkg/{section['dir'].strip('./')}/"
               assert not any(name.startswith(prefix) for name in archive_members[target]), (
                   f"{target} artifact was not re-rooted"
               )
 
-          print(f"verified {len(expected)} zed artifacts: repository + {len(expected) - 1} language targets")
+          # The decisive property: no artifact carries another language's source.
+          # This is what makes "a Java consumer downloads Java bytes only" true
+          # rather than aspirational.
+          for target, names in archive_members.items():
+              own = pathlib.PurePosixPath(targets[target]["dir"].strip("./"))
+              for other, section in targets.items():
+                  if other == target:
+                      continue
+                  other_dir = pathlib.PurePosixPath(section["dir"].strip("./"))
+                  # Skip nested layouts where one target legitimately contains
+                  # another (none today, but do not false-alarm if that changes).
+                  if own in other_dir.parents or other_dir in own.parents:
+                      continue
+                  leaked = [n for n in names if f"/{other_dir.name}/" in f"/{n}/"
+                            and other_dir.name != own.name]
+                  assert not leaked, (
+                      f"{target} artifact leaked {other} source: {leaked[:3]}"
+                  )
+
+          print(
+              f"verified {len(expected)} isolated language artifacts, "
+              "each self-describing and free of other languages' source"
+          )
           PY
 
       - name: Exercise publish planning without uploading
         working-directory: source
         run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- publish --dry-run --skip-vcs-checks
+
+      # A tag is the release trigger: `zed publish` verifies the tag exists and
+      # points at this commit, then uploads one artifact per language.
+      - name: Publish every language package
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: source
+        env:
+          ZED_PKG_TOKEN: ${{ secrets.ZED_PKG_TOKEN }}
+        run: |
+          if [ -z "$ZED_PKG_TOKEN" ]; then
+            echo "::error::ZED_PKG_TOKEN is not set; cannot publish"
+            exit 1
+          fi
+          cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- publish

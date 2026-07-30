@@ -15,31 +15,36 @@ include_readme = true
 tag_format = "v{version}"
 exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", "tmp/**", "**/*.log", ".DS_Store"]
 
-# The repository target publishes the complete multi-language source snapshot.
-# Every other target is re-rooted and published as one isolated language package.
-[targets.repository]
-dir = "."
-name = "fiducia-clients-repository"
 
-# Convention: each language target publishes as fiducia-clients-<target>.
-# Explicit names freeze public names where the source directory differs.
+# One target per language subtree. `zed publish` fans this out to one
+# independently installable package each, named `<package.name>-<target>`, so a
+# consumer downloads only the language it can build against -- and the ecosystem
+# recorded in every artifact stops it installing anywhere else.
+#
+# Target keys are the colloquial language names so published package names read
+# the way people search for them; project inference matches them through
+# language synonyms (a `package.json` project resolves `nodejs`, `go.mod`
+# resolves `golang`).
+
 [targets.nodejs]
 dir = "clients/ts"
-name = "fiducia-clients-nodejs"
 adapter = "node"
 
 [targets.python]
 dir = "clients/python"
+adapter = "python"
 
 [targets.golang]
 dir = "clients/go"
-name = "fiducia-clients-golang"
+adapter = "go"
 
 [targets.rust]
 dir = "clients/rust"
+adapter = "rust"
 
 [targets.rust-wasm]
 dir = "clients/rust-wasm"
+adapter = "node"
 
 [targets.java]
 dir = "clients/java"
@@ -62,6 +67,7 @@ dir = "clients/powershell"
 
 [targets.dart]
 dir = "clients/dart"
+adapter = "dart"
 
 [targets.elixir]
 dir = "clients/elixir"
