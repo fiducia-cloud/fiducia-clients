@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-interfaces
-          ref: c36e0e71bbdb6f3694e580d8df1d53a76920175e
+          ref: 8d81220bba8ef726ea4a13fb4baa884b6c13a75f
           path: zed-interfaces
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
