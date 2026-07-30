@@ -115,7 +115,7 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - working-directory: fiducia-clients/clients/rust
         run: cargo test --all-targets --all-features --locked
-      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-audit@0.22.2
       - working-directory: fiducia-clients/clients/rust
@@ -146,10 +146,10 @@ jobs:
         with:
           workspaces: clients/rust-wasm
       # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
-      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: wasm-pack@0.15.0
-      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-audit@0.22.2
       # compile gate
