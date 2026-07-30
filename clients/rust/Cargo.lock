@@ -219,7 +219,7 @@ dependencies = [
 [[package]]
 name = "fiducia-interfaces"
 version = "0.1.0"
-source = "git+https://github.com/fiducia-cloud/fiducia-interfaces.git?rev=bd718cd72d72aa330534f3688f8fb1ce90c19d10#bd718cd72d72aa330534f3688f8fb1ce90c19d10"
+source = "git+https://github.com/fiducia-cloud/fiducia-interfaces.git?rev=ee8fe09f846f5a776d156c0b0d0d15582c8bd539#ee8fe09f846f5a776d156c0b0d0d15582c8bd539"
 dependencies = [
  "jsonschema",
  "serde",

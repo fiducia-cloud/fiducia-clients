@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
-          ref: 22c36ef603e8e7bd8695583990da5454c73ad8f9
+          ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
       - uses: actions/setup-python@v5
         with:
@@ -68,12 +68,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
-          ref: 22c36ef603e8e7bd8695583990da5454c73ad8f9
+          ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-interfaces
-          ref: 8d81220bba8ef726ea4a13fb4baa884b6c13a75f
+          ref: 07d01604461d00e237c7d86ad3855464167574ec
           path: zed-interfaces
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
