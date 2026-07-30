@@ -53,7 +53,8 @@ python3 generate.py --check
 (cd clients/ts && npm ci --ignore-scripts && npm test && npm run typecheck && npm audit --audit-level=high)
 (cd clients/go && go test ./...)
 (cd clients/rust && cargo fmt --all -- --check && cargo clippy --locked --all-targets --all-features -- -D warnings && cargo test --all-targets --all-features --locked)
-(cd clients/python && PYTHONDONTWRITEBYTECODE=1 python -m unittest fiducia_test.py)
+(cd clients/python && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest fiducia_test.py)
+(cd clients/dart && dart pub get && dart format --output=none --set-exit-if-changed . && dart analyze && dart run fiducia_sync_test.dart && dart run fiducia_secrets_test.dart)
 ```
 
 Run the affected `clients/<language>/publish.sh --dry-run` and the repository's

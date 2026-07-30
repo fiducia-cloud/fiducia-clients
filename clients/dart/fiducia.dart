@@ -514,10 +514,10 @@ class FiduciaClient {
 
   /// List secret names + metadata under an optional sub-prefix; never values.
   Future<Map<String, dynamic>> secretList([String prefix = '']) async {
-    final res = await _request('GET', '/v1/kv?prefix=${_enc('secret/$prefix')}');
-    final keys = (res is Map && res['keys'] is List)
-        ? res['keys'] as List
-        : const [];
+    final res =
+        await _request('GET', '/v1/kv?prefix=${_enc('secret/$prefix')}');
+    final keys =
+        (res is Map && res['keys'] is List) ? res['keys'] as List : const [];
     return {
       'prefix': prefix,
       'count': keys.length,
