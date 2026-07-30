@@ -16,4 +16,4 @@ uuid = { version = "1", features = ["v4"] }
 
 # Shared, generated payload/error contract — re-exported as `types` so callers
 # can deserialize responses into typed structs instead of poking at `Value`.
-fiducia-interfaces = { version = "0.1.0", git = "https://github.com/fiducia-cloud/fiducia-interfaces.git", rev = "bd718cd72d72aa330534f3688f8fb1ce90c19d10" }
+fiducia-interfaces = { version = "0.1.0", git = "https://github.com/fiducia-cloud/fiducia-interfaces.git", rev = "ee8fe09f846f5a776d156c0b0d0d15582c8bd539" }
