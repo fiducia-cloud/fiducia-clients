@@ -27,6 +27,23 @@ pub enum Error {
     Transport(String),
 }
 
+fn explicit_not_leader(body: Option<&Value>) -> bool {
+    let Some(body) = body else {
+        return false;
+    };
+    if body.get("error").and_then(Value::as_str) == Some("not_leader") {
+        return body.get("retryable").and_then(Value::as_bool) == Some(true);
+    }
+    let Some(error) = body.get("error").and_then(Value::as_object) else {
+        return false;
+    };
+    let reason = error
+        .get("reason")
+        .or_else(|| error.get("code"))
+        .and_then(Value::as_str);
+    reason == Some("not_leader") && error.get("retryable").and_then(Value::as_bool) == Some(true)
+}
+
 fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
     let mut header = HeaderValue::from_str(value)
         .map_err(|err| Error::Transport(format!("invalid sensitive request header: {err}")))?;
@@ -422,18 +439,23 @@ impl FiduciaClient {
             .or(self.request_timeout)
     }
 
-    /// Whether `err` may be retried. `429` and `503` mean the server rejected the
-    /// request before applying it, so re-sending is always safe. Every other
-    /// retryable status (`408/425/500/502/504`) and any transport failure can
-    /// occur *after* the server applied a mutation, so re-sending is only safe
-    /// when the caller supplied an idempotency key for the server to dedup on.
+    /// Whether `err` may be retried. `429` and an explicitly marked
+    /// `503 not_leader` mean the server rejected the request before applying it,
+    /// so re-sending is safe. An ordinary 503, every other retryable status
+    /// (`408/425/500/502/504`), and transport failures may occur *after* the
+    /// server applied a mutation, so re-sending is only safe when the caller
+    /// supplied an idempotency key for the server to deduplicate on.
     fn retryable(err: &Error, has_idempotency: bool) -> bool {
         match err {
-            Error::Http { status, .. } => match *status {
-                429 | 503 => true,
-                408 | 425 | 500 | 502 | 504 => has_idempotency,
-                _ => false,
-            },
+            Error::Http { status, body } => {
+                if *status == 429 {
+                    return true;
+                }
+                if *status == 503 && explicit_not_leader(body.as_ref()) {
+                    return true;
+                }
+                matches!(*status, 408 | 425 | 500 | 502 | 503 | 504) && has_idempotency
+            }
             Error::Transport(_) => has_idempotency,
         }
     }
@@ -2143,7 +2165,7 @@ mod tests {
 
     /// A server that always answers `status`, counting the requests it received.
     /// Used to observe whether a failed request is retried.
-    fn erroring_server(status: u16) -> (String, Arc<AtomicUsize>) {
+    fn erroring_server(status: u16, body: &'static str) -> (String, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let hits = Arc::new(AtomicUsize::new(0));
@@ -2178,7 +2200,8 @@ mod tests {
                 }
                 counter.fetch_add(1, Ordering::SeqCst);
                 let resp = format!(
-                    "HTTP/1.1 {status} STATUS\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{{\"ok\":true}}"
+                    "HTTP/1.1 {status} STATUS\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
                 );
                 let _ = stream.write_all(resp.as_bytes());
             }
@@ -2415,12 +2438,16 @@ mod tests {
         // A node lock grant deserializes into the shared `LockGrant` type, and a
         // NotLeader error into the shared `ProposeError` — so the client speaks the
         // same contract the node emits (no per-client payload definitions).
-        let err: types::ProposeError = serde_json::from_value(
-            json!({ "reason": "not_leader", "shard": 7, "leader": "http://leader-a:8090" }),
-        )
+        let err: types::ProposeError = serde_json::from_value(json!({
+            "reason": "not_leader",
+            "shard": 7,
+            "leader": "http://leader-a:8090",
+            "retryable": true
+        }))
         .unwrap();
         assert!(matches!(err.reason, types::ProposeErrorReason::NotLeader));
         assert_eq!(err.leader.as_deref(), Some("http://leader-a:8090"));
+        assert_eq!(err.retryable, Some(true));
 
         let kv: types::KvEntry =
             serde_json::from_value(json!({ "value": "on", "mod_revision": 9 })).unwrap();
@@ -3235,23 +3262,39 @@ mod tests {
     fn non_idempotent_mutation_is_only_retried_when_safe() {
         // A keyless mutation that fails with 500 must NOT be retried: the server
         // may already have applied it, and a re-send would double-apply.
-        let (base, hits) = erroring_server(500);
+        let (base, hits) = erroring_server(500, r#"{"ok":true}"#);
         let mut client = FiduciaClient::new(&base);
         client.retry_max = 1;
         assert!(client.counter_add("counters/add", 1, None).is_err());
         assert_eq!(hits.load(Ordering::SeqCst), 1, "500 keyless must not retry");
 
-        // The same keyless mutation IS retried on 503: the server provably did
-        // not apply it, so re-sending is safe.
-        let (base, hits) = erroring_server(503);
+        // An unmarked 503 is ambiguous and must not replay a keyless mutation.
+        let (base, hits) = erroring_server(503, r#"{"error":"unavailable"}"#);
         let mut client = FiduciaClient::new(&base);
         client.retry_max = 1;
         assert!(client.counter_add("counters/add", 1, None).is_err());
-        assert_eq!(hits.load(Ordering::SeqCst), 2, "503 keyless must retry");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "unmarked 503 keyless must not retry"
+        );
+
+        // A marked not-leader response proves the mutation was rejected before
+        // application and is therefore safe to retry without a replay key.
+        let (base, hits) =
+            erroring_server(503, r#"{"error":{"reason":"not_leader","retryable":true}}"#);
+        let mut client = FiduciaClient::new(&base);
+        client.retry_max = 1;
+        assert!(client.counter_add("counters/add", 1, None).is_err());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "marked not-leader keyless must retry"
+        );
 
         // With an idempotency key the server can dedup a re-send, so even 500 is
         // retried.
-        let (base, hits) = erroring_server(500);
+        let (base, hits) = erroring_server(500, r#"{"ok":true}"#);
         let mut client = FiduciaClient::new(&base);
         client.retry_max = 1;
         let control = RequestControl {

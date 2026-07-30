@@ -394,6 +394,17 @@ export class FiduciaClient {
 
   private retryable(err: unknown, signal: AbortSignal | undefined, method: string, idempotencyKey?: string): boolean {
     if (signal?.aborted) return false;
+    // A marked 503 means the contacted node rejected the operation before
+    // applying it because it was not the leader. Retrying the configured
+    // endpoint is safe even for a mutation without an idempotency key.
+    if (err instanceof FiduciaError && err.status === 503) {
+      const markedByHeader = err.headers?.get?.("x-fiducia-not-leader") === "true";
+      const markedByBody =
+        (err.body?.error === "not_leader" && err.body?.retryable === true)
+        || (["code", "reason"].some((key) => err.body?.error?.[key] === "not_leader")
+          && err.body?.error?.retryable === true);
+      if (markedByHeader || markedByBody) return true;
+    }
     // Never retry a non-idempotent mutation unless the caller explicitly opted
     // into a durable gateway replay ledger with one stable key. Direct nodes do
     // not consume the customer Idempotency-Key header.

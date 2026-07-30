@@ -121,7 +121,7 @@ node runtime does not expose them yet.
 | `kvGet(key)` | `GET /v1/kv?key=...` | — | `{key, found, entry}` |
 | `kvPut(key, value, {ttlMs, prevRevision})` | `PUT /v1/kv?key=...` | `{value, ttl_ms, prev_revision}` | `{committed, result}` |
 | `kvDelete(key)` | `DELETE /v1/kv?key=...` | — | `{committed, result}` |
-| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{prefix, entries}` |
+| `kvList(prefix)` | `GET /v1/kv?prefix=...` | — | `{prefix, count, keys}` |
 | `kvWatch(key)` | `GET /v1/kv?key=...&watch=true` | — | SSE stream |
 | `kvWatchPrefix(prefix)` | `GET /v1/kv?prefix=...&watch=true` | — | SSE stream |
 
@@ -382,5 +382,26 @@ rather than silently rounding.
 ## Errors
 
 Non-2xx responses carry a JSON body where possible. Clients surface the status
-code and parsed body; they do not retry by default (the edge/LB already handles
-leader redirects).
+code and parsed body. A node that cannot apply an operation because it is not
+the shard leader returns `503 Service Unavailable`, `Retry-After`, and an
+explicit `not_leader` error with `retryable:true`. It may include a trusted
+leader hint for the load balancer. It never emits an HTTP `Location` redirect:
+generic clients must retry their configured Fiducia endpoint and must not
+forward credentials to a server-selected authority.
+
+A marked `not_leader` response proves the operation was rejected before
+application, so a bounded retry is safe even for a mutation without an
+idempotency key. Transport errors and other ambiguous 5xx responses are
+different: mutation retries require a stable `Idempotency-Key` handled by the
+hosted edge/load-balancer replay ledger. Redirects remain hard errors.
+
+Coordination callers must also treat lease state as authority, not merely as
+convenience data:
+
+- renew before the lease expires and stop/cancel protected work immediately
+  when renewal fails or reports `renewed:false`;
+- consume committed mutation data from the mandatory `output` field;
+- distinguish contention from transport/not-leader failures instead of
+  treating every unsuccessful acquire as “busy”; and
+- use locks only for mutual exclusion—capacity reservations need a dedicated
+  reservation primitive with their own expiry and accounting.
