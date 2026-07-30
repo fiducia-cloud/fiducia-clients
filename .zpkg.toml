@@ -28,14 +28,30 @@ dir = "clients/ts"
 name = "fiducia-clients-nodejs"
 adapter = "node"
 
+[targets.nodejs.native]
+registry = "npm"
+package = "@fiducia/client"
+forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
+
 [targets.python]
 dir = "clients/python"
 adapter = "python"
+
+[targets.python.native]
+registry = "pypi"
+package = "fiducia-client"
+forge = ["gitlab-packages"]
 
 [targets.golang]
 dir = "clients/go"
 name = "fiducia-clients-golang"
 adapter = "go"
+
+[targets.golang.native]
+registry = "go-modules"
+package = "github.com/fiducia-cloud/fiducia-clients/clients/go"
+tag_format = "clients/go/v{version}"
+forge = ["gitlab-packages"]
 
 [targets.rust]
 dir = "clients/rust"
@@ -55,8 +71,18 @@ dir = "clients/csharp"
 [targets.ruby]
 dir = "clients/ruby"
 
+[targets.ruby.native]
+registry = "rubygems"
+package = "fiducia-client"
+forge = ["github-packages", "gitlab-packages"]
+
 [targets.php]
 dir = "clients/php"
+
+[targets.php.native]
+registry = "packagist"
+package = "fiducia/client"
+forge = ["gitlab-packages"]
 
 [targets.shell]
 dir = "clients/shell"
@@ -67,6 +93,10 @@ dir = "clients/powershell"
 [targets.dart]
 dir = "clients/dart"
 adapter = "dart"
+
+[targets.dart.native]
+registry = "pub.dev"
+package = "fiducia_client"
 
 [targets.elixir]
 dir = "clients/elixir"

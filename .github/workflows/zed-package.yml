@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-cli
-          ref: 4f220a989fcd628ec4d0eb8cefe53f149b0c9b4c
+          ref: fe2d3d682c4914d6e3e1d2d4f52817791d2588c9
           path: zed-cli
           persist-credentials: false
 
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-interfaces
-          ref: c36e0e71bbdb6f3694e580d8df1d53a76920175e
+          ref: 8d81220bba8ef726ea4a13fb4baa884b6c13a75f
           path: zed-interfaces
           persist-credentials: false
 
@@ -173,6 +173,10 @@ jobs:
 
           print(f"verified {len(expected)} zed artifacts: repository + {len(expected) - 1} language targets")
           PY
+
+      - name: Validate coordinated native and forge release plan
+        working-directory: source
+        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- release plan
 
       - name: Exercise publish planning without uploading
         working-directory: source
