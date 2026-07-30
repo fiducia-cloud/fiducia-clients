@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
+          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
           path: zed-cli
       - uses: actions/setup-python@v5
         with:
@@ -67,10 +68,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
+          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
           path: zed-cli
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-interfaces
+          ref: 61f654d5e4ca718abc4a280a641472466689c278
           path: zed-interfaces
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -178,7 +181,7 @@ jobs:
       - name: RubyGems would accept this gem
         if: matrix.ecosystem == 'rubygems'
         working-directory: ${{ steps.slice.outputs.dir }}
-        run: gem build *.gemspec
+        run: gem build ./*.gemspec
 
       - uses: actions/setup-java@v4
         if: matrix.ecosystem == 'maven'
