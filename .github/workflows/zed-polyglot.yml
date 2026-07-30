@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
-          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
+          ref: 4f220a989fcd628ec4d0eb8cefe53f149b0c9b4c
           path: zed-cli
       - uses: actions/setup-python@v5
         with:
@@ -68,12 +68,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-cli
-          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
+          ref: 4f220a989fcd628ec4d0eb8cefe53f149b0c9b4c
           path: zed-cli
       - uses: actions/checkout@v4
         with:
           repository: zed-pkg/zed-interfaces
-          ref: 61f654d5e4ca718abc4a280a641472466689c278
+          ref: 7a731361f8e49fe54cee078a35fcbf80e0906c3b
           path: zed-interfaces
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -143,14 +143,20 @@ jobs:
       - name: Unpack the ${{ matrix.target }} slice
         id: slice
         env:
-          ARTIFACT: ${{ matrix.artifact }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          tarball="slices/$ARTIFACT"
-          test -f "$tarball" || { echo "::error::missing artifact $ARTIFACT"; ls -1 slices; exit 1; }
+          shopt -s nullglob
+          matches=(slices/*-"$TARGET"-*.tar.gz)
+          if (( ${#matches[@]} != 1 )); then
+            echo "::error::expected exactly one packed artifact for target $TARGET; found ${#matches[@]}"
+            find slices -maxdepth 1 -type f -print
+            exit 1
+          fi
+          tarball="${matches[0]}"
           mkdir -p unpacked
           tar xzf "$tarball" -C unpacked
-          test -d unpacked/pkg || { echo "::error::$ARTIFACT has no pkg/ root"; exit 1; }
+          test -d unpacked/pkg || { echo "::error::$(basename "$tarball") has no pkg/ root"; exit 1; }
           echo "dir=unpacked/pkg" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4

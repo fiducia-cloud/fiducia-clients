@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-cli
-          ref: cc1a8fbb203070ccfa09f32e38bff5818fd3675b
+          ref: 4f220a989fcd628ec4d0eb8cefe53f149b0c9b4c
           path: zed-cli
           persist-credentials: false
 
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-interfaces
-          ref: 90534dd8468d98281356f2767f1a0b498598f868
+          ref: 7a731361f8e49fe54cee078a35fcbf80e0906c3b
           path: zed-interfaces
           persist-credentials: false
 
