@@ -1,0 +1,211 @@
+# Zed polyglot publish gate.
+#
+# This repo is one library in many languages. Every `[targets.*]` in
+# `.zpkg.toml` is published TWICE from a single commit at a single version:
+#
+#   * to zpkg.tech, as `<org>/<name>-<target>`   (one artifact per language)
+#   * to that language's own registry            (npm, PyPI, crates.io, …)
+#
+# Both publishes read the same re-rooted slice, so the two can never describe
+# different code. What they *can* do is describe different versions — the zed
+# manifest and the native manifest are separate files. That is what the parity
+# job below exists to prevent.
+#
+# Nothing here uploads anything: it packs, and it asks each ecosystem's own
+# tooling whether it would accept the slice. Real publishing happens from the
+# release workflow once a tag exists.
+name: zed-polyglot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  parity:
+    name: Manifest parity
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-cli
+          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
+          path: zed-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Prints the identity map: which native registry each language target
+      # lands in, and whether its native manifest agrees with .zpkg.toml on
+      # the version. Fails on drift.
+      - name: Every target agrees with its native manifest
+        run: python3 zed-cli/scripts/check-native-parity.py repo
+
+      - name: Build the native dry-run matrix
+        id: matrix
+        run: |
+          value=$(python3 zed-cli/scripts/check-native-parity.py repo --json)
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          # A repo whose every target is zpkg.tech-only yields an empty matrix,
+          # which GitHub rejects; skip the native job in that case.
+          count=$(printf '%s' "$value" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+  pack:
+    name: Fan out into one package per language
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-cli
+          ref: 2e180a49b43fb5a86b2957f9a62878c2d6e543a5
+          path: zed-cli
+      - uses: actions/checkout@v4
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: 61f654d5e4ca718abc4a280a641472466689c278
+          path: zed-interfaces
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zed-cli
+
+      - name: Build the zed CLI
+        run: cargo build --locked --bin zed
+        working-directory: zed-cli
+
+      # Structural validation: every declared target dir exists, no duplicate
+      # source roots or published names, no unsafe paths, no nested manifests.
+      - name: zed pack
+        working-directory: repo
+        run: ../zed-cli/target/debug/zed pack
+
+      - name: Each slice is isolated and carries its native manifest
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          for artifact in .zed/pack/*.tar.gz; do
+            echo "--- $(basename "$artifact")"
+            # awk rather than `head -20`: head exits early, which SIGPIPEs
+            # tar, which pipefail turns into a step failure on any slice with
+            # more than 20 files.
+            tar tzf "$artifact" | awk 'NR <= 20 { print "    " $0 }'
+            # Fan-out must not recurse: a language slice is single-language
+            # by construction, so it must never carry its own [targets].
+            if tar xzOf "$artifact" pkg/.zpkg.toml | grep -q '^\[targets\.'; then
+              echo "::error::$(basename "$artifact") carries a [targets] block; fan-out recursed"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: language-slices
+          path: repo/.zed/pack/*.tar.gz
+          if-no-files-found: error
+
+  # One job per language that has a native registry, asking that ecosystem's
+  # real tooling whether the packed slice is publishable as-is.
+  native:
+    name: ${{ matrix.target }} -> ${{ matrix.registry }}
+    needs: [parity, pack]
+    if: needs.parity.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.parity.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      # The published slice is re-rooted at the ecosystem's package root, so
+      # the native tool sees exactly what the registry would receive.
+      - name: Locate the ${{ matrix.target }} slice
+        id: slice
+        run: echo "dir=repo/${{ matrix.dir }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: matrix.ecosystem == 'npm'
+        with:
+          node-version: 22
+      - name: npm would accept this package
+        if: matrix.ecosystem == 'npm'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: npm pack --dry-run
+
+      - uses: actions/setup-python@v5
+        if: matrix.ecosystem == 'pypi'
+        with:
+          python-version: "3.12"
+      - name: PyPI would accept this distribution
+        if: matrix.ecosystem == 'pypi'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: |
+          pip install --quiet build twine
+          python -m build
+          twine check dist/*
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.ecosystem == 'cargo'
+      - name: crates.io would accept this crate
+        if: matrix.ecosystem == 'cargo'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: cargo package --allow-dirty
+
+      - uses: actions/setup-go@v5
+        if: matrix.ecosystem == 'go'
+        with:
+          go-version: "1.22"
+      - name: The Go module proxy would resolve this module
+        if: matrix.ecosystem == 'go'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: |
+          go build ./...
+          go vet ./...
+
+      - uses: ruby/setup-ruby@v1
+        if: matrix.ecosystem == 'rubygems'
+        with:
+          ruby-version: "3.3"
+      - name: RubyGems would accept this gem
+        if: matrix.ecosystem == 'rubygems'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: gem build ./*.gemspec
+
+      - uses: actions/setup-java@v4
+        if: matrix.ecosystem == 'maven'
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Maven Central would accept this artifact
+        if: matrix.ecosystem == 'maven'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: mvn -B -q package -DskipTests
+
+      - uses: dart-lang/setup-dart@v1
+        if: matrix.ecosystem == 'dart'
+      - name: pub.dev would accept this package
+        if: matrix.ecosystem == 'dart'
+        working-directory: ${{ steps.slice.outputs.dir }}
+        run: dart pub publish --dry-run
+
+      - name: Ecosystem has no cheap offline dry-run
+        if: >-
+          matrix.ecosystem != 'npm' && matrix.ecosystem != 'pypi' &&
+          matrix.ecosystem != 'cargo' && matrix.ecosystem != 'go' &&
+          matrix.ecosystem != 'rubygems' && matrix.ecosystem != 'maven' &&
+          matrix.ecosystem != 'dart'
+        run: |
+          echo "::notice::${{ matrix.target }} publishes to ${{ matrix.registry }} \
+          (${{ matrix.native }}); no dry-run wired up yet, so parity is the only gate."
