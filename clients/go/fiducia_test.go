@@ -285,6 +285,34 @@ func TestKeylessPostIsNotRetried(t *testing.T) {
 	}
 }
 
+func TestMarkedNotLeaderRetriesKeylessMutation(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("content-type", "application/json")
+		if calls == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.Header().Set("X-Fiducia-Not-Leader", "true")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(
+				`{"ok":false,"error":{"reason":"not_leader","retryable":true}}`,
+			))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := New(server.URL)
+	client.RetryMax = 1
+	if _, err := client.TryLock("orders/42", AcquireOpts{Holder: "worker-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("marked not-leader mutation should retry once: calls=%d", calls)
+	}
+}
+
 func TestRetryKeepsCallerKeyAndLeavesSafeOrSingleShotCallsKeyless(t *testing.T) {
 	var calls []struct {
 		method string

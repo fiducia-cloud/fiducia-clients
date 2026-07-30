@@ -385,8 +385,22 @@ function notLeaderFetch(calls: RecordedCall[], failFirst: number): typeof fetch 
     });
     if (seen++ < failFirst) {
       return new Response(
-        JSON.stringify({ error: { reason: "not_leader", message: "shard 3 leader moved" } }),
-        { status: 503, headers: { "content-type": "application/json" } },
+        JSON.stringify({
+          ok: false,
+          error: {
+            reason: "not_leader",
+            message: "shard 3 leader moved",
+            retryable: true,
+          },
+        }),
+        {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": "1",
+            "x-fiducia-not-leader": "true",
+          },
+        },
       );
     }
     return new Response(JSON.stringify({ ok: true }), {
@@ -411,6 +425,7 @@ test("not-leader responses surface status and parsed body per PROTOCOL.md", asyn
       assert.equal(err.status, 503);
       assert.equal((err.body as any)?.error?.reason, "not_leader");
       assert.equal((err.body as any)?.error?.message, "shard 3 leader moved");
+      assert.equal((err.body as any)?.error?.retryable, true);
       return true;
     },
   );
@@ -427,6 +442,21 @@ test("not-leader responses surface status and parsed body per PROTOCOL.md", asyn
   assert.equal(retryCalls.length, 2);
   assert.equal(retryCalls[0].path, "/v1/locks?key=orders%2F42");
   assert.equal(retryCalls[1].path, "/v1/locks?key=orders%2F42");
+
+  // A marked not-leader response proves the mutation was rejected before
+  // application, so the SDK may safely retry it without inventing a replay key.
+  const mutationCalls: RecordedCall[] = [];
+  const mutationClient = new FiduciaClient("https://fiducia.test", {
+    fetch: notLeaderFetch(mutationCalls, 1),
+    maxRetries: 1,
+  });
+  assert.deepEqual(
+    await mutationClient.tryLock("orders/42", { holder: "worker-a" }),
+    { ok: true },
+  );
+  assert.equal(mutationCalls.length, 2);
+  assert.equal(mutationCalls[0].method, "POST");
+  assert.equal(mutationCalls[1].method, "POST");
 });
 
 // A fetch that never answers but honors AbortSignal, like a hung connection.

@@ -232,6 +232,43 @@ class FiduciaPythonClientTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls, ["caller-key", "caller-key"])
 
+    def test_marked_not_leader_retries_keyless_mutation(self):
+        calls = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def moved_leader(req, timeout):
+            del timeout
+            calls.append(req.get_method())
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(
+                    req.full_url,
+                    503,
+                    "not leader",
+                    {"Retry-After": "1", "X-Fiducia-Not-Leader": "true"},
+                    io.BytesIO(
+                        b'{"ok":false,"error":{"reason":"not_leader",'
+                        b'"retryable":true}}'
+                    ),
+                )
+            return Response()
+
+        client = fiducia.FiduciaClient("https://fiducia.test", max_retries=1)
+        with unittest.mock.patch.object(fiducia, "_urlopen", moved_leader):
+            self.assertEqual(
+                client.try_lock("orders/42", holder="worker-a"),
+                {"ok": True},
+            )
+        self.assertEqual(calls, ["POST", "POST"])
+
     def test_sdk_sources_use_live_lock_semaphore_and_kv_routes(self):
         repo = pathlib.Path(__file__).resolve().parents[2]
         sources = [

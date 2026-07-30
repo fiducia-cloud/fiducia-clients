@@ -6,5 +6,9 @@ DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 publish_parse_mode "$@"
 cd "$DIR"
 publish_check_version Cargo.toml '^version'
-cargo package --locked
-[ "$PUBLISH_MODE" = dry-run ] || { cargo publish --locked; }
+cargo test --locked
+if [ "$PUBLISH_MODE" = release ]; then
+  printf '%s\n' \
+    'fiducia-client is zpkg-only until fiducia-interfaces is published to crates.io' >&2
+  exit 2
+fi

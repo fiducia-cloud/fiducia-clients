@@ -210,17 +210,20 @@ they never report a safe timeout while an ambiguous acquire could still commit.
 
 TypeScript, Python, and Go retry non-idempotent requests only when the caller
 supplies one stable `Idempotency-Key`; they never invent a header that could
-falsely imply replay safety at a direct node. That header is consumed by the
-hosted edge/load-balancer path. Callers pointed straight at a fiducia-node must
-rely on the primitive's documented idempotence or avoid ambiguous mutation
-retries because the node does not provide the customer HTTP-header replay
-ledger. Retrying GET/HEAD and single-shot mutations remain keyless.
-The Rust client never invents a customer key: ambiguous transport/5xx retries
-there require `RequestControl.idempotency_key` (broker-style `429`/`503`
-rejections remain retryable because the server rejected them before applying
-the operation). First-tier default transports also refuse HTTP redirects so a
-mutation and its credentials cannot be replayed to `Location`; injected custom
-Go/TypeScript transports must preserve that no-redirect policy themselves.
+falsely imply replay safety at a direct node. The sole keyless mutation-retry
+exception is an explicit `503 not_leader` response marked `retryable:true`,
+because the server rejected that operation before application. The hosted
+edge/load-balancer consumes customer idempotency keys. Callers pointed straight
+at a fiducia-node must otherwise avoid ambiguous mutation retries because the
+node does not provide the customer HTTP-header replay ledger. Retrying
+GET/HEAD and single-shot mutations remain keyless.
+The Rust client follows the same rule and never invents a customer key:
+ambiguous transport/5xx retries require `RequestControl.idempotency_key`, while
+explicit not-leader and rate-limit rejections remain retryable because the
+server did not apply the operation. First-tier default transports also refuse
+HTTP redirects so a mutation and its credentials cannot be replayed to
+`Location`; injected custom Go/TypeScript transports must preserve that
+no-redirect policy themselves.
 
 For the hosted B2B flow, each service replica registers itself, campaigns for a
 named role, renews before its lease expires, and stops leader-only work if renew
