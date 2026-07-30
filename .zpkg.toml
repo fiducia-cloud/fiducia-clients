@@ -30,16 +30,20 @@ adapter = "node"
 
 [targets.python]
 dir = "clients/python"
+adapter = "python"
 
 [targets.golang]
 dir = "clients/go"
 name = "fiducia-clients-golang"
+adapter = "go"
 
 [targets.rust]
 dir = "clients/rust"
+adapter = "rust"
 
 [targets.rust-wasm]
 dir = "clients/rust-wasm"
+adapter = "node"
 
 [targets.java]
 dir = "clients/java"
@@ -62,6 +66,7 @@ dir = "clients/powershell"
 
 [targets.dart]
 dir = "clients/dart"
+adapter = "dart"
 
 [targets.elixir]
 dir = "clients/elixir"

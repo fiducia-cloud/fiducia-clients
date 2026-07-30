@@ -97,6 +97,18 @@ jobs:
               expected_name = targets[target].get("name", f"{package['name']}-{target}")
               assert derived["package"]["name"] == expected_name
               assert not derived.get("targets"), f"{target} artifact is still polyglot"
+              # Every *language* slice must state what it is for, so a
+              # consumer install can refuse e.g. a jvm package in an npm-only
+              # project. The whole-repository target is language-agnostic by
+              # construction and is correctly left ungated.
+              if target != "repository":
+                  declared = derived["package"].get("language")
+                  assert declared, (
+                      f"{target} artifact declares no language; consumers cannot be guarded"
+                  )
+                  assert declared != "universal", (
+                      f"{target} artifact declares language `universal`; it must name its language"
+                  )
               archive_members[target] = names
 
           repository_files = archive_members["repository"]
