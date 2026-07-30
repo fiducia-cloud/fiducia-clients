@@ -6,6 +6,7 @@ edition = "2021"
 description = "HTTP client for fiducia.cloud."
 license-file = "LICENSE.txt"
 repository = "https://github.com/fiducia-cloud/fiducia-clients"
+publish = false
 include = ["Cargo.toml", "LICENSE.txt", "src/**"]
 
 [dependencies]
