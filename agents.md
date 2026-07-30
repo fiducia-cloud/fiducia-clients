@@ -25,11 +25,30 @@ Treat each skill as additional instructions, not a replacement for this file.
 - Preserve existing uncommitted work and stop for operator guidance if moving
   to `main` cannot be done safely.
 
+## GitHub and Linear coordination
+
+- GitHub organization: `fiducia-cloud`
+- Linear workspace/team: `denman` / `Denman` (`DEN`)
+- Linear team ID: `eb8ab169-5afe-4b6f-9cab-3f2aa3e887dc`
+- Linear project: `github.com/fiducia-cloud`
+- Linear project ID: `d9e89bd3-19da-47f3-9bf7-6dc8cc910b70`
+- Linear project URL:
+  `https://linear.app/denman/project/githubcomfiducia-cloud-8fd5e1bec9d3`
+
+Reuse a suitable issue in that project for issue-backed work instead of
+creating duplicates. Keep repository links, acceptance criteria, validation,
+status, and blockers current when Linear coordination is part of the task.
+Never commit Linear or GitHub credentials.
+
 ## Syncing with the remote
 
 "Sync with the remote" is a two-way exchange: pull the remote commits and push
 the local commits. A clean tree alone is not synchronized; local and remote must
 hold the same commits.
+
+When the operator asks to sync the whole organization or all repositories, this
+repository is only one member of that larger audit. Do not claim organization
+completion merely because this checkout is synchronized.
 
 1. Commit the intended work so the tree is clean.
 2. Run `git fetch --all --prune`.
