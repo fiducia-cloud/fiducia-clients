@@ -129,11 +129,29 @@ jobs:
         with:
           path: repo
 
-      # The published slice is re-rooted at the ecosystem's package root, so
-      # the native tool sees exactly what the registry would receive.
-      - name: Locate the ${{ matrix.target }} slice
+      # Run against the PACKED slice, not the source subtree: packing strips
+      # dev/test files, hoists the repository LICENSE into every slice, and
+      # substitutes the derived single-target manifest. Only the artifact is what
+      # the registry would actually receive -- checking the source tree both
+      # misses real problems and invents ones the artifact does not have.
+      - name: Download the packed slices
+        uses: actions/download-artifact@v4
+        with:
+          name: language-slices
+          path: slices
+
+      - name: Unpack the ${{ matrix.target }} slice
         id: slice
-        run: echo "dir=repo/${{ matrix.dir }}" >> "$GITHUB_OUTPUT"
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          set -euo pipefail
+          tarball="slices/$ARTIFACT"
+          test -f "$tarball" || { echo "::error::missing artifact $ARTIFACT"; ls -1 slices; exit 1; }
+          mkdir -p unpacked
+          tar xzf "$tarball" -C unpacked
+          test -d unpacked/pkg || { echo "::error::$ARTIFACT has no pkg/ root"; exit 1; }
+          echo "dir=unpacked/pkg" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         if: matrix.ecosystem == 'npm'
