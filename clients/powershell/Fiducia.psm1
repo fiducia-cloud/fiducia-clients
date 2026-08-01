@@ -5,6 +5,52 @@
 #   $lock = $c.LockAcquire("orders/checkout", 30000, $true, 1)
 #   $c.LockRelease("orders/checkout", "worker-a", $lock.result.output.fencing_token)
 
+function Get-FiduciaCleartextHost {
+    <# Host of $BaseUrl when its scheme is cleartext http://, else $null. #>
+    param([string] $BaseUrl)
+    if ($BaseUrl.Length -lt 7 -or $BaseUrl.Substring(0, 7).ToLowerInvariant() -ne 'http://') {
+        return $null
+    }
+    $authority = ($BaseUrl.Substring(7) -split '[/?#]', 2)[0]
+    $at = $authority.LastIndexOf('@')
+    if ($at -ge 0) { $authority = $authority.Substring($at + 1) }
+    if ($authority.StartsWith('[')) {
+        $end = $authority.IndexOf(']')
+        if ($end -gt 0) { return $authority.Substring(1, $end - 1).ToLowerInvariant() }
+        return ''
+    }
+    $colon = $authority.IndexOf(':')
+    if ($colon -ge 0) { $authority = $authority.Substring(0, $colon) }
+    return $authority.ToLowerInvariant()
+}
+
+function Test-FiduciaInternalHost {
+    <# Loopback, private/link-local IPs, and in-cluster names. #>
+    param([string] $HostName)
+    if ($HostName -eq '' -or $HostName -eq 'localhost' -or $HostName.EndsWith('.localhost')) { return $true }
+    if ($HostName -eq '::1') { return $true }
+    foreach ($prefix in @('fc', 'fd', 'fe8', 'fe9', 'fea', 'feb')) {
+        if ($HostName.StartsWith($prefix)) { return $true }
+    }
+    if ($HostName -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$') {
+        $a = [int]$Matches[1]
+        $b = [int]$Matches[2]
+        return ($a -eq 127) -or ($a -eq 10) -or ($a -eq 172 -and $b -ge 16 -and $b -le 31) `
+            -or ($a -eq 192 -and $b -eq 168) -or ($a -eq 169 -and $b -eq 254)
+    }
+    return (-not $HostName.Contains('.')) -or $HostName.EndsWith('.svc.cluster.local') `
+        -or $HostName.EndsWith('.internal')
+}
+
+function Assert-FiduciaEncryptedTransport {
+    <# Refuse to carry credentials over cleartext to a public host. #>
+    param([string] $BaseUrl)
+    $target = Get-FiduciaCleartextHost -BaseUrl $BaseUrl
+    if ($null -ne $target -and -not (Test-FiduciaInternalHost -HostName $target)) {
+        throw "fiducia: refusing cleartext http:// to public host '$target': use https://, an in-cluster address, or loopback"
+    }
+}
+
 class FiduciaClient {
     [string] $Base
     [int] $RequestTimeoutSec = 0
@@ -13,6 +59,7 @@ class FiduciaClient {
     [int] $RetryDelayMs = 0
 
     FiduciaClient([string] $baseUrl) {
+        Assert-FiduciaEncryptedTransport -BaseUrl $baseUrl
         $this.Base = $baseUrl.TrimEnd('/')
     }
 

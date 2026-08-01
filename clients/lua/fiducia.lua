@@ -185,7 +185,58 @@ Fiducia._VERSION = "0.1.0"
 -- "peer") against an auto-detected CA bundle -- pass opts.tls.cafile/capath to
 -- point at your own, or opts.tls = { verify = "none" } to opt out (insecure).
 -- Ignored for http:// URLs.
+-- Host of base_url when its scheme is cleartext http://, else nil.
+local function cleartext_host(base_url)
+    local scheme = tostring(base_url):sub(1, 7):lower()
+    if scheme ~= "http://" then
+        return nil
+    end
+    local authority = tostring(base_url):sub(8):match("^([^/?#]*)") or ""
+    local after_at = authority:match("^.*@(.*)$")
+    if after_at then
+        authority = after_at
+    end
+    local bracketed = authority:match("^%[([^%]]*)%]")
+    if bracketed then
+        return bracketed:lower()
+    end
+    return (authority:match("^([^:]*)") or ""):lower()
+end
+
+-- Loopback, private/link-local IPs, and in-cluster names.
+local function internal_host_allowed(host)
+    if host == "" or host == "localhost" or host:sub(-10) == ".localhost" then
+        return true
+    end
+    if host == "::1" then
+        return true
+    end
+    for _, prefix in ipairs({ "fc", "fd", "fe8", "fe9", "fea", "feb" }) do
+        if host:sub(1, #prefix) == prefix then
+            return true
+        end
+    end
+    local a, b = host:match("^(%d+)%.(%d+)%.%d+%.%d+$")
+    if a then
+        a, b = tonumber(a), tonumber(b)
+        return a == 127 or a == 10 or (a == 172 and b >= 16 and b <= 31)
+            or (a == 192 and b == 168) or (a == 169 and b == 254)
+    end
+    return not host:find("%.") or host:sub(-18) == ".svc.cluster.local"
+        or host:sub(-9) == ".internal"
+end
+
+-- Refuse to carry credentials over cleartext to a public host.
+local function require_encrypted_transport(base_url)
+    local host = cleartext_host(base_url)
+    if host ~= nil and not internal_host_allowed(host) then
+        error("fiducia: refusing cleartext http:// to public host '" .. host
+            .. "': use https://, an in-cluster address, or loopback", 3)
+    end
+end
+
 function Fiducia.new(base_url, opts)
+    require_encrypted_transport(base_url)
   opts = opts or {}
   return setmetatable({
     base = (tostring(base_url):gsub("/+$", "")),
