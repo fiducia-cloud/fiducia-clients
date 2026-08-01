@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { runBrowserContract } from "./chrome-cdp.mjs";
 
 const chromePath = process.env.CHROME_PATH;
 assert.ok(chromePath, "CHROME_PATH must point to a Chrome/Chromium executable");
@@ -262,62 +263,8 @@ assert.ok(address && typeof address === "object", "browser test server did not b
 const pageUrl = `http://127.0.0.1:${address.port}/`;
 const profile = await mkdtemp(path.join(tmpdir(), "fiducia-chrome-"));
 
-async function runChrome() {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(chromePath, [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-default-apps",
-      "--disable-dev-shm-usage",
-      "--disable-extensions",
-      "--disable-gpu",
-      "--disable-sync",
-      "--hide-scrollbars",
-      "--metrics-recording-only",
-      "--mute-audio",
-      "--no-first-run",
-      "--no-sandbox",
-      `--user-data-dir=${profile}`,
-      "--dump-dom",
-      pageUrl,
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGKILL");
-      reject(new Error(`Chrome browser smoke timed out.\n${stderr}`));
-    }, 30_000);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`Chrome exited with code ${code} signal ${signal ?? "none"}.\n${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
 try {
-  const { stdout, stderr } = await runChrome();
-  if (!stdout.includes('data-status="passed"')) {
-    throw new Error(`Browser contract did not pass.\nDOM:\n${stdout}\nChrome stderr:\n${stderr}`);
-  }
+  await runBrowserContract({ chromePath, pageUrl, profile });
   console.log("Fiducia TypeScript browser contract passed in real Chrome");
 } finally {
   await new Promise((resolve) => server.close(resolve));
