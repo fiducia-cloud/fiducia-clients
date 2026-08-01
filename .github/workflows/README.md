@@ -20,6 +20,14 @@ GitHub Actions pipelines for the multi-language client monorepo.
   artifact rather than its repo-relative source; a failure in any language
   blocks publication. See `client-packaging-NOTES.md` for the rationale.
 
+## Browser transport invariant
+
+When the caller does not inject a transport, the TypeScript client binds
+`globalThis.fetch` to the global receiver before storing it. Browser `fetch` is a
+Web IDL method and an unbound reference can fail with `Illegal invocation` even
+when equivalent Node tests pass. The Node receiver regression and the Chrome
+contract must both stay green whenever the generated TypeScript template changes.
+
 ## Security baseline
 
 Every executable workflow uses explicit least-privilege permissions, immutable
