@@ -75,15 +75,32 @@ jobs:
         working-directory: fiducia-clients/clients/ts
         run: npm run typecheck
 
-      - name: Install pinned Chrome for Testing
-        id: setup-chrome
-        uses: browser-actions/setup-chrome@73954683cc80eced513145a42b668b9b91f753c3 # v2.1.2
-        with:
-          chrome-version: "151.0.7922.47"
-          install-dependencies: true
+      - name: Resolve the runner browser and record its version
+        id: chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome_path="$(
+            command -v google-chrome \
+              || command -v google-chrome-stable \
+              || command -v chromium \
+              || command -v chromium-browser
+          )"
+          test -x "$chrome_path"
+          chrome_version="$($chrome_path --version)"
+          case "$chrome_version" in
+            "Google Chrome "*|"Chromium "*) ;;
+            *)
+              echo "::error::unexpected browser identity: $chrome_version"
+              exit 1
+              ;;
+          esac
+          echo "chrome-path=$chrome_path" >> "$GITHUB_OUTPUT"
+          echo "chrome-version=$chrome_version" >> "$GITHUB_OUTPUT"
+          echo "Browser under test: $chrome_version ($chrome_path)"
 
       - name: Run the TypeScript client in real Chrome
         working-directory: fiducia-clients/clients/ts
         env:
-          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run test:browser
