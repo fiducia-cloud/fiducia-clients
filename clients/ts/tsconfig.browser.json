@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "noEmit": false,
+    "noEmitOnError": true,
+    "outDir": ".browser-dist",
+    "sourceMap": false
+  },
+  "files": ["fiducia.ts"]
+}
