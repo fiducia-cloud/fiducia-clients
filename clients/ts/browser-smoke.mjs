@@ -9,7 +9,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import * as ts from "typescript";
+import * as typescriptModule from "typescript";
+
+// TypeScript 6 exposes the compiler API as a namespace, while the TypeScript 7
+// native-preview package exposes it through the ESM default export. Normalize
+// both shapes so this test follows the repository's locked compiler version.
+const ts = typescriptModule.default ?? typescriptModule;
 
 const chromePath = process.env.CHROME_PATH;
 assert.ok(chromePath, "CHROME_PATH must point to a Chrome/Chromium executable");
