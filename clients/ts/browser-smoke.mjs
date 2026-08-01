@@ -1,7 +1,7 @@
 // Browser-level contract tests for the TypeScript Fiducia client.
 //
-// This intentionally uses only Node's standard library plus the repository's
-// pinned TypeScript dependency. Chrome is supplied by CI through CHROME_PATH.
+// This intentionally uses only Node's standard library. The repository's
+// locked TypeScript CLI emits .browser-dist/fiducia.js before this runner starts.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -9,34 +9,17 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import * as typescriptModule from "typescript";
-
-// TypeScript 6 exposes the compiler API as a namespace, while the TypeScript 7
-// native-preview package exposes it through the ESM default export. Normalize
-// both shapes so this test follows the repository's locked compiler version.
-const ts = typescriptModule.default ?? typescriptModule;
 
 const chromePath = process.env.CHROME_PATH;
 assert.ok(chromePath, "CHROME_PATH must point to a Chrome/Chromium executable");
 
-const source = await readFile(new URL("./fiducia.ts", import.meta.url), "utf8");
-const transpiled = ts.transpileModule(source, {
-  fileName: "fiducia.ts",
-  reportDiagnostics: true,
-  compilerOptions: {
-    target: ts.ScriptTarget.ES2020,
-    module: ts.ModuleKind.ES2020,
-    sourceMap: false,
-    inlineSourceMap: false,
-  },
-});
-const transpileErrors = (transpiled.diagnostics ?? []).filter(
-  (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+const browserModule = await readFile(
+  new URL("./.browser-dist/fiducia.js", import.meta.url),
+  "utf8",
 );
-assert.deepEqual(
-  transpileErrors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-  [],
-  "fiducia.ts must transpile as a browser ES module",
+assert.ok(
+  browserModule.includes("export class FiduciaClient"),
+  "locked tsc output does not expose FiduciaClient as a browser ES module",
 );
 
 const calls = [];
@@ -186,7 +169,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/fiducia.js") {
-      send(res, 200, transpiled.outputText, {
+      send(res, 200, browserModule, {
         "content-type": "text/javascript; charset=utf-8",
         "cross-origin-resource-policy": "same-origin",
       });
