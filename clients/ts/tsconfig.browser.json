@@ -3,9 +3,11 @@
   "compilerOptions": {
     "allowImportingTsExtensions": false,
     "declaration": false,
+    "noCheck": true,
     "noEmit": false,
     "noEmitOnError": true,
     "outDir": ".browser-dist",
+    "rootDir": ".",
     "sourceMap": false
   },
   "files": ["fiducia.ts"]
