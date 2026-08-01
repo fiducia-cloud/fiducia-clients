@@ -1,21 +1,25 @@
 name: Finalize TypeScript browser hardening
 
 on:
-  push:
-    branches:
-      - agent/ts-browser-e2e-hardening
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/materialize-ts-fetch-binding-format.yml
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
-  group: materialize-ts-browser-hardening
-  cancel-in-progress: false
+  group: materialize-ts-browser-hardening-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   materialize:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/ts-browser-e2e-hardening'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -25,275 +29,77 @@ jobs:
           ref: agent/ts-browser-e2e-hardening
           fetch-depth: 0
 
-      - name: Normalize generated source and install the CDP runner
+      - name: Normalize generated source and connect the CDP driver
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           template = Path("templates/typescript.ts.tmpl")
           template_text = template.read_text(encoding="utf-8")
-          malformed = '''    if (opts.fetch) {
-          this.fetchImpl = opts.fetch;
-        } else {
-          const defaultFetch = globalThis.fetch;
-          if (typeof defaultFetch !== "function") {
-            throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
-          }
-          // Browser fetch is a Web IDL method and must retain its global receiver.
-          this.fetchImpl = defaultFetch.bind(globalThis);
-        }'''.replace("      this.fetchImpl", "this.fetchImpl")
-          malformed = '''    if (opts.fetch) {
-    this.fetchImpl = opts.fetch;
-  } else {
-    const defaultFetch = globalThis.fetch;
-    if (typeof defaultFetch !== "function") {
-      throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
-    }
-    // Browser fetch is a Web IDL method and must retain its global receiver.
-    this.fetchImpl = defaultFetch.bind(globalThis);
-  }'''
+          constructor = template_text.index("  constructor(baseUrl: string")
+          start = template_text.index("    if (opts.fetch) {", constructor)
+          end = template_text.index("    this.requestTimeoutMs", start)
           normalized = '''    if (opts.fetch) {
-      this.fetchImpl = opts.fetch;
-    } else {
-      const defaultFetch = globalThis.fetch;
-      if (typeof defaultFetch !== "function") {
-        throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
-      }
-      // Browser fetch is a Web IDL method and must retain its global receiver.
-      this.fetchImpl = defaultFetch.bind(globalThis);
-    }'''
-          if template_text.count(malformed) == 1:
-              template_text = template_text.replace(malformed, normalized)
-          elif template_text.count(normalized) != 1:
-              raise SystemExit("fetch binding template is in an unknown state")
-          template.write_text(template_text, encoding="utf-8")
+            this.fetchImpl = opts.fetch;
+          } else {
+            const defaultFetch = globalThis.fetch;
+            if (typeof defaultFetch !== "function") {
+              throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+            }
+            // Browser fetch is a Web IDL method and must retain its global receiver.
+            this.fetchImpl = defaultFetch.bind(globalThis);
+          }
+          '''
+          # Dedent the heredoc's visual indentation without weakening the exact
+          # constructor-boundary replacement.
+          import textwrap
+          normalized = textwrap.dedent(normalized)
+          if not normalized.startswith("    if (opts.fetch) {"):
+              raise SystemExit("normalized constructor block lost class indentation")
+          template.write_text(
+              template_text[:start] + normalized + template_text[end:],
+              encoding="utf-8",
+          )
 
           browser = Path("clients/ts/browser-smoke.mjs")
           browser_text = browser.read_text(encoding="utf-8")
-          if "function createCdpClient(socket)" not in browser_text:
-              start = browser_text.index("async function runChrome() {")
-              end_marker = '  await rm(profile, { recursive: true, force: true });\n}'
-              end = browser_text.index(end_marker, start) + len(end_marker)
-              old = browser_text[start:end]
-              if '"--dump-dom"' not in old or "stdout.includes" not in old:
-                  raise SystemExit("browser runner is not the reviewed dump-dom implementation")
-              new = textwrap.dedent(r'''
-              function delay(ms) {
-                return new Promise((resolve) => setTimeout(resolve, ms));
-              }
+          import_anchor = 'import process from "node:process";\n'
+          cdp_import = 'import { runBrowserContract } from "./chrome-cdp.mjs";\n'
+          if cdp_import not in browser_text:
+              if browser_text.count(import_anchor) != 1:
+                  raise SystemExit("browser process import anchor is not unique")
+              browser_text = browser_text.replace(
+                  import_anchor,
+                  import_anchor + cdp_import,
+                  1,
+              )
 
-              function connectWebSocket(url, timeoutMs = 5_000) {
-                assert.equal(typeof WebSocket, "function", "Node must provide the WebSocket API");
-                return new Promise((resolve, reject) => {
-                  const socket = new WebSocket(url);
-                  const timer = setTimeout(() => {
-                    socket.close();
-                    reject(new Error(`DevTools WebSocket did not open within ${timeoutMs}ms`));
-                  }, timeoutMs);
-                  socket.addEventListener("open", () => {
-                    clearTimeout(timer);
-                    resolve(socket);
-                  }, { once: true });
-                  socket.addEventListener("error", () => {
-                    clearTimeout(timer);
-                    reject(new Error("DevTools WebSocket failed to open"));
-                  }, { once: true });
-                });
-              }
-
-              function createCdpClient(socket) {
-                let nextId = 1;
-                const pending = new Map();
-
-                const rejectPending = (error) => {
-                  for (const { reject } of pending.values()) reject(error);
-                  pending.clear();
-                };
-
-                socket.addEventListener("message", async (event) => {
-                  try {
-                    let text;
-                    if (typeof event.data === "string") {
-                      text = event.data;
-                    } else if (event.data instanceof ArrayBuffer) {
-                      text = Buffer.from(event.data).toString("utf8");
-                    } else if (ArrayBuffer.isView(event.data)) {
-                      text = Buffer.from(
-                        event.data.buffer,
-                        event.data.byteOffset,
-                        event.data.byteLength,
-                      ).toString("utf8");
-                    } else {
-                      text = Buffer.from(await event.data.arrayBuffer()).toString("utf8");
-                    }
-                    const message = JSON.parse(text);
-                    if (typeof message.id !== "number") return;
-                    const waiter = pending.get(message.id);
-                    if (!waiter) return;
-                    pending.delete(message.id);
-                    if (message.error) {
-                      waiter.reject(new Error(
-                        `CDP ${waiter.method} failed: ${JSON.stringify(message.error)}`,
-                      ));
-                    } else {
-                      waiter.resolve(message.result ?? {});
-                    }
-                  } catch (error) {
-                    rejectPending(error);
-                  }
-                });
-                socket.addEventListener("close", () => {
-                  rejectPending(new Error("DevTools WebSocket closed unexpectedly"));
-                });
-
-                return {
-                  send(method, params = {}, sessionId) {
-                    return new Promise((resolve, reject) => {
-                      const id = nextId++;
-                      pending.set(id, { method, resolve, reject });
-                      socket.send(JSON.stringify({
-                        id,
-                        method,
-                        params,
-                        ...(sessionId ? { sessionId } : {}),
-                      }));
-                    });
-                  },
-                };
-              }
-
-              async function stopChrome(child) {
-                if (child.exitCode !== null) return;
-                const closed = new Promise((resolve) => child.once("close", resolve));
-                child.kill("SIGTERM");
-                await Promise.race([closed, delay(2_000)]);
-                if (child.exitCode === null) child.kill("SIGKILL");
-              }
-
-              async function runChrome() {
-                const child = spawn(chromePath, [
-                  "--headless=new",
-                  "--disable-background-networking",
-                  "--disable-default-apps",
-                  "--disable-dev-shm-usage",
-                  "--disable-extensions",
-                  "--disable-gpu",
-                  "--disable-sync",
-                  "--hide-scrollbars",
-                  "--metrics-recording-only",
-                  "--mute-audio",
-                  "--no-first-run",
-                  "--no-sandbox",
-                  "--remote-debugging-address=127.0.0.1",
-                  "--remote-debugging-port=0",
-                  `--user-data-dir=${profile}`,
-                  "about:blank",
-                ], { stdio: ["ignore", "ignore", "pipe"] });
-                child.stderr.setEncoding("utf8");
-                let stderr = "";
-                let devToolsSettled = false;
-                let resolveDevTools;
-                let rejectDevTools;
-                const devToolsUrl = new Promise((resolve, reject) => {
-                  resolveDevTools = resolve;
-                  rejectDevTools = reject;
-                });
-                const startupTimer = setTimeout(() => {
-                  if (devToolsSettled) return;
-                  devToolsSettled = true;
-                  rejectDevTools(new Error(
-                    `Chrome did not expose DevTools within 10 seconds.\n${stderr}`,
-                  ));
-                }, 10_000);
-                child.stderr.on("data", (chunk) => {
-                  stderr += chunk;
-                  const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-                  if (match && !devToolsSettled) {
-                    devToolsSettled = true;
-                    clearTimeout(startupTimer);
-                    resolveDevTools(match[1]);
-                  }
-                });
-                child.once("error", (error) => {
-                  if (devToolsSettled) return;
-                  devToolsSettled = true;
-                  clearTimeout(startupTimer);
-                  rejectDevTools(error);
-                });
-                child.once("close", (code, signal) => {
-                  if (devToolsSettled) return;
-                  devToolsSettled = true;
-                  clearTimeout(startupTimer);
-                  rejectDevTools(new Error(
-                    `Chrome exited before DevTools was ready: code=${code} `
-                      + `signal=${signal ?? "none"}.\n${stderr}`,
-                  ));
-                });
-
-                let socket;
-                try {
-                  socket = await connectWebSocket(await devToolsUrl);
-                  const cdp = createCdpClient(socket);
-                  const { targetId } = await cdp.send("Target.createTarget", { url: pageUrl });
-                  assert.equal(typeof targetId, "string", "Chrome did not return a target id");
-                  const { sessionId } = await cdp.send("Target.attachToTarget", {
-                    targetId,
-                    flatten: true,
-                  });
-                  assert.equal(typeof sessionId, "string", "Chrome did not return a session id");
-                  await cdp.send("Runtime.enable", {}, sessionId);
-
-                  const deadline = Date.now() + 30_000;
-                  while (Date.now() < deadline) {
-                    const evaluation = await cdp.send("Runtime.evaluate", {
-                      expression: "document.body?.dataset.status ?? 'loading'",
-                      returnByValue: true,
-                    }, sessionId);
-                    const status = evaluation.result?.value;
-                    if (status === "passed") {
-                      await cdp.send("Target.closeTarget", { targetId });
-                      return;
-                    }
-                    if (status === "failed") {
-                      const output = await cdp.send("Runtime.evaluate", {
-                        expression: "document.querySelector('#output')?.textContent ?? ''",
-                        returnByValue: true,
-                      }, sessionId);
-                      throw new Error(
-                        `Browser contract failed:\n${output.result?.value ?? "unknown failure"}`
-                          + `\nChrome stderr:\n${stderr}`,
-                      );
-                    }
-                    await delay(50);
-                  }
-                  throw new Error(
-                    `Browser contract timed out while page status remained pending.`
-                      + `\nChrome stderr:\n${stderr}`,
-                  );
-                } finally {
-                  socket?.close();
-                  await stopChrome(child);
-                }
-              }
-
-              try {
-                await runChrome();
-                console.log("Fiducia TypeScript browser contract passed in real Chrome");
-              } finally {
-                await new Promise((resolve) => server.close(resolve));
-                await rm(profile, { recursive: true, force: true });
-              }
-              ''').lstrip()
-              browser_text = browser_text[:start] + new + browser_text[end:]
-          browser.write_text(browser_text, encoding="utf-8")
+          start = browser_text.index("async function runChrome() {")
+          end_marker = '  await rm(profile, { recursive: true, force: true });\n}'
+          end = browser_text.index(end_marker, start) + len(end_marker)
+          old_runner = browser_text[start:end]
+          if '"--dump-dom"' not in old_runner or "stdout.includes" not in old_runner:
+              raise SystemExit("browser runner is not the reviewed dump-dom implementation")
+          replacement = '''try {
+            await runBrowserContract({ chromePath, pageUrl, profile });
+            console.log("Fiducia TypeScript browser contract passed in real Chrome");
+          } finally {
+            await new Promise((resolve) => server.close(resolve));
+            await rm(profile, { recursive: true, force: true });
+          }'''
+          replacement = textwrap.dedent(replacement)
+          browser.write_text(
+              browser_text[:start] + replacement + browser_text[end:],
+              encoding="utf-8",
+          )
           PY
 
           python3 generate.py ts
           python3 generate.py --check ts
           node --check clients/ts/browser-smoke.mjs
+          node --check clients/ts/chrome-cdp.mjs
           git diff --check
 
       - name: Commit only deterministic outputs and self-delete
