@@ -342,7 +342,16 @@ export class FiduciaClient {
 
   constructor(baseUrl: string, opts: FiduciaClientOpts = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
-    this.fetchImpl = opts.fetch ?? fetch;
+    if (opts.fetch) {
+    this.fetchImpl = opts.fetch;
+  } else {
+    const defaultFetch = globalThis.fetch;
+    if (typeof defaultFetch !== "function") {
+      throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+    }
+    // Browser fetch is a Web IDL method and must retain its global receiver.
+    this.fetchImpl = defaultFetch.bind(globalThis);
+  }
     this.requestTimeoutMs = this.pickTimeoutMs({
       timeoutMs: opts.timeoutMs,
       requestTimeoutMs: opts.requestTimeoutMs,
