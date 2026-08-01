@@ -9,7 +9,7 @@
   "types": "fiducia.ts",
   "scripts": {
     "test": "node --test --experimental-strip-types fiducia.test.ts locking.test.ts sync.test.ts secrets.test.ts && node --check --experimental-strip-types locking.ts",
-    "test:browser": "node browser-smoke.mjs",
+    "test:browser": "tsc -p tsconfig.browser.json && node browser-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json"
   },
   "files": [
