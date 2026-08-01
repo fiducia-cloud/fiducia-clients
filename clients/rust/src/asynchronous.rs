@@ -40,7 +40,7 @@ pub struct AsyncFiduciaClient {
     http: reqwest::Client,
     request_timeout: Option<Duration>,
     lock_request_timeout: Option<Duration>,
-    retry_max: u32,
+    retry_max: usize,
     retry_delay: Duration,
     internal_auth: Option<String>,
     org_scope: Option<String>,
@@ -122,7 +122,7 @@ impl AsyncFiduciaClient {
         self
     }
 
-    pub fn with_retries(mut self, max_retries: u32, delay: Duration) -> Self {
+    pub fn with_retries(mut self, max_retries: usize, delay: Duration) -> Self {
         self.retry_max = max_retries;
         self.retry_delay = delay;
         self
