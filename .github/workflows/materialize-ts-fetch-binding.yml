@@ -1,0 +1,88 @@
+name: Materialize TypeScript default-fetch binding fix
+
+on:
+  push:
+    branches:
+      - agent/ts-browser-e2e-hardening
+    paths:
+      - .github/workflows/materialize-ts-fetch-binding.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-ts-fetch-binding
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the exact feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/ts-browser-e2e-hardening
+          fetch-depth: 0
+
+      - name: Patch reviewed template and regenerate TypeScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("templates/typescript.ts.tmpl")
+          text = path.read_text(encoding="utf-8")
+          old = '    this.fetchImpl = opts.fetch ?? fetch;'
+          new = '''    if (opts.fetch) {
+              this.fetchImpl = opts.fetch;
+            } else {
+              const defaultFetch = globalThis.fetch;
+              if (typeof defaultFetch !== "function") {
+                throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+              }
+              // Browser fetch is a Web IDL method and must retain its global receiver.
+              this.fetchImpl = defaultFetch.bind(globalThis);
+            }'''
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one unbound default-fetch assignment")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          python3 generate.py ts
+          test "$(grep -Fc 'this.fetchImpl = defaultFetch.bind(globalThis);' templates/typescript.ts.tmpl)" = 1
+          test "$(grep -Fc 'this.fetchImpl = defaultFetch.bind(globalThis);' clients/ts/fiducia.ts)" = 1
+          ! grep -Fq 'this.fetchImpl = opts.fetch ?? fetch;' templates/typescript.ts.tmpl
+          ! grep -Fq 'this.fetchImpl = opts.fetch ?? fetch;' clients/ts/fiducia.ts
+          git diff --check
+
+      - name: Run the TypeScript unit regression
+        working-directory: clients/ts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm test
+
+      - name: Commit only regenerated product files and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/materialize-ts-fetch-binding.yml
+          git add templates/typescript.ts.tmpl clients/ts/fiducia.ts
+          mapfile -t changed < <(git diff --cached --name-only | sort)
+          expected=(
+            .github/workflows/materialize-ts-fetch-binding.yml
+            clients/ts/fiducia.ts
+            templates/typescript.ts.tmpl
+          )
+          test "${#changed[@]}" = "${#expected[@]}"
+          for index in "${!expected[@]}"; do
+            test "${changed[$index]}" = "${expected[$index]}"
+          done
+          git diff --cached --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(ts): bind the default browser fetch receiver"
+          git push origin HEAD:agent/ts-browser-e2e-hardening
