@@ -1,0 +1,81 @@
+# Real-browser contract gate for the TypeScript client.
+name: browser-e2e
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "clients/ts/**"
+      - "generate.py"
+      - "operations.json"
+      - "templates/**"
+      - ".github/workflows/browser-e2e.yml"
+      - ".github/workflows/README.md"
+  pull_request:
+    paths:
+      - "clients/ts/**"
+      - "generate.py"
+      - "operations.json"
+      - "templates/**"
+      - ".github/workflows/browser-e2e.yml"
+      - ".github/workflows/README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chrome:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out clients
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: fiducia-clients
+
+      - name: Validate the browser workflow
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: fiducia-clients/.github/workflows/browser-e2e.yml
+
+      - name: Check out reviewed interfaces
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: fiducia-cloud/fiducia-interfaces
+          ref: ee8fe09f846f5a776d156c0b0d0d15582c8bd539
+          path: fiducia-interfaces
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
+        with:
+          node-version: "22.22.1"
+          cache: npm
+          cache-dependency-path: fiducia-clients/clients/ts/package-lock.json
+
+      - name: Install locked TypeScript toolchain
+        working-directory: fiducia-clients/clients/ts
+        run: npm ci --ignore-scripts
+
+      - name: Type-check before browser execution
+        working-directory: fiducia-clients/clients/ts
+        run: npm run typecheck
+
+      - name: Install pinned Chrome for Testing
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@73954683cc80eced513145a42b668b9b91f753c3 # v2.1.2
+        with:
+          chrome-version: "151.0.7922.47"
+          install-dependencies: true
+
+      - name: Run the TypeScript client in real Chrome
+        working-directory: fiducia-clients/clients/ts
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: npm run test:browser
