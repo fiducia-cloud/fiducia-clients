@@ -1,4 +1,4 @@
-name: Normalize TypeScript fetch binding formatting
+name: Finalize TypeScript browser hardening
 
 on:
   push:
@@ -11,13 +11,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: materialize-ts-fetch-binding-format
+  group: materialize-ts-browser-hardening
   cancel-in-progress: false
 
 jobs:
   materialize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out the exact feature branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,7 +25,7 @@ jobs:
           ref: agent/ts-browser-e2e-hardening
           fetch-depth: 0
 
-      - name: Normalize template indentation and regenerate
+      - name: Normalize the generated fetch binding
         shell: bash
         run: |
           set -euo pipefail
@@ -35,17 +35,36 @@ jobs:
           path = Path("templates/typescript.ts.tmpl")
           text = path.read_text(encoding="utf-8")
           old = '''    if (opts.fetch) {
-            this.fetchImpl = opts.fetch;
-          } else {
-            const defaultFetch = globalThis.fetch;
-            if (typeof defaultFetch !== "function") {
-              throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
-            }
-            // Browser fetch is a Web IDL method and must retain its global receiver.
-            this.fetchImpl = defaultFetch.bind(globalThis);
-          }'''.replace("            this.fetchImpl", "    this.fetchImpl").replace("          } else", "  } else").replace("            const", "    const").replace("            if", "    if").replace("              throw", "      throw").replace("            }", "    }").replace("            //", "    //").replace("            this.fetchImpl", "    this.fetchImpl").replace("          }", "  }")
-          # The previous materializer inserted this exact under-indented block.
+          this.fetchImpl = opts.fetch;
+        } else {
+          const defaultFetch = globalThis.fetch;
+          if (typeof defaultFetch !== "function") {
+            throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+          }
+          // Browser fetch is a Web IDL method and must retain its global receiver.
+          this.fetchImpl = defaultFetch.bind(globalThis);
+        }'''.replace("          this.fetchImpl", "    this.fetchImpl").replace("        } else", "  } else").replace("          const", "    const").replace("          if", "    if").replace("            throw", "      throw").replace("          }", "    }").replace("          //", "    //").replace("          this.fetchImpl", "    this.fetchImpl").replace("        }", "  }")
           old = '''    if (opts.fetch) {
+          this.fetchImpl = opts.fetch;
+        } else {
+          const defaultFetch = globalThis.fetch;
+          if (typeof defaultFetch !== "function") {
+            throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+          }
+          // Browser fetch is a Web IDL method and must retain its global receiver.
+          this.fetchImpl = defaultFetch.bind(globalThis);
+        }'''
+          malformed = '''    if (opts.fetch) {
+          this.fetchImpl = opts.fetch;
+        } else {
+          const defaultFetch = globalThis.fetch;
+          if (typeof defaultFetch !== "function") {
+            throw new Error("fiducia: global fetch is unavailable; provide opts.fetch");
+          }
+          // Browser fetch is a Web IDL method and must retain its global receiver.
+          this.fetchImpl = defaultFetch.bind(globalThis);
+        }'''.replace("      this.fetchImpl", "this.fetchImpl")
+          actual_malformed = '''    if (opts.fetch) {
     this.fetchImpl = opts.fetch;
   } else {
     const defaultFetch = globalThis.fetch;
@@ -65,33 +84,313 @@ jobs:
       // Browser fetch is a Web IDL method and must retain its global receiver.
       this.fetchImpl = defaultFetch.bind(globalThis);
     }'''
-          if text.count(old) != 1:
-              raise SystemExit("expected exactly one under-indented fetch binding block")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+          if text.count(actual_malformed) == 1:
+              text = text.replace(actual_malformed, new)
+          elif text.count(new) != 1:
+              raise SystemExit("expected exactly one known fetch binding block")
+          path.write_text(text, encoding="utf-8")
           PY
 
           python3 generate.py ts
           python3 generate.py --check ts
-          git diff --check
 
-      - name: Run TypeScript tests
-        working-directory: clients/ts
+      - name: Replace load-timed DOM dumping with DevTools automation
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("clients/ts/browser-smoke.mjs")
+          text = path.read_text(encoding="utf-8")
+          old = '''async function runChrome() {
+            return await new Promise((resolve, reject) => {
+              const child = spawn(chromePath, [
+                "--headless=new",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-gpu",
+                "--disable-sync",
+                "--hide-scrollbars",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-first-run",
+                "--no-sandbox",
+                `--user-data-dir=${profile}`,
+                "--dump-dom",
+                pageUrl,
+              ], { stdio: ["ignore", "pipe", "pipe"] });
+              let stdout = "";
+              let stderr = "";
+              let settled = false;
+              const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                child.kill("SIGKILL");
+                reject(new Error(`Chrome browser smoke timed out.\\n${stderr}`));
+              }, 30_000);
+              child.stdout.setEncoding("utf8");
+              child.stderr.setEncoding("utf8");
+              child.stdout.on("data", (chunk) => { stdout += chunk; });
+              child.stderr.on("data", (chunk) => { stderr += chunk; });
+              child.once("error", (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(error);
+              });
+              child.once("close", (code, signal) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (code !== 0) {
+                  reject(new Error(`Chrome exited with code ${code} signal ${signal ?? "none"}.\\n${stderr}`));
+                  return;
+                }
+                resolve({ stdout, stderr });
+              });
+            });
+          }
+
+          try {
+            const { stdout, stderr } = await runChrome();
+            if (!stdout.includes('data-status="passed"')) {
+              throw new Error(`Browser contract did not pass.\\nDOM:\\n${stdout}\\nChrome stderr:\\n${stderr}`);
+            }
+            console.log("Fiducia TypeScript browser contract passed in real Chrome");
+          } finally {
+            await new Promise((resolve) => server.close(resolve));
+            await rm(profile, { recursive: true, force: true });
+          }'''
+          # Dedent the exact source block from the shell heredoc indentation.
+          import textwrap
+          old = textwrap.dedent(old)
+          new = textwrap.dedent('''
+          function delay(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+          }
+
+          function connectWebSocket(url, timeoutMs = 5_000) {
+            assert.equal(typeof WebSocket, "function", "Node must provide the WebSocket API");
+            return new Promise((resolve, reject) => {
+              const socket = new WebSocket(url);
+              const timer = setTimeout(() => {
+                socket.close();
+                reject(new Error(`DevTools WebSocket did not open within ${timeoutMs}ms`));
+              }, timeoutMs);
+              socket.addEventListener("open", () => {
+                clearTimeout(timer);
+                resolve(socket);
+              }, { once: true });
+              socket.addEventListener("error", () => {
+                clearTimeout(timer);
+                reject(new Error("DevTools WebSocket failed to open"));
+              }, { once: true });
+            });
+          }
+
+          function createCdpClient(socket) {
+            let nextId = 1;
+            const pending = new Map();
+
+            const rejectPending = (error) => {
+              for (const { reject } of pending.values()) reject(error);
+              pending.clear();
+            };
+
+            socket.addEventListener("message", async (event) => {
+              try {
+                let text;
+                if (typeof event.data === "string") {
+                  text = event.data;
+                } else if (event.data instanceof ArrayBuffer) {
+                  text = Buffer.from(event.data).toString("utf8");
+                } else if (ArrayBuffer.isView(event.data)) {
+                  text = Buffer.from(event.data.buffer, event.data.byteOffset, event.data.byteLength).toString("utf8");
+                } else {
+                  text = Buffer.from(await event.data.arrayBuffer()).toString("utf8");
+                }
+                const message = JSON.parse(text);
+                if (typeof message.id !== "number") return;
+                const waiter = pending.get(message.id);
+                if (!waiter) return;
+                pending.delete(message.id);
+                if (message.error) {
+                  waiter.reject(new Error(`CDP ${waiter.method} failed: ${JSON.stringify(message.error)}`));
+                } else {
+                  waiter.resolve(message.result ?? {});
+                }
+              } catch (error) {
+                rejectPending(error);
+              }
+            });
+            socket.addEventListener("close", () => {
+              rejectPending(new Error("DevTools WebSocket closed unexpectedly"));
+            });
+
+            return {
+              send(method, params = {}, sessionId) {
+                return new Promise((resolve, reject) => {
+                  const id = nextId++;
+                  pending.set(id, { method, resolve, reject });
+                  socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+                });
+              },
+            };
+          }
+
+          async function stopChrome(child) {
+            if (child.exitCode !== null) return;
+            const closed = new Promise((resolve) => child.once("close", resolve));
+            child.kill("SIGTERM");
+            await Promise.race([closed, delay(2_000)]);
+            if (child.exitCode === null) child.kill("SIGKILL");
+          }
+
+          async function runChrome() {
+            const child = spawn(chromePath, [
+              "--headless=new",
+              "--disable-background-networking",
+              "--disable-default-apps",
+              "--disable-dev-shm-usage",
+              "--disable-extensions",
+              "--disable-gpu",
+              "--disable-sync",
+              "--hide-scrollbars",
+              "--metrics-recording-only",
+              "--mute-audio",
+              "--no-first-run",
+              "--no-sandbox",
+              "--remote-debugging-address=127.0.0.1",
+              "--remote-debugging-port=0",
+              `--user-data-dir=${profile}`,
+              "about:blank",
+            ], { stdio: ["ignore", "ignore", "pipe"] });
+            child.stderr.setEncoding("utf8");
+            let stderr = "";
+            let devToolsSettled = false;
+            let resolveDevTools;
+            let rejectDevTools;
+            const devToolsUrl = new Promise((resolve, reject) => {
+              resolveDevTools = resolve;
+              rejectDevTools = reject;
+            });
+            const startupTimer = setTimeout(() => {
+              if (devToolsSettled) return;
+              devToolsSettled = true;
+              rejectDevTools(new Error(`Chrome did not expose DevTools within 10 seconds.\\n${stderr}`));
+            }, 10_000);
+            child.stderr.on("data", (chunk) => {
+              stderr += chunk;
+              const match = stderr.match(/DevTools listening on (ws:\\/\\/[^\\s]+)/);
+              if (match && !devToolsSettled) {
+                devToolsSettled = true;
+                clearTimeout(startupTimer);
+                resolveDevTools(match[1]);
+              }
+            });
+            child.once("error", (error) => {
+              if (devToolsSettled) return;
+              devToolsSettled = true;
+              clearTimeout(startupTimer);
+              rejectDevTools(error);
+            });
+            child.once("close", (code, signal) => {
+              if (devToolsSettled) return;
+              devToolsSettled = true;
+              clearTimeout(startupTimer);
+              rejectDevTools(new Error(`Chrome exited before DevTools was ready: code=${code} signal=${signal ?? "none"}.\\n${stderr}`));
+            });
+
+            let socket;
+            try {
+              socket = await connectWebSocket(await devToolsUrl);
+              const cdp = createCdpClient(socket);
+              const { targetId } = await cdp.send("Target.createTarget", { url: pageUrl });
+              assert.equal(typeof targetId, "string", "Chrome did not return a target id");
+              const { sessionId } = await cdp.send("Target.attachToTarget", {
+                targetId,
+                flatten: true,
+              });
+              assert.equal(typeof sessionId, "string", "Chrome did not return a session id");
+              await cdp.send("Runtime.enable", {}, sessionId);
+
+              const deadline = Date.now() + 30_000;
+              while (Date.now() < deadline) {
+                const evaluation = await cdp.send("Runtime.evaluate", {
+                  expression: "document.body?.dataset.status ?? 'loading'",
+                  returnByValue: true,
+                }, sessionId);
+                const status = evaluation.result?.value;
+                if (status === "passed") {
+                  await cdp.send("Target.closeTarget", { targetId });
+                  return;
+                }
+                if (status === "failed") {
+                  const output = await cdp.send("Runtime.evaluate", {
+                    expression: "document.querySelector('#output')?.textContent ?? ''",
+                    returnByValue: true,
+                  }, sessionId);
+                  throw new Error(`Browser contract failed:\\n${output.result?.value ?? "unknown failure"}\\nChrome stderr:\\n${stderr}`);
+                }
+                await delay(50);
+              }
+              throw new Error(`Browser contract timed out while page status remained pending.\\nChrome stderr:\\n${stderr}`);
+            } finally {
+              socket?.close();
+              await stopChrome(child);
+            }
+          }
+
+          try {
+            await runChrome();
+            console.log("Fiducia TypeScript browser contract passed in real Chrome");
+          } finally {
+            await new Promise((resolve) => server.close(resolve));
+            await rm(profile, { recursive: true, force: true });
+          }
+          ''').lstrip()
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one dump-dom browser runner block")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          node --check clients/ts/browser-smoke.mjs
+          git diff --check
+
+      - name: Run unit, type, generator, and real-browser validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 generate.py --check ts
+          cd clients/ts
           npm ci --ignore-scripts
           npm test
           npm run typecheck
+          chrome_path="$(
+            command -v google-chrome \
+              || command -v google-chrome-stable \
+              || command -v chromium \
+              || command -v chromium-browser
+          )"
+          test -x "$chrome_path"
+          CHROME_PATH="$chrome_path" npm run test:browser
 
-      - name: Commit only normalized generated files and self-delete
+      - name: Commit only finalized product and test files and self-delete
         shell: bash
         run: |
           set -euo pipefail
           git rm .github/workflows/materialize-ts-fetch-binding-format.yml
-          git add templates/typescript.ts.tmpl clients/ts/fiducia.ts
+          git add \
+            templates/typescript.ts.tmpl \
+            clients/ts/fiducia.ts \
+            clients/ts/browser-smoke.mjs
           mapfile -t changed < <(git diff --cached --name-only | sort)
           expected=(
             .github/workflows/materialize-ts-fetch-binding-format.yml
+            clients/ts/browser-smoke.mjs
             clients/ts/fiducia.ts
             templates/typescript.ts.tmpl
           )
@@ -102,5 +401,5 @@ jobs:
           git diff --cached --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "style(ts): normalize generated fetch binding"
+          git commit -m "test(ts): drive Chrome through the DevTools protocol"
           git push origin HEAD:agent/ts-browser-e2e-hardening
