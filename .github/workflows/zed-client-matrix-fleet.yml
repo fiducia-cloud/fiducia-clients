@@ -1,0 +1,18 @@
+name: Zed client matrix fleet standardization
+
+on:
+  push:
+    branches:
+      - agent/standardize-zed-client-matrix-20260805
+
+permissions:
+  contents: write
+
+jobs:
+  standardize:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    uses: zed-pkg/zed-clients/.github/workflows/fleet-standardize-reusable.yml@050864bb9c065f2bae2418d07e2330cd1e0747db
+    with:
+      kind: clients
+      prefix: fiducia
+      mobile: 'true'
