@@ -1,0 +1,15 @@
+schema = 1
+
+[[exception]]
+rule = "clients-depend-on-lib"
+missing_repository = "fiducia-cloud/fiducia-lib"
+reason = "No shared fiducia-lib repository exists yet; adding a dangling Zed dependency would make installs non-reproducible."
+required_action = "Create and publish fiducia-lib as a Zed package, then add it to [dependencies] and regenerate .zpkg.lock."
+expires = "2026-09-30"
+
+[[exception]]
+rule = "cli-imports-package-stack"
+missing_repository = "fiducia-cloud/fiducia-cli"
+reason = "No fiducia-cli repository exists yet."
+required_action = "Create fiducia-cli and import fiducia-interfaces, fiducia-lib, and fiducia-clients."
+expires = "2026-09-30"
