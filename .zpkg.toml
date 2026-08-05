@@ -15,6 +15,7 @@ dir = ".vendor/.zed"
 
 [dependencies]
 "fiducia-cloud/fiducia-interfaces" = "^0.1.0"
+"fiducia-cloud/fiducia-lib" = "^0.1.0"
 
 [publish]
 include_readme = true
