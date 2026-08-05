@@ -10,10 +10,16 @@ keywords = ["clients", "sdk", "polyglot", "fiducia"]
 vcs = "git"
 url = "https://github.com/fiducia-cloud/fiducia-clients"
 
+[install]
+dir = ".vendor/.zed"
+
+[dependencies]
+"fiducia-cloud/fiducia-interfaces" = "^0.1.0"
+
 [publish]
 include_readme = true
 tag_format = "v{version}"
-exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", "tmp/**", "**/*.log", ".DS_Store"]
+exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "tmp/**", "**/*.log", ".DS_Store"]
 
 # The repository target publishes the complete multi-language source snapshot.
 # Every other target is re-rooted and published as one isolated language package.
