@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "model": "universal-web-api-core",
+  "runtimes": {
+    "node": {"supported": true, "smoke": "node test/runtime-smoke.mjs"},
+    "deno": {"supported": true, "smoke": "deno run --allow-read test/runtime-smoke.mjs"},
+    "bun": {"supported": true, "smoke": "bun run test/runtime-smoke.mjs"},
+    "edge": {"supported": true, "smoke": "node test/run-edge-smoke.mjs"}
+  }
+}
