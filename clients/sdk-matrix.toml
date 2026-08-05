@@ -1,0 +1,21 @@
+schema_version = 1
+interfaces_package = "fiducia-interfaces"
+shared_library_package = "fiducia-lib"
+
+[targets]
+gleamlang = true
+erlang = true
+elixir = true
+dart = true
+rust = true
+java = true
+golang = true
+python3 = true
+ruby = true
+php = true
+typescript_nodejs = true
+typescript_deno = true
+typescript_bun = true
+typescript_edge = true
+kotlin = true
+swift = true
