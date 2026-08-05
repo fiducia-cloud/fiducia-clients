@@ -1,0 +1,4 @@
+name = "fiducia-client-edge-smoke"
+main = "edge-worker.ts"
+compatibility_date = "2026-08-05"
+workers_dev = false
