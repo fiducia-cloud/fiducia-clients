@@ -405,3 +405,53 @@ convenience data:
   treating every unsuccessful acquire as “busy”; and
 - use locks only for mutual exclusion—capacity reservations need a dedicated
   reservation primitive with their own expiry and accounting.
+
+## Integrating a client correctly
+
+Every item below is a defect that shipped in a real integration. They share a
+character: the code looks correct, nothing errors, and the failure only appears
+during an election or a tick that runs long. Work through the list when writing
+a client or reviewing one.
+
+- [ ] **Renew before `lease_expires_ms`.** `acquire(ttl)` reads like "hold this
+      for `ttl`", but a lease is a *deadline, not a mutex* — keeping it alive is
+      the holder's job. A heartbeat at roughly `ttl/3` leaves room for a retry.
+- [ ] **Treat `renewed: false` as lost leadership, not a log line.** It means
+      fiducia has already reaped the grant and may have promoted another holder.
+      Cancel the guarded work; finishing "since we're nearly done" is exactly
+      the two-leader bug the lease exists to prevent. A long TTL is not a
+      substitute for renewing.
+- [ ] **Read outcomes from `result.output`.** `committed: true` means the command
+      reached the Raft log, *not* that it did what you wanted. The domain answer
+      is `output.{acquired,renewed,released,allowed,ok}`. A release that matched
+      no grant is a committed no-op and will otherwise read as success.
+- [ ] **Retry a marked `503 not_leader`.** It is routine — elections and
+      deliberate leadership transfers — and resolves in milliseconds. Treating
+      it as fatal converts that into a user-visible outage. Because the marker
+      proves the command was rejected *before* application, a bounded retry is
+      safe even for a keyless mutation.
+- [ ] **Never follow a server-named `Location` while holding a credential.**
+      Retry your *configured* base URL instead; a load balancer will route the
+      retry to the new leader. Following a redirect forwards the credential to
+      whatever host the response names.
+- [ ] **Do not retry an ambiguous 5xx without an idempotency key.** An unmarked
+      500/502/503/504 or a transport error may have applied. Retrying a keyless
+      mutation there can double-apply it.
+- [ ] **Distinguish contention from an outage.** "Someone else holds it" and "I
+      cannot reach fiducia" are different answers. Fail closed on the latter,
+      but only after the last confirmed lease could have lapsed.
+- [ ] **Use locks only for mutual exclusion.** Holder death releases a lock, so
+      it is not a capacity reservation — those need their own expiry and
+      accounting (RFC 0001).
+
+### Machine-checkable suite
+
+`clients/rust/tests/async_conformance.rs` encodes this list as executable tests
+against a raw `TcpListener`, one test per item. It depends on no framework, so
+it is portable: a client in any language can be checked against the same
+scripted responses (`renewed:false`, a committed no-op release, two `503
+not_leader`s then success, an unmarked 5xx, a 307, a cleartext credential).
+
+```
+cargo test -p fiducia-client --features async --test async_conformance
+```

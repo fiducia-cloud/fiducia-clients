@@ -9,6 +9,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -78,7 +79,60 @@ namespace Fiducia
         public int RetryMax { get; set; }
         public TimeSpan RetryDelay { get; set; } = TimeSpan.Zero;
 
-        public FiduciaClient(string baseUrl) => _base = baseUrl.TrimEnd('/');
+        private static string? CleartextHost(string baseUrl)
+        {
+            if (baseUrl.Length < 7 || !baseUrl.Substring(0, 7).Equals("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            var authority = baseUrl.Substring(7).Split('/', '?', '#')[0];
+            var at = authority.LastIndexOf('@');
+            if (at >= 0) authority = authority.Substring(at + 1);
+            if (authority.StartsWith("["))
+            {
+                var end = authority.IndexOf(']');
+                return end > 0 ? authority.Substring(1, end - 1).ToLowerInvariant() : "";
+            }
+            var colon = authority.IndexOf(':');
+            if (colon >= 0) authority = authority.Substring(0, colon);
+            return authority.ToLowerInvariant();
+        }
+
+        private static bool InternalHostAllowed(string host)
+        {
+            if (host.Length == 0 || host == "localhost" || host.EndsWith(".localhost")) return true;
+            if (host == "::1" || host.StartsWith("fc") || host.StartsWith("fd")
+                || host.StartsWith("fe8") || host.StartsWith("fe9")
+                || host.StartsWith("fea") || host.StartsWith("feb"))
+            {
+                return true;
+            }
+            var octets = host.Split('.');
+            if (octets.Length == 4 && octets.All(o => byte.TryParse(o, out _)))
+            {
+                var a = byte.Parse(octets[0]);
+                var b = byte.Parse(octets[1]);
+                return a == 127 || a == 10 || (a == 172 && b >= 16 && b <= 31)
+                    || (a == 192 && b == 168) || (a == 169 && b == 254);
+            }
+            return !host.Contains(".") || host.EndsWith(".svc.cluster.local")
+                || host.EndsWith(".internal");
+        }
+
+        /// <summary>Refuse to carry credentials over cleartext to a public host.</summary>
+        private static string RequireEncryptedTransport(string baseUrl)
+        {
+            var host = CleartextHost(baseUrl);
+            if (host != null && !InternalHostAllowed(host))
+            {
+                throw new ArgumentException(
+                    $"fiducia: refusing cleartext http:// to public host \"{host}\": " +
+                    "use https://, an in-cluster address, or loopback", nameof(baseUrl));
+            }
+            return baseUrl.TrimEnd('/');
+        }
+
+        public FiduciaClient(string baseUrl) => _base = RequireEncryptedTransport(baseUrl);
 
         public class RequestOptions
         {

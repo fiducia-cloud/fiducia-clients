@@ -16,6 +16,7 @@ the REST shape changes, only this module changes — consumer code does not.
 
 import argparse
 import json
+import re
 import os as _os
 import sys as _sys
 import time
@@ -151,8 +152,44 @@ def _validate_attempt_request_ids(value, at="request"):
             _validate_attempt_request_ids(item, "%s[%s]" % (at, index))
 
 
+def _cleartext_host(base_url):
+    """Host of *base_url* when its scheme is cleartext http://, else None."""
+    if base_url[:7].lower() != "http://":
+        return None
+    authority = re.split(r"[/?#]", base_url[7:], maxsplit=1)[0]
+    host_port = authority.rsplit("@", 1)[-1]
+    if host_port.startswith("["):
+        return host_port[1:host_port.find("]")].lower()
+    return host_port.split(":")[0].lower()
+
+
+def _internal_host_allowed(host):
+    """Loopback, private/link-local IPs, and in-cluster names."""
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        return True
+    if host == "::1" or host[:2] in ("fc", "fd") or host[:3] in ("fe8", "fe9", "fea", "feb"):
+        return True
+    octets = host.split(".")
+    if len(octets) == 4 and all(o.isdigit() and int(o) < 256 for o in octets):
+        a, b = int(octets[0]), int(octets[1])
+        return (a == 127 or a == 10 or (a == 172 and 16 <= b <= 31)
+                or (a == 192 and b == 168) or (a == 169 and b == 254))
+    return ("." not in host or host.endswith(".svc.cluster.local")
+            or host.endswith(".internal"))
+
+
+def _require_encrypted_transport(base_url):
+    """Refuse to carry credentials over cleartext to a public host."""
+    host = _cleartext_host(base_url)
+    if host is not None and not _internal_host_allowed(host):
+        raise ValueError(
+            "fiducia: refusing cleartext http:// to public host %r: use "
+            "https://, an in-cluster address, or loopback" % host)
+
+
 class FiduciaClient:
     def __init__(self, base_url, timeout=30, max_retries=0, retry_delay=0):
+        _require_encrypted_transport(base_url)
         self.base = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries

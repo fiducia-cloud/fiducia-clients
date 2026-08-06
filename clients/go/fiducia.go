@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -181,8 +182,63 @@ type Client struct {
 // never 3xxes, and following one would replay this (possibly mutating) request
 // — plus its Idempotency-Key header — to an attacker-controlled Location,
 // including an https->http downgrade. A 3xx surfaces as *Error instead.
+// cleartextHost returns the host of baseURL when its scheme is cleartext http://.
+func cleartextHost(baseURL string) (string, bool) {
+	if len(baseURL) < 7 || !strings.EqualFold(baseURL[:7], "http://") {
+		return "", false
+	}
+	authority := baseURL[7:]
+	if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+		authority = authority[:i]
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority = authority[at+1:]
+	}
+	if strings.HasPrefix(authority, "[") {
+		if end := strings.Index(authority, "]"); end > 0 {
+			return strings.ToLower(authority[1:end]), true
+		}
+	}
+	if colon := strings.Index(authority, ":"); colon >= 0 {
+		authority = authority[:colon]
+	}
+	return strings.ToLower(authority), true
+}
+
+// internalHostAllowed reports whether cleartext to host stays inside the trust
+// boundary: loopback, private/link-local IPs, and in-cluster names.
+func internalHostAllowed(host string) bool {
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	return !strings.Contains(host, ".") ||
+		strings.HasSuffix(host, ".svc.cluster.local") ||
+		strings.HasSuffix(host, ".internal")
+}
+
+// ErrInsecureTransport is returned when credentials would travel in the clear.
+var ErrInsecureTransport = errors.New("fiducia: refusing cleartext http:// to a public host: use https://, an in-cluster address, or loopback")
+
+// New builds a Client, panicking if baseURL would put credentials on the wire
+// in the clear. Use NewChecked to handle that as an error instead.
 func New(baseURL string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: noRedirectHTTPClient()}
+	client, err := NewChecked(baseURL)
+	if err != nil {
+		panic(err)
+	}
+	return client
+}
+
+// NewChecked builds a Client and reports ErrInsecureTransport rather than
+// panicking, for callers that read baseURL from configuration.
+func NewChecked(baseURL string) (*Client, error) {
+	if host, cleartext := cleartextHost(baseURL); cleartext && !internalHostAllowed(host) {
+		return nil, fmt.Errorf("%w (host %q)", ErrInsecureTransport, host)
+	}
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: noRedirectHTTPClient()}, nil
 }
 
 func noRedirectHTTPClient() *http.Client {
