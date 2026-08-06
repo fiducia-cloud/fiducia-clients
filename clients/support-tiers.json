@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "tiers": {
+    "1": {
+      "name": "hard-gated production",
+      "clients": [
+        "go",
+        "python",
+        "rust",
+        "ts"
+      ]
+    },
+    "2": {
+      "name": "supported generated or thin",
+      "clients": [
+        "csharp",
+        "dart",
+        "elixir",
+        "gleam",
+        "java",
+        "php",
+        "powershell",
+        "ruby",
+        "rust-wasm",
+        "shell"
+      ]
+    },
+    "3": {
+      "name": "promotion candidates",
+      "clients": [
+        "c",
+        "cpp",
+        "erlang",
+        "kotlin",
+        "swift"
+      ]
+    },
+    "4": {
+      "name": "preview or niche generated",
+      "clients": [
+        "clojure",
+        "crystal",
+        "fsharp",
+        "haskell",
+        "julia",
+        "lua",
+        "matlab",
+        "nim",
+        "ocaml",
+        "r",
+        "scala",
+        "zig"
+      ]
+    }
+  },
+  "maintenance": {
+    "generated_from_operations": [
+      "go",
+      "python",
+      "rust-wasm",
+      "ts"
+    ],
+    "explicit_hand_maintained_or_packaged": [
+      "c",
+      "clojure",
+      "cpp",
+      "crystal",
+      "csharp",
+      "dart",
+      "elixir",
+      "erlang",
+      "fsharp",
+      "gleam",
+      "haskell",
+      "java",
+      "julia",
+      "kotlin",
+      "lua",
+      "matlab",
+      "nim",
+      "ocaml",
+      "php",
+      "powershell",
+      "r",
+      "ruby",
+      "rust",
+      "scala",
+      "shell",
+      "swift",
+      "zig"
+    ]
+  }
+}

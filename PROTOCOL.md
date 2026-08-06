@@ -128,10 +128,13 @@ node runtime does not expose them yet.
 ### Secrets — client convenience over the encrypted config KV
 End-user secrets are ordinary config-KV entries under the reserved `secret/`
 keyspace, always written with `plaintext:false` so the cluster encrypts them at
-rest (requires KV protection to be configured). The client enforces **write-only
-ergonomics**: `secretList` returns names + metadata only, stripping every value
-and the `secret/` prefix, so a value is exposed *solely* through the explicit
-`secretReveal`. These are not new endpoints — they map onto `/v1/kv`.
+rest (requires KV protection to be configured). The node omits values for every
+reserved-secret row in a prefix listing, including a generic empty-prefix list,
+and marks those rows with `value_redacted:true`. Clients preserve the same
+defense in depth by stripping any value a legacy node might return and removing
+the `secret/` prefix. A value is exposed *solely* through the explicit
+`secretReveal`; KV read responses are `Cache-Control: no-store`. These are not
+new endpoints — they map onto `/v1/kv`.
 
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
