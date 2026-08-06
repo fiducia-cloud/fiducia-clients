@@ -391,12 +391,8 @@ impl AsyncFiduciaClient {
 
     /// Returns `{prefix, count, keys}` — note `keys`, not `entries`.
     pub async fn kv_list(&self, prefix: &str) -> Result<Value, Error> {
-        self.request(
-            "GET",
-            &format!("/v1/kv?prefix={}", urlencode(prefix)),
-            None,
-        )
-        .await
+        self.request("GET", &format!("/v1/kv?prefix={}", urlencode(prefix)), None)
+            .await
     }
 }
 
@@ -480,10 +476,12 @@ mod tests {
             );
         }
         // …and the documented escape hatch still works.
-        assert!(AsyncFiduciaClient::internal("http://api.fiducia.cloud", "s", "o")
-            .allow_cleartext_internal()
-            .cleartext_refusal()
-            .is_none());
+        assert!(
+            AsyncFiduciaClient::internal("http://api.fiducia.cloud", "s", "o")
+                .allow_cleartext_internal()
+                .cleartext_refusal()
+                .is_none()
+        );
     }
 
     #[test]
@@ -506,10 +504,19 @@ mod tests {
         };
         // Marked not_leader is safe to retry with no idempotency key at all.
         assert!(retryable(&not_leader, false));
-        assert!(retryable(&Error::Http { status: 429, body: None }, false));
+        assert!(retryable(
+            &Error::Http {
+                status: 429,
+                body: None
+            },
+            false
+        ));
 
         // A bare 503 is ambiguous: the mutation may have applied.
-        let bare = Error::Http { status: 503, body: None };
+        let bare = Error::Http {
+            status: 503,
+            body: None,
+        };
         assert!(!retryable(&bare, false));
         assert!(retryable(&bare, true));
 
@@ -519,7 +526,10 @@ mod tests {
 
         // Terminal statuses never retry.
         for status in [400, 401, 403, 404, 409, 422] {
-            assert!(!retryable(&Error::Http { status, body: None }, true), "{status}");
+            assert!(
+                !retryable(&Error::Http { status, body: None }, true),
+                "{status}"
+            );
         }
     }
 

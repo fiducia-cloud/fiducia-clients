@@ -46,7 +46,8 @@ class FiduciaRequestOptions {
 
 /// Host of [baseUrl] when its scheme is cleartext http://, else null.
 String? _cleartextHost(String baseUrl) {
-  if (baseUrl.length < 7 || baseUrl.substring(0, 7).toLowerCase() != 'http://') {
+  if (baseUrl.length < 7 ||
+      baseUrl.substring(0, 7).toLowerCase() != 'http://') {
     return null;
   }
   var authority = baseUrl.substring(7).split(RegExp(r'[/?#]')).first;
@@ -63,10 +64,20 @@ String? _cleartextHost(String baseUrl) {
 
 /// Loopback, private/link-local IPs, and in-cluster names.
 bool _internalHostAllowed(String host) {
-  if (host.isEmpty || host == 'localhost' || host.endsWith('.localhost')) return true;
-  if (host == '::1') return true;
-  for (final prefix in const <String>['fc', 'fd', 'fe8', 'fe9', 'fea', 'feb']) {
-    if (host.startsWith(prefix)) return true;
+  if (host.isEmpty || host == 'localhost' || host.endsWith('.localhost'))
+    return true;
+  if (host.contains(':')) {
+    if (host == '::1') return true;
+    for (final prefix in const <String>[
+      'fc',
+      'fd',
+      'fe8',
+      'fe9',
+      'fea',
+      'feb'
+    ]) {
+      if (host.startsWith(prefix)) return true;
+    }
   }
   final octets = host.split('.');
   if (octets.length == 4) {
@@ -74,8 +85,11 @@ bool _internalHostAllowed(String host) {
     if (parsed.every((o) => o != null && o >= 0 && o <= 255)) {
       final a = parsed[0]!;
       final b = parsed[1]!;
-      return a == 127 || a == 10 || (a == 172 && b >= 16 && b <= 31) ||
-          (a == 192 && b == 168) || (a == 169 && b == 254);
+      return a == 127 ||
+          a == 10 ||
+          (a == 172 && b >= 16 && b <= 31) ||
+          (a == 192 && b == 168) ||
+          (a == 169 && b == 254);
     }
   }
   return !host.contains('.') ||

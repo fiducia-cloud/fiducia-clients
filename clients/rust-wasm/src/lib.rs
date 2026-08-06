@@ -75,25 +75,17 @@ fn cleartext_http_host(base: &str) -> Option<&str> {
 /// private/link-local IP, a single-label service name, or a cluster-internal
 /// DNS suffix. Mirrors the policy in the native `fiducia-client` crate.
 fn cleartext_internal_host_allowed(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
+    use std::net::IpAddr;
+
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
         return true;
     }
-    if host == "::1" || host.starts_with("fc") || host.starts_with("fd") || host.starts_with("fe8")
-    {
-        return true;
-    }
-    if let Some(octets) = host
-        .split('.')
-        .map(str::parse::<u8>)
-        .collect::<core::result::Result<Vec<_>, _>>()
-        .ok()
-        .filter(|octets| octets.len() == 4)
-    {
-        return matches!(
-            (octets[0], octets[1]),
-            (127, _) | (10, _) | (172, 16..=31) | (192, 168) | (169, 254)
-        );
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+            IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+        };
     }
     !host.contains('.') || host.ends_with(".svc.cluster.local") || host.ends_with(".internal")
 }
@@ -138,9 +130,7 @@ impl FiduciaClient {
                 .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
             if carries_credential && !cleartext_internal_host_allowed(host) {
                 return Err(JsValue::from_str(&format!(
-                    "fiducia: refusing to send Authorization over cleartext http:// \
-                     to public host \"{host}\": use https://, an in-cluster address, \
-                     or loopback"
+                    "fiducia: refusing to send Authorization over cleartext http://                      to public host "{host}": use https://, an in-cluster address,                      or loopback"
                 )));
             }
         }

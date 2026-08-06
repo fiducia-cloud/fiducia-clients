@@ -54,7 +54,10 @@ fn serve(responses: Vec<(u16, String)>) -> (String, Arc<AtomicUsize>) {
 }
 
 fn ok(output: serde_json::Value) -> (u16, String) {
-    (200, json!({ "committed": true, "result": { "output": output } }).to_string())
+    (
+        200,
+        json!({ "committed": true, "result": { "output": output } }).to_string(),
+    )
 }
 
 fn not_leader() -> (u16, String) {
@@ -88,7 +91,10 @@ async fn a_successful_renewal_returns_the_new_deadline() {
     )]);
     let client = AsyncFiduciaClient::new(&base);
 
-    let expires = client.renew("job", "worker-a", 7, 120_000).await.expect("renew");
+    let expires = client
+        .renew("job", "worker-a", 7, 120_000)
+        .await
+        .expect("renew");
     assert_eq!(expires, Some(1_700_000_000_000));
 }
 
@@ -100,7 +106,10 @@ async fn a_release_that_matched_no_grant_is_not_success() {
     let client = AsyncFiduciaClient::new(&base);
 
     let released = client.release("job", "worker-a", 7).await.expect("2xx");
-    assert!(!released, "a committed no-op must not read as a successful release");
+    assert!(
+        !released,
+        "a committed no-op must not read as a successful release"
+    );
 }
 
 /// Checklist: retry `503 not_leader`. A routine election must not surface as an
@@ -115,10 +124,17 @@ async fn a_routine_election_is_retried_not_surfaced() {
     ]);
     let client = AsyncFiduciaClient::new(&base).with_retries(3, Duration::ZERO);
 
-    let token = client.acquire("job", "worker-a", 120_000).await.expect("acquire");
+    let token = client
+        .acquire("job", "worker-a", 120_000)
+        .await
+        .expect("acquire");
 
     assert_eq!(token, Some(42));
-    assert_eq!(seen.load(Ordering::SeqCst), 3, "both 503s should have been retried");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        3,
+        "both 503s should have been retried"
+    );
 }
 
 /// …but an *unmarked* 5xx is ambiguous: the mutation may have applied, so it
@@ -133,8 +149,15 @@ async fn an_unmarked_server_error_is_not_retried() {
 
     let result = client.acquire("job", "worker-a", 120_000).await;
 
-    assert!(matches!(result, Err(Error::Http { status: 503, .. })), "{result:?}");
-    assert_eq!(seen.load(Ordering::SeqCst), 1, "an ambiguous 5xx must not be re-sent");
+    assert!(
+        matches!(result, Err(Error::Http { status: 503, .. })),
+        "{result:?}"
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "an ambiguous 5xx must not be re-sent"
+    );
 }
 
 /// Checklist: contention is not failure. Someone else holding the lock is a
@@ -168,8 +191,15 @@ async fn a_redirect_never_carries_the_credential_onward() {
 
     let result = client.acquire("job", "worker-a", 120_000).await;
 
-    assert!(matches!(result, Err(Error::Http { status: 307, .. })), "{result:?}");
-    assert_eq!(seen.load(Ordering::SeqCst), 1, "the redirect must not be followed");
+    assert!(
+        matches!(result, Err(Error::Http { status: 307, .. })),
+        "{result:?}"
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "the redirect must not be followed"
+    );
 }
 
 /// The credential guard fires before the socket does, so a misconfigured base
@@ -187,9 +217,16 @@ async fn a_credential_is_refused_before_any_connection_is_made() {
     match result {
         Err(Error::Transport(message)) => {
             assert!(message.contains("refusing to send"), "{message}");
-            assert!(!message.contains("fk_live_secret"), "error leaked the key: {message}");
+            assert!(
+                !message.contains("fk_live_secret"),
+                "error leaked the key: {message}"
+            );
         }
         other => panic!("expected a pre-flight refusal, got {other:?}"),
     }
-    assert_eq!(seen.load(Ordering::SeqCst), 0, "nothing should have been sent");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        0,
+        "nothing should have been sent"
+    );
 }
