@@ -69,3 +69,7 @@ Thumbs.db
 *~
 .direnv/
 **/.gradle/
+tmp
+temp
+tmp/worktrees
+temp/worktrees
