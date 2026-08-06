@@ -1,6 +1,8 @@
 # Fiducia client support tiers
 
-This document is the reviewable source of truth for how `clients/*` language folders are supported. It exists to prevent two recurring failure modes:
+This document is the human-readable policy for how `clients/*` language folders are supported. The matching machine-readable inventory is `clients/support-tiers.json`; CI requires the directory tree, generator outputs, Zed publication targets, maintenance classification, and this policy to agree.
+
+The paired policy and inventory exist to prevent two recurring failure modes:
 
 1. treating generated preview clients as production-supported because a folder exists; and
 2. opening duplicate "add language" work for languages that already have a folder but still need conformance, packaging, and ergonomic promotion work.
