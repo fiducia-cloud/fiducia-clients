@@ -65,10 +65,49 @@ for (const match of generator.matchAll(generatorTarget)) generatorClients.push(m
 assertSame("generate.py client outputs versus generated maintenance list", generatorClients, generated);
 
 const zpkg = await readFile(path.join(root, ".zpkg.toml"), "utf8");
-const publishedClients = [];
-const publishTarget = /^dir\s*=\s*"clients\/([^/"\n]+)"\s*$/gm;
-for (const match of zpkg.matchAll(publishTarget)) publishedClients.push(match[1]);
-assertUnique(".zpkg.toml client targets", publishedClients);
+const publishedTargets = [];
+let targetName = null;
+for (const line of zpkg.split(/\r?\n/)) {
+  const targetHeader = line.match(/^\[targets\.([A-Za-z0-9_-]+)\]\s*$/);
+  if (targetHeader) {
+    targetName = targetHeader[1];
+    continue;
+  }
+  if (/^\[/.test(line)) {
+    targetName = null;
+    continue;
+  }
+  if (targetName === null) continue;
+
+  const directory = line.match(/^dir\s*=\s*"clients\/([^/"\n]+)"\s*$/);
+  if (directory) {
+    publishedTargets.push({ target: targetName, client: directory[1] });
+  }
+}
+
+const targetsByClient = new Map();
+for (const { target, client } of publishedTargets) {
+  const targets = targetsByClient.get(client) ?? [];
+  targets.push(target);
+  targetsByClient.set(client, targets);
+}
+
+const typeScriptRuntimeTargets = ["bun", "deno", "edge", "nodejs"];
+for (const [client, targets] of targetsByClient) {
+  if (targets.length === 1) continue;
+  assert.equal(
+    client,
+    "ts",
+    `.zpkg.toml publishes clients/${client} through multiple targets: ${sorted(targets).join(", ")}`,
+  );
+  assert.deepEqual(
+    sorted(targets),
+    typeScriptRuntimeTargets,
+    "clients/ts may be shared only by the complete Node.js, Deno, Bun, and edge runtime target set",
+  );
+}
+
+const publishedClients = [...targetsByClient.keys()];
 assertSame(".zpkg.toml targets versus support tiers", publishedClients, actualClients);
 
 const supportDoc = await readFile(path.join(clientsRoot, "SUPPORT_TIERS.md"), "utf8");
