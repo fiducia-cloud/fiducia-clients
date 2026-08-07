@@ -1,5 +1,5 @@
 [package]
-org = "fiducia"
+org = "fiducia-cloud"
 name = "fiducia-clients"
 version = "0.1.0"
 description = "Official polyglot clients for fiducia.cloud"
@@ -15,6 +15,7 @@ dir = ".vendor/.zed"
 
 [dependencies]
 "fiducia-cloud/fiducia-interfaces" = "^0.1.0"
+"fiducia-cloud/fiducia-lib" = "^0.1.0"
 
 [publish]
 include_readme = true
@@ -49,7 +50,7 @@ package = "fiducia-client"
 forge = ["gitlab-packages"]
 
 [targets.golang]
-dir = "clients/go"
+dir = "clients/golang"
 name = "fiducia-clients-golang"
 adapter = "go"
 
@@ -76,6 +77,7 @@ dir = "clients/csharp"
 
 [targets.ruby]
 dir = "clients/ruby"
+adapter = "none"
 
 [targets.ruby.native]
 registry = "rubygems"
@@ -84,6 +86,7 @@ forge = ["github-packages", "gitlab-packages"]
 
 [targets.php]
 dir = "clients/php"
+adapter = "none"
 
 [targets.php.native]
 registry = "packagist"
@@ -106,6 +109,7 @@ package = "fiducia_client"
 
 [targets.elixir]
 dir = "clients/elixir"
+adapter = "none"
 
 [targets.gleam]
 dir = "clients/gleam"
@@ -126,13 +130,15 @@ adapter = "java"
 
 [targets.kotlin]
 dir = "clients/kotlin"
-adapter = "java"
+adapter = "none"
 
 [targets.erlang]
 dir = "clients/erlang"
+adapter = "none"
 
 [targets.swift]
 dir = "clients/swift"
+adapter = "none"
 
 [targets.cpp]
 dir = "clients/cpp"
@@ -163,3 +169,27 @@ dir = "clients/crystal"
 
 [targets.lua]
 dir = "clients/lua"
+
+[targets.gleamlang]
+dir = "clients/gleamlang"
+adapter = "none"
+
+[targets.python3]
+dir = "clients/python3"
+adapter = "none"
+
+[targets.typescript-nodejs]
+dir = "clients/typescript/nodejs"
+adapter = "node"
+
+[targets.typescript-deno]
+dir = "clients/typescript/deno"
+adapter = "none"
+
+[targets.typescript-bun]
+dir = "clients/typescript/bun"
+adapter = "node"
+
+[targets.typescript-edge]
+dir = "clients/typescript/edge"
+adapter = "none"
