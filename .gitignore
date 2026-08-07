@@ -61,3 +61,7 @@ dist-newstyle/
 
 # Nim
 nimcache/
+tmp
+temp
+tmp/worktrees
+temp/worktrees
