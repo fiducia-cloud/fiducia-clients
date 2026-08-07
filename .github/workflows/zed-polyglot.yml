@@ -30,10 +30,10 @@ jobs:
       matrix: ${{ steps.matrix.outputs.value }}
       count: ${{ steps.matrix.outputs.count }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-cli
           ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
@@ -62,15 +62,15 @@ jobs:
     name: Fan out into one package per language
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-cli
           ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-interfaces
           ref: 07d01604461d00e237c7d86ad3855464167574ec
@@ -125,7 +125,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.parity.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
 
