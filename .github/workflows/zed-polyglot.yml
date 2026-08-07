@@ -38,7 +38,7 @@ jobs:
           repository: zed-pkg/zed-cli
           ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -168,7 +168,7 @@ jobs:
         working-directory: ${{ steps.slice.outputs.dir }}
         run: npm pack --dry-run
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.ecosystem == 'pypi'
         with:
           python-version: "3.12"
