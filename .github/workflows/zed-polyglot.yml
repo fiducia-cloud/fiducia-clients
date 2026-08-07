@@ -207,7 +207,7 @@ jobs:
         working-directory: ${{ steps.slice.outputs.dir }}
         run: gem build ./*.gemspec
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         if: matrix.ecosystem == 'maven'
         with:
           distribution: temurin
