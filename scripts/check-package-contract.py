@@ -23,9 +23,9 @@ REQUIRED: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "java": ("clients/java", ("pom.xml", "build.gradle", "build.gradle.kts"), (".java",)),
     "golang": ("clients/go", ("go.mod",), (".go",)),
     "python": ("clients/python", ("pyproject.toml", "setup.py", "setup.cfg"), (".py",)),
-    "ruby": ("clients/ruby", ("zed_client.gemspec", "fiducia_client.gemspec", "fiducia-clients.gemspec", "Gemfile"), (".rb",)),
+    "ruby": ("clients/ruby", ("fiducia-client.gemspec", "fiducia_client.gemspec", "fiducia-clients.gemspec", "Gemfile"), (".rb",)),
     "php": ("clients/php", ("composer.json",), (".php",)),
-    "nodejs": ("clients/typescript", ("package.json", "tsconfig.json"), (".ts", ".tsx", ".js", ".mjs")),
+    "nodejs": ("clients/ts", ("package.json", "tsconfig.json"), (".ts", ".tsx", ".js", ".mjs")),
     "kotlin": ("clients/kotlin", ("build.gradle.kts", "build.gradle", "pom.xml"), (".kt",)),
     "swift": ("clients/swift", ("Package.swift",), (".swift",)),
 }
@@ -107,12 +107,12 @@ def main() -> int:
 
     for runtime_target in ("nodejs", "deno", "bun", "edge"):
         record = targets.get(runtime_target)
-        if not isinstance(record, dict) or record.get("dir") != "clients/typescript":
-            errors.append(f"TypeScript runtime target {runtime_target!r} is missing or points outside clients/typescript")
+        if not isinstance(record, dict) or record.get("dir") != "clients/ts":
+            errors.append(f"TypeScript runtime target {runtime_target!r} is missing or points outside clients/ts")
 
-    matrix_path = ROOT / "clients/typescript/runtime-matrix.json"
+    matrix_path = ROOT / "clients/ts/runtime-matrix.json"
     if not matrix_path.is_file():
-        errors.append("clients/typescript/runtime-matrix.json is missing")
+        errors.append("clients/ts/runtime-matrix.json is missing")
     else:
         try:
             matrix = json.loads(matrix_path.read_text(encoding="utf-8"))

@@ -68,7 +68,7 @@ package = "fiducia-client"
 forge = ["gitlab-packages"]
 
 [targets.golang]
-dir = "clients/golang"
+dir = "clients/go"
 name = "fiducia-clients-golang"
 adapter = "go"
 
@@ -148,7 +148,7 @@ adapter = "java"
 
 [targets.kotlin]
 dir = "clients/kotlin"
-adapter = "none"
+adapter = "java"
 
 [targets.erlang]
 dir = "clients/erlang"
@@ -187,27 +187,3 @@ dir = "clients/crystal"
 
 [targets.lua]
 dir = "clients/lua"
-
-[targets.gleamlang]
-dir = "clients/gleamlang"
-adapter = "none"
-
-[targets.python3]
-dir = "clients/python3"
-adapter = "none"
-
-[targets.typescript-nodejs]
-dir = "clients/typescript/nodejs"
-adapter = "node"
-
-[targets.typescript-deno]
-dir = "clients/typescript/deno"
-adapter = "none"
-
-[targets.typescript-bun]
-dir = "clients/typescript/bun"
-adapter = "node"
-
-[targets.typescript-edge]
-dir = "clients/typescript/edge"
-adapter = "none"

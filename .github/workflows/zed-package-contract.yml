@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: clients/typescript/package-lock.json
+          cache-dependency-path: clients/ts/package-lock.json
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -52,17 +52,17 @@ jobs:
         with:
           bun-version: latest
       - name: Build and test the native TypeScript package
-        working-directory: clients/typescript
+        working-directory: clients/ts
         run: |
           npm ci
           npm run build --if-present
           npm test --if-present
       - name: Import under Node, Deno, and Bun
         run: |
-          node test/runtime-import-smoke.mjs
+          node --experimental-strip-types test/runtime-import-smoke.mjs
           deno run --allow-read test/runtime-import-smoke.mjs
           bun run test/runtime-import-smoke.mjs
       - name: Import under a local Workers runtime
-        working-directory: clients/typescript
+        working-directory: clients/ts
         run: npm install --no-save wrangler@4
       - run: node test/run-edge-smoke.mjs

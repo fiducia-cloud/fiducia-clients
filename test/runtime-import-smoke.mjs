@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 
 const runtime = globalThis.Deno ? "deno" : globalThis.Bun ? "bun" : "node";
-const candidates = runtime === "node"
-  ? ["../dist/index.js", "../dist/index.mjs", "../lib/index.js"]
-  : ["../src/index.ts", "../src/index.js", "../dist/index.js", "../dist/index.mjs"];
+// The TypeScript client lives in clients/ts (Tier 1 in clients/SUPPORT_TIERS.md)
+// and ships as source: no build step, no dist/, entry `fiducia.ts`. These paths
+// previously resolved to a repo-root dist/ and lib/ that have never existed, so
+// this smoke could not import the client in any runtime. Node needs
+// --experimental-strip-types to load the .ts entry; Deno and Bun load it natively.
+const candidates = [
+  "../clients/ts/fiducia.ts",
+  "../clients/ts/dist/index.js",
+  "../clients/ts/dist/index.mjs",
+];
 
 let sdk;
 let lastError;
