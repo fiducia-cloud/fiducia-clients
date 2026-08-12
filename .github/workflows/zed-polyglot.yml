@@ -135,7 +135,7 @@ jobs:
       # the registry would actually receive -- checking the source tree both
       # misses real problems and invents ones the artifact does not have.
       - name: Download the packed slices
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: language-slices
           path: slices
