@@ -109,55 +109,59 @@ module internal Internal =
         if not (isNull leaseExpiresMs) then g.["lease_expires_ms"] <- toNode (box leaseExpiresMs)
         g :> JsonNode
 
+[<AutoOpen>]
+module internal TransportSecurity =
+
+    /// Host of baseUrl when its scheme is cleartext http://, else None.
+    let private cleartextHost (baseUrl: string) : string option =
+        if baseUrl.Length < 7 || not (baseUrl.Substring(0, 7).ToLowerInvariant() = "http://") then
+            None
+        else
+            let mutable authority = baseUrl.Substring(7).Split([| '/'; '?'; '#' |]).[0]
+            let at = authority.LastIndexOf('@')
+            if at >= 0 then authority <- authority.Substring(at + 1)
+            if authority.StartsWith("[") then
+                let endIdx = authority.IndexOf(']')
+                Some(if endIdx > 0 then authority.Substring(1, endIdx - 1).ToLowerInvariant() else "")
+            else
+                let colon = authority.IndexOf(':')
+                if colon >= 0 then authority <- authority.Substring(0, colon)
+                Some(authority.ToLowerInvariant())
+
+    /// Loopback, private/link-local IPs, and in-cluster names.
+    let private internalHostAllowed (host: string) : bool =
+        if host = "" || host = "localhost" || host.EndsWith(".localhost") then true
+        elif host = "::1" then true
+        elif [ "fc"; "fd"; "fe8"; "fe9"; "fea"; "feb" ] |> List.exists host.StartsWith then true
+        else
+            let octets = host.Split('.')
+            let parsed =
+                if octets.Length = 4 then
+                    octets |> Array.map (fun o -> match System.Byte.TryParse o with | true, v -> Some v | _ -> None)
+                else [||]
+            if parsed.Length = 4 && Array.forall Option.isSome parsed then
+                let a = int parsed.[0].Value
+                let b = int parsed.[1].Value
+                a = 127 || a = 10 || (a = 172 && b >= 16 && b <= 31)
+                || (a = 192 && b = 168) || (a = 169 && b = 254)
+            else
+                not (host.Contains(".")) || host.EndsWith(".svc.cluster.local")
+                || host.EndsWith(".internal")
+
+    /// Refuse to carry credentials over cleartext to a public host.
+    let private requireEncryptedTransport (baseUrl: string) : unit =
+        match cleartextHost baseUrl with
+        | Some host when not (internalHostAllowed host) ->
+            invalidArg
+                "baseUrl"
+                (sprintf
+                    "fiducia: refusing cleartext http:// to public host \"%s\": use https://, an in-cluster address, or loopback"
+                    host)
+        | _ -> ()
+
+
 /// Thin HTTP wrapper over the Fiducia contract. Every method issues one request
 /// and returns the parsed JSON response as a JsonNode (null for an empty body).
-/// Host of baseUrl when its scheme is cleartext http://, else None.
-let private cleartextHost (baseUrl: string) : string option =
-    if baseUrl.Length < 7 || not (baseUrl.Substring(0, 7).ToLowerInvariant() = "http://") then
-        None
-    else
-        let mutable authority = baseUrl.Substring(7).Split([| '/'; '?'; '#' |]).[0]
-        let at = authority.LastIndexOf('@')
-        if at >= 0 then authority <- authority.Substring(at + 1)
-        if authority.StartsWith("[") then
-            let endIdx = authority.IndexOf(']')
-            Some(if endIdx > 0 then authority.Substring(1, endIdx - 1).ToLowerInvariant() else "")
-        else
-            let colon = authority.IndexOf(':')
-            if colon >= 0 then authority <- authority.Substring(0, colon)
-            Some(authority.ToLowerInvariant())
-
-/// Loopback, private/link-local IPs, and in-cluster names.
-let private internalHostAllowed (host: string) : bool =
-    if host = "" || host = "localhost" || host.EndsWith(".localhost") then true
-    elif host = "::1" then true
-    elif [ "fc"; "fd"; "fe8"; "fe9"; "fea"; "feb" ] |> List.exists host.StartsWith then true
-    else
-        let octets = host.Split('.')
-        let parsed =
-            if octets.Length = 4 then
-                octets |> Array.map (fun o -> match System.Byte.TryParse o with | true, v -> Some v | _ -> None)
-            else [||]
-        if parsed.Length = 4 && Array.forall Option.isSome parsed then
-            let a = int parsed.[0].Value
-            let b = int parsed.[1].Value
-            a = 127 || a = 10 || (a = 172 && b >= 16 && b <= 31)
-            || (a = 192 && b = 168) || (a = 169 && b = 254)
-        else
-            not (host.Contains(".")) || host.EndsWith(".svc.cluster.local")
-            || host.EndsWith(".internal")
-
-/// Refuse to carry credentials over cleartext to a public host.
-let private requireEncryptedTransport (baseUrl: string) : unit =
-    match cleartextHost baseUrl with
-    | Some host when not (internalHostAllowed host) ->
-        invalidArg
-            "baseUrl"
-            (sprintf
-                "fiducia: refusing cleartext http:// to public host \"%s\": use https://, an in-cluster address, or loopback"
-                host)
-    | _ -> ()
-
 type FiduciaClient(baseUrl: string) =
 
     do requireEncryptedTransport baseUrl
