@@ -48,13 +48,20 @@ const terminate = (signal) => {
   child.kill(signal);
 };
 
-try {
+const abortController = new AbortController();
+let deadline;
+
+const runSmoke = async () => {
   let response;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
-      response = await fetch(`http://127.0.0.1:${port}/`);
+      response = await fetch(`http://127.0.0.1:${port}/`, {
+        signal: abortController.signal,
+      });
       if (response.ok) break;
-    } catch {}
+    } catch (error) {
+      if (abortController.signal.aborted) throw error;
+    }
     await delay(250);
   }
   assert.ok(response, `Wrangler did not start\n${logs}`);
@@ -63,7 +70,21 @@ try {
   assert.equal(result.ok, true, logs);
   assert.ok(Array.isArray(result.exports) && result.exports.length > 0, logs);
   console.log(`edge client import smoke passed with ${result.exports.length} exports`);
+};
+
+try {
+  await Promise.race([
+    runSmoke(),
+    new Promise((_, reject) => {
+      deadline = setTimeout(
+        () => reject(new Error(`edge smoke exceeded 30 seconds\n${logs}`)),
+        30000,
+      );
+    }),
+  ]);
 } finally {
+  clearTimeout(deadline);
+  abortController.abort();
   terminate("SIGTERM");
   await Promise.race([waitForExit(), delay(3000)]);
   if (child.exitCode === null) {
