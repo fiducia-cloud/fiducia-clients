@@ -109,11 +109,10 @@ module internal Internal =
         if not (isNull leaseExpiresMs) then g.["lease_expires_ms"] <- toNode (box leaseExpiresMs)
         g :> JsonNode
 
-[<AutoOpen>]
 module internal TransportSecurity =
 
     /// Host of baseUrl when its scheme is cleartext http://, else None.
-    let private cleartextHost (baseUrl: string) : string option =
+    let cleartextHost (baseUrl: string) : string option =
         if baseUrl.Length < 7 || not (baseUrl.Substring(0, 7).ToLowerInvariant() = "http://") then
             None
         else
@@ -129,7 +128,7 @@ module internal TransportSecurity =
                 Some(authority.ToLowerInvariant())
 
     /// Loopback, private/link-local IPs, and in-cluster names.
-    let private internalHostAllowed (host: string) : bool =
+    let internalHostAllowed (host: string) : bool =
         if host = "" || host = "localhost" || host.EndsWith(".localhost") then true
         elif host = "::1" then true
         elif [ "fc"; "fd"; "fe8"; "fe9"; "fea"; "feb" ] |> List.exists host.StartsWith then true
@@ -149,7 +148,7 @@ module internal TransportSecurity =
                 || host.EndsWith(".internal")
 
     /// Refuse to carry credentials over cleartext to a public host.
-    let private requireEncryptedTransport (baseUrl: string) : unit =
+    let requireEncryptedTransport (baseUrl: string) : unit =
         match cleartextHost baseUrl with
         | Some host when not (internalHostAllowed host) ->
             invalidArg
@@ -164,7 +163,7 @@ module internal TransportSecurity =
 /// and returns the parsed JSON response as a JsonNode (null for an empty body).
 type FiduciaClient(baseUrl: string) =
 
-    do requireEncryptedTransport baseUrl
+    do TransportSecurity.requireEncryptedTransport baseUrl
     let baseUri = baseUrl.TrimEnd('/')
 
     member private _.Send(method: HttpMethod, path: string, body: JsonNode) : JsonNode =
