@@ -1,0 +1,10 @@
+{
+  "apiSurface": "clients/api-surface.json",
+  "apiSurfaceSha256": "7917ea8ad6cd04530a91ec92ba4a808c910b71ccf00c6f99050d551c7ac0d02c",
+  "coordinate": "fiducia-cloud/fiducia-clients",
+  "runtime": "wasm",
+  "schemaId": "https://zpkg.tech/schemas/client-api.schema.json",
+  "schemaVersion": 1,
+  "target": "wasm",
+  "zedTarget": "rust-wasm"
+}

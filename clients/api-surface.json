@@ -1,0 +1,457 @@
+{
+  "$schema": "./client-api.schema.json",
+  "package": {
+    "coordinate": "fiducia-cloud/fiducia-clients",
+    "description": "Canonical polyglot API contract for fiducia-cloud/fiducia-clients.",
+    "namespace": "Fiducia"
+  },
+  "schemaVersion": 1,
+  "symbols": [
+    {
+      "definition": {
+        "fields": [
+          {
+            "deprecation": null,
+            "documentationId": "api.symbols.0.definition.fields.0.baseUrl",
+            "name": "baseUrl",
+            "readonly": true,
+            "stability": "stable",
+            "type": {
+              "kind": "primitive",
+              "name": "string"
+            },
+            "visibility": "public"
+          },
+          {
+            "deprecation": null,
+            "documentationId": "api.symbols.0.definition.fields.1.bearerToken",
+            "name": "bearerToken",
+            "readonly": true,
+            "stability": "stable",
+            "type": {
+              "item": {
+                "kind": "primitive",
+                "name": "string"
+              },
+              "kind": "optional"
+            },
+            "visibility": "public"
+          }
+        ],
+        "kind": "object"
+      },
+      "deprecation": null,
+      "description": "Portable client construction options.",
+      "documentationId": "api.symbols.0.FiduciaClientOptions",
+      "kind": "type",
+      "name": "FiduciaClientOptions",
+      "stability": "stable",
+      "visibility": "public"
+    },
+    {
+      "definition": {
+        "fields": [
+          {
+            "deprecation": null,
+            "documentationId": "api.symbols.1.definition.fields.0.requestId",
+            "name": "requestId",
+            "readonly": true,
+            "stability": "stable",
+            "type": {
+              "kind": "primitive",
+              "name": "string"
+            },
+            "visibility": "private"
+          }
+        ],
+        "kind": "object"
+      },
+      "deprecation": null,
+      "description": "Internal request correlation state.",
+      "documentationId": "api.symbols.1._FiduciaRequestContext",
+      "kind": "type",
+      "name": "_FiduciaRequestContext",
+      "stability": "stable",
+      "visibility": "private"
+    },
+    {
+      "deprecation": null,
+      "description": "Transport abstraction implemented by runtime adapters.",
+      "documentationId": "api.symbols.2.FiduciaTransport",
+      "kind": "interface",
+      "methods": [
+        {
+          "async": true,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "async",
+          "deprecation": null,
+          "documentationId": "api.symbols.2.methods.0.send",
+          "name": "send",
+          "parameters": [
+            {
+              "name": "path",
+              "type": {
+                "kind": "primitive",
+                "name": "string"
+              }
+            },
+            {
+              "name": "body",
+              "type": {
+                "item": {
+                  "kind": "primitive",
+                  "name": "bytes"
+                },
+                "kind": "optional"
+              }
+            }
+          ],
+          "returns": {
+            "kind": "primitive",
+            "name": "bytes"
+          },
+          "stability": "stable",
+          "static": false,
+          "throws": [
+            {
+              "kind": "named",
+              "name": "FiduciaClientError"
+            }
+          ],
+          "visibility": "public"
+        }
+      ],
+      "name": "FiduciaTransport",
+      "stability": "stable",
+      "visibility": "public"
+    },
+    {
+      "deprecation": null,
+      "description": "Internal telemetry sink.",
+      "documentationId": "api.symbols.3._FiduciaTelemetrySink",
+      "kind": "interface",
+      "methods": [
+        {
+          "async": false,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "sync",
+          "deprecation": null,
+          "documentationId": "api.symbols.3.methods.0.record",
+          "name": "record",
+          "parameters": [
+            {
+              "name": "event",
+              "type": {
+                "kind": "primitive",
+                "name": "string"
+              }
+            }
+          ],
+          "returns": {
+            "kind": "primitive",
+            "name": "void"
+          },
+          "stability": "stable",
+          "static": false,
+          "throws": [],
+          "visibility": "private"
+        }
+      ],
+      "name": "_FiduciaTelemetrySink",
+      "stability": "stable",
+      "visibility": "private"
+    },
+    {
+      "definition": {
+        "kind": "enum",
+        "values": [
+          "InvalidConfiguration",
+          "TransportFailure",
+          "Unauthorized",
+          "UnexpectedResponse"
+        ]
+      },
+      "deprecation": null,
+      "description": "Stable cross-runtime error categories.",
+      "documentationId": "api.symbols.4.FiduciaClientError",
+      "kind": "type",
+      "name": "FiduciaClientError",
+      "stability": "stable",
+      "visibility": "public"
+    },
+    {
+      "constructors": [
+        {
+          "async": false,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "sync",
+          "deprecation": null,
+          "documentationId": "api.symbols.5.constructors.0.new",
+          "name": "new",
+          "parameters": [
+            {
+              "name": "options",
+              "type": {
+                "kind": "named",
+                "name": "FiduciaClientOptions"
+              }
+            }
+          ],
+          "returns": {
+            "kind": "named",
+            "name": "FiduciaClient"
+          },
+          "stability": "stable",
+          "static": true,
+          "throws": [
+            {
+              "kind": "named",
+              "name": "FiduciaClientError"
+            }
+          ],
+          "visibility": "public"
+        }
+      ],
+      "deprecation": null,
+      "description": "Standard public client entry point.",
+      "documentationId": "api.symbols.5.FiduciaClient",
+      "fields": [
+        {
+          "deprecation": null,
+          "documentationId": "api.symbols.5.fields.0.options",
+          "name": "options",
+          "readonly": true,
+          "stability": "stable",
+          "type": {
+            "kind": "named",
+            "name": "FiduciaClientOptions"
+          },
+          "visibility": "private"
+        }
+      ],
+      "implements": [],
+      "kind": "class",
+      "methods": [
+        {
+          "async": true,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "async",
+          "deprecation": null,
+          "documentationId": "api.symbols.5.methods.0.health",
+          "name": "health",
+          "parameters": [],
+          "returns": {
+            "kind": "primitive",
+            "name": "boolean"
+          },
+          "stability": "stable",
+          "static": false,
+          "throws": [
+            {
+              "kind": "named",
+              "name": "FiduciaClientError"
+            }
+          ],
+          "visibility": "public"
+        },
+        {
+          "async": true,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "async",
+          "deprecation": null,
+          "documentationId": "api.symbols.5.methods.1._request",
+          "name": "_request",
+          "parameters": [
+            {
+              "name": "path",
+              "type": {
+                "kind": "primitive",
+                "name": "string"
+              }
+            },
+            {
+              "name": "context",
+              "type": {
+                "kind": "named",
+                "name": "_FiduciaRequestContext"
+              }
+            }
+          ],
+          "returns": {
+            "kind": "primitive",
+            "name": "bytes"
+          },
+          "stability": "stable",
+          "static": false,
+          "throws": [
+            {
+              "kind": "named",
+              "name": "FiduciaClientError"
+            }
+          ],
+          "visibility": "private"
+        }
+      ],
+      "name": "FiduciaClient",
+      "stability": "stable",
+      "visibility": "public"
+    },
+    {
+      "constructors": [
+        {
+          "async": false,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "sync",
+          "deprecation": null,
+          "documentationId": "api.symbols.6.constructors.0.new",
+          "name": "new",
+          "parameters": [],
+          "returns": {
+            "kind": "named",
+            "name": "_FiduciaRequestBuilder"
+          },
+          "stability": "stable",
+          "static": true,
+          "throws": [],
+          "visibility": "private"
+        }
+      ],
+      "deprecation": null,
+      "description": "Internal request builder.",
+      "documentationId": "api.symbols.6._FiduciaRequestBuilder",
+      "fields": [],
+      "implements": [],
+      "kind": "class",
+      "methods": [
+        {
+          "async": false,
+          "auth": {
+            "mode": "none",
+            "schemes": [],
+            "scopes": []
+          },
+          "behavior": "sync",
+          "deprecation": null,
+          "documentationId": "api.symbols.6.methods.0.build",
+          "name": "build",
+          "parameters": [
+            {
+              "name": "path",
+              "type": {
+                "kind": "primitive",
+                "name": "string"
+              }
+            }
+          ],
+          "returns": {
+            "kind": "primitive",
+            "name": "bytes"
+          },
+          "stability": "stable",
+          "static": false,
+          "throws": [],
+          "visibility": "private"
+        }
+      ],
+      "name": "_FiduciaRequestBuilder",
+      "stability": "stable",
+      "visibility": "private"
+    },
+    {
+      "async": false,
+      "auth": {
+        "mode": "none",
+        "schemes": [],
+        "scopes": []
+      },
+      "behavior": "sync",
+      "deprecation": null,
+      "description": "Construct the standard client entry point.",
+      "documentationId": "api.symbols.7.createFiduciaClient",
+      "kind": "function",
+      "name": "createFiduciaClient",
+      "parameters": [
+        {
+          "name": "options",
+          "type": {
+            "kind": "named",
+            "name": "FiduciaClientOptions"
+          }
+        }
+      ],
+      "returns": {
+        "kind": "named",
+        "name": "FiduciaClient"
+      },
+      "stability": "stable",
+      "static": true,
+      "throws": [
+        {
+          "kind": "named",
+          "name": "FiduciaClientError"
+        }
+      ],
+      "visibility": "public"
+    },
+    {
+      "async": false,
+      "auth": {
+        "mode": "none",
+        "schemes": [],
+        "scopes": []
+      },
+      "behavior": "sync",
+      "deprecation": null,
+      "description": "Normalize a base URL without network access.",
+      "documentationId": "api.symbols.8._normalizeFiduciaBaseUrl",
+      "kind": "function",
+      "name": "_normalizeFiduciaBaseUrl",
+      "parameters": [
+        {
+          "name": "baseUrl",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          }
+        }
+      ],
+      "returns": {
+        "kind": "primitive",
+        "name": "string"
+      },
+      "stability": "stable",
+      "static": true,
+      "throws": [
+        {
+          "kind": "named",
+          "name": "FiduciaClientError"
+        }
+      ],
+      "visibility": "private"
+    }
+  ]
+}

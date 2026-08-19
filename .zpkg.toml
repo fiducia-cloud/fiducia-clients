@@ -29,7 +29,6 @@ required-client-matrix = "python3 scripts/check-required-client-matrix.py"
 # Every other target is re-rooted and published as one isolated language package.
 [targets.repository]
 dir = "."
-name = "fiducia-clients-repository"
 
 # TypeScript is one runtime-neutral Fetch API implementation. All four Zed
 # runtime targets intentionally publish the same self-contained source root.
@@ -43,24 +42,9 @@ registry = "npm"
 package = "@fiducia/client"
 forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
 
-[targets.deno]
-dir = "clients/ts"
-name = "fiducia-clients-deno"
-adapter = "none"
-
-[targets.bun]
-dir = "clients/ts"
-name = "fiducia-clients-bun"
-adapter = "node"
-
-[targets.edge]
-dir = "clients/ts"
-name = "fiducia-clients-edge"
-adapter = "none"
-
 [targets.python]
 dir = "clients/python"
-adapter = "python"
+adapter = "none"
 
 [targets.python.native]
 registry = "pypi"
@@ -70,7 +54,7 @@ forge = ["gitlab-packages"]
 [targets.golang]
 dir = "clients/go"
 name = "fiducia-clients-golang"
-adapter = "go"
+adapter = "none"
 
 [targets.golang.native]
 registry = "go-modules"
@@ -80,7 +64,7 @@ forge = ["gitlab-packages"]
 
 [targets.rust]
 dir = "clients/rust"
-adapter = "rust"
+adapter = "none"
 
 [targets.rust-wasm]
 dir = "clients/rust-wasm"
@@ -119,7 +103,7 @@ dir = "clients/powershell"
 
 [targets.dart]
 dir = "clients/dart"
-adapter = "dart"
+adapter = "none"
 
 [targets.dart.native]
 registry = "pub.dev"
@@ -131,6 +115,7 @@ adapter = "none"
 
 [targets.gleam]
 dir = "clients/gleam"
+adapter = "none"
 
 [targets.fsharp]
 dir = "clients/fsharp"
@@ -160,12 +145,15 @@ adapter = "none"
 
 [targets.cpp]
 dir = "clients/cpp"
+adapter = "none"
 
 [targets.c]
 dir = "clients/c"
+adapter = "none"
 
 [targets.zig]
 dir = "clients/zig"
+adapter = "none"
 
 [targets.haskell]
 dir = "clients/haskell"
