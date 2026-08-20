@@ -20,7 +20,7 @@ dir = ".vendor/.zed"
 [publish]
 include_readme = true
 tag_format = "v{version}"
-exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "tmp/**", "**/*.log", ".DS_Store"]
+exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "tools/flags-2-env/**", "tmp/**", "**/*.log", ".DS_Store"]
 
 [scripts]
 required-client-matrix = "python3 scripts/check-required-client-matrix.py"
@@ -30,27 +30,9 @@ required-client-matrix = "python3 scripts/check-required-client-matrix.py"
 [targets.repository]
 dir = "."
 
-# TypeScript is one runtime-neutral Fetch API implementation. All four Zed
-# runtime targets intentionally publish the same self-contained source root.
-[targets.nodejs]
-dir = "clients/ts"
-name = "fiducia-clients-nodejs"
-adapter = "node"
-
-[targets.nodejs.native]
-registry = "npm"
-package = "@fiducia/client"
-forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
-
-[targets.python]
-dir = "clients/python"
-adapter = "none"
-
-[targets.python.native]
-registry = "pypi"
-package = "fiducia-client"
-forge = ["gitlab-packages"]
-
+# The Fetch-based clients/ts package is runtime-neutral. Zed publishes one
+# canonical Node.js/TypeScript slice; CI separately validates Deno, Bun, and
+# browser/edge portability because those are runtimes, not Zed language keys.
 [targets.golang]
 dir = "clients/go"
 name = "fiducia-clients-golang"
@@ -69,6 +51,7 @@ adapter = "none"
 [targets.rust-wasm]
 dir = "clients/rust-wasm"
 adapter = "node"
+ecosystem = "npm"
 
 [targets.java]
 dir = "clients/java"
@@ -111,10 +94,6 @@ package = "fiducia_client"
 
 [targets.elixir]
 dir = "clients/elixir"
-adapter = "none"
-
-[targets.gleam]
-dir = "clients/gleam"
 adapter = "none"
 
 [targets.fsharp]
@@ -175,3 +154,27 @@ dir = "clients/crystal"
 
 [targets.lua]
 dir = "clients/lua"
+
+[targets.gleam]
+dir = "clients/gleam"
+adapter = "none"
+
+[targets.python]
+dir = "clients/python"
+adapter = "none"
+
+[targets.python.native]
+registry = "pypi"
+package = "fiducia-client"
+forge = ["gitlab-packages"]
+
+[targets.nodejs]
+dir = "clients/ts"
+name = "fiducia-clients-nodejs"
+adapter = "node"
+
+[targets.nodejs.native]
+registry = "npm"
+package = "@fiducia/client"
+forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
+
