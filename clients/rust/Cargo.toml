@@ -9,11 +9,26 @@ repository = "https://github.com/fiducia-cloud/fiducia-clients"
 publish = false
 include = ["Cargo.toml", "LICENSE.txt", "src/**"]
 
+[features]
+default = []
+# Async client (`AsyncFiduciaClient`) for tokio services. The sync client blocks
+# a runtime thread per call, which pushed async callers into re-implementing the
+# protocol by hand — see fiducia-monorepo#9.
+async = ["dep:reqwest", "dep:tokio"]
+
 [dependencies]
 ureq = { version = "3.3", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+], optional = true }
+tokio = { version = "1", features = ["time"], optional = true }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 
 # Shared, generated payload/error contract — re-exported as `types` so callers
 # can deserialize responses into typed structs instead of poking at `Value`.
 fiducia-interfaces = { version = "0.1.0", git = "https://github.com/fiducia-cloud/fiducia-interfaces.git", rev = "ee8fe09f846f5a776d156c0b0d0d15582c8bd539" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

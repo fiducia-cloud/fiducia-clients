@@ -44,6 +44,74 @@ class FiduciaRequestOptions {
   });
 }
 
+/// Host of [baseUrl] when its scheme is cleartext http://, else null.
+String? _cleartextHost(String baseUrl) {
+  if (baseUrl.length < 7 ||
+      baseUrl.substring(0, 7).toLowerCase() != 'http://') {
+    return null;
+  }
+  var authority = baseUrl.substring(7).split(RegExp(r'[/?#]')).first;
+  final at = authority.lastIndexOf('@');
+  if (at >= 0) authority = authority.substring(at + 1);
+  if (authority.startsWith('[')) {
+    final end = authority.indexOf(']');
+    return end > 0 ? authority.substring(1, end).toLowerCase() : '';
+  }
+  final colon = authority.indexOf(':');
+  if (colon >= 0) authority = authority.substring(0, colon);
+  return authority.toLowerCase();
+}
+
+/// Loopback, private/link-local IPs, and in-cluster names.
+bool _internalHostAllowed(String host) {
+  if (host.isEmpty || host == 'localhost' || host.endsWith('.localhost'))
+    return true;
+  if (host.contains(':')) {
+    if (host == '::1') return true;
+    for (final prefix in const <String>[
+      'fc',
+      'fd',
+      'fe8',
+      'fe9',
+      'fea',
+      'feb'
+    ]) {
+      if (host.startsWith(prefix)) return true;
+    }
+  }
+  final octets = host.split('.');
+  if (octets.length == 4) {
+    final parsed = octets.map(int.tryParse).toList();
+    if (parsed.every((o) => o != null && o >= 0 && o <= 255)) {
+      final a = parsed[0]!;
+      final b = parsed[1]!;
+      return a == 127 ||
+          a == 10 ||
+          (a == 172 && b >= 16 && b <= 31) ||
+          (a == 192 && b == 168) ||
+          (a == 169 && b == 254);
+    }
+  }
+  return !host.contains('.') ||
+      host.endsWith('.svc.cluster.local') ||
+      host.endsWith('.internal');
+}
+
+/// Trim trailing slashes, refusing a base URL that would put credentials on
+/// the wire in the clear.
+String _checkedBase(String baseUrl) {
+  final host = _cleartextHost(baseUrl);
+  if (host != null && !_internalHostAllowed(host)) {
+    throw ArgumentError.value(
+      baseUrl,
+      'baseUrl',
+      'fiducia: refusing cleartext http:// to public host "$host": '
+          'use https://, an in-cluster address, or loopback',
+    );
+  }
+  return baseUrl.replaceAll(RegExp(r'/+$'), '');
+}
+
 class FiduciaClient {
   final String base;
   final HttpClient _http = HttpClient();
@@ -52,7 +120,7 @@ class FiduciaClient {
   int retryMax = 0;
   Duration retryDelay = Duration.zero;
 
-  FiduciaClient(String baseUrl) : base = baseUrl.replaceAll(RegExp(r'/+$'), '');
+  FiduciaClient(String baseUrl) : base = _checkedBase(baseUrl);
 
   Future<dynamic> _request(
     String method,

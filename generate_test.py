@@ -133,6 +133,19 @@ class RustWasmEmitter(unittest.TestCase):
         self.assertIn("eq_ignore_ascii_case(name)", self.src)
         self.assertIn("for (name, value) in &self.headers", self.src)
 
+    def test_authorization_refuses_public_cleartext_hosts(self):
+        # Browser mixed-content policy is not present under Node/Deno, so the
+        # generated transport must enforce the same credential boundary itself.
+        self.assertIn("fn cleartext_http_host(base: &str)", self.src)
+        self.assertIn("fn cleartext_internal_host_allowed(host: &str)", self.src)
+        self.assertIn('name.eq_ignore_ascii_case("authorization")', self.src)
+        self.assertIn("refusing to send Authorization over cleartext", self.src)
+        self.assertIn("ip.is_private()", self.src)
+        self.assertIn("ip.is_unique_local()", self.src)
+        # Prefix matching would misclassify public names such as fc.example.
+        self.assertNotIn('host.starts_with("fc")', self.src)
+        self.assertNotIn('host.starts_with("fd")', self.src)
+
     def test_no_op_leaks_a_body_for_get(self):
         # GET/DELETE without body params must pass None, never an empty payload.
         for op in g.OPS:

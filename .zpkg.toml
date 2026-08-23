@@ -1,5 +1,5 @@
 [package]
-org = "fiducia"
+org = "fiducia-cloud"
 name = "fiducia-clients"
 version = "0.1.0"
 description = "Official polyglot clients for fiducia.cloud"
@@ -15,11 +15,15 @@ dir = ".vendor/.zed"
 
 [dependencies]
 "fiducia-cloud/fiducia-interfaces" = "^0.1.0"
+"fiducia-cloud/fiducia-lib" = "^0.1.0"
 
 [publish]
 include_readme = true
 tag_format = "v{version}"
 exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "tmp/**", "**/*.log", ".DS_Store"]
+
+[scripts]
+required-client-matrix = "python3 scripts/check-required-client-matrix.py"
 
 # The repository target publishes the complete multi-language source snapshot.
 # Every other target is re-rooted and published as one isolated language package.
@@ -27,8 +31,8 @@ exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "t
 dir = "."
 name = "fiducia-clients-repository"
 
-# Convention: each language target publishes as fiducia-clients-<target>.
-# Explicit names freeze public names where the source directory differs.
+# TypeScript is one runtime-neutral Fetch API implementation. All four Zed
+# runtime targets intentionally publish the same self-contained source root.
 [targets.nodejs]
 dir = "clients/ts"
 name = "fiducia-clients-nodejs"
@@ -38,6 +42,21 @@ adapter = "node"
 registry = "npm"
 package = "@fiducia/client"
 forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
+
+[targets.deno]
+dir = "clients/ts"
+name = "fiducia-clients-deno"
+adapter = "none"
+
+[targets.bun]
+dir = "clients/ts"
+name = "fiducia-clients-bun"
+adapter = "node"
+
+[targets.edge]
+dir = "clients/ts"
+name = "fiducia-clients-edge"
+adapter = "none"
 
 [targets.python]
 dir = "clients/python"
@@ -76,6 +95,7 @@ dir = "clients/csharp"
 
 [targets.ruby]
 dir = "clients/ruby"
+adapter = "none"
 
 [targets.ruby.native]
 registry = "rubygems"
@@ -84,6 +104,7 @@ forge = ["github-packages", "gitlab-packages"]
 
 [targets.php]
 dir = "clients/php"
+adapter = "none"
 
 [targets.php.native]
 registry = "packagist"
@@ -106,6 +127,7 @@ package = "fiducia_client"
 
 [targets.elixir]
 dir = "clients/elixir"
+adapter = "none"
 
 [targets.gleam]
 dir = "clients/gleam"
@@ -130,9 +152,11 @@ adapter = "java"
 
 [targets.erlang]
 dir = "clients/erlang"
+adapter = "none"
 
 [targets.swift]
 dir = "clients/swift"
+adapter = "none"
 
 [targets.cpp]
 dir = "clients/cpp"

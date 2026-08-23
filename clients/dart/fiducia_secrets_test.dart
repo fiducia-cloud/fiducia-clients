@@ -4,6 +4,15 @@ import 'dart:io';
 import 'fiducia.dart';
 
 Future<void> main() async {
+  var refusedPublicCleartext = false;
+  try {
+    FiduciaClient('http://fc.example');
+  } on ArgumentError {
+    refusedPublicCleartext = true;
+  }
+  _expect(refusedPublicCleartext,
+      'public fc-prefixed host is not an internal IPv6 address');
+
   final seen = <(String, String)>[]; // (method, uri)
   final putBodies = <Map<String, Object?>>[];
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

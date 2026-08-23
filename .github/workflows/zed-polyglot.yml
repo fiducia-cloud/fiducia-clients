@@ -30,15 +30,15 @@ jobs:
       matrix: ${{ steps.matrix.outputs.value }}
       count: ${{ steps.matrix.outputs.count }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-cli
           ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -62,15 +62,15 @@ jobs:
     name: Fan out into one package per language
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-cli
           ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
           path: zed-cli
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: zed-pkg/zed-interfaces
           ref: 07d01604461d00e237c7d86ad3855464167574ec
@@ -125,7 +125,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.parity.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: repo
 
@@ -159,7 +159,7 @@ jobs:
           test -d unpacked/pkg || { echo "::error::$(basename "$tarball") has no pkg/ root"; exit 1; }
           echo "dir=unpacked/pkg" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.ecosystem == 'npm'
         with:
           node-version: 22
@@ -168,7 +168,7 @@ jobs:
         working-directory: ${{ steps.slice.outputs.dir }}
         run: npm pack --dry-run
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.ecosystem == 'pypi'
         with:
           python-version: "3.12"
@@ -207,7 +207,7 @@ jobs:
         working-directory: ${{ steps.slice.outputs.dir }}
         run: gem build ./*.gemspec
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         if: matrix.ecosystem == 'maven'
         with:
           distribution: temurin

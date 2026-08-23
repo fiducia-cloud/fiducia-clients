@@ -57,6 +57,39 @@ pub struct FiduciaClient {
     headers: Vec<(String, String)>,
 }
 
+/// Host of `base` when its scheme is cleartext `http://`, else `None`.
+fn cleartext_http_host(base: &str) -> Option<&str> {
+    if base.len() < 7 || !base[..7].eq_ignore_ascii_case("http://") {
+        return None;
+    }
+    let rest = &base[7..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(v6) = host_port.strip_prefix('[') {
+        return Some(v6.split(']').next().unwrap_or(v6));
+    }
+    Some(host_port.split(':').next().unwrap_or(host_port))
+}
+
+/// Whether a credential may travel to `host` in cleartext: loopback, a
+/// private/link-local IP, a single-label service name, or a cluster-internal
+/// DNS suffix. Mirrors the policy in the native `fiducia-client` crate.
+fn cleartext_internal_host_allowed(host: &str) -> bool {
+    use std::net::IpAddr;
+
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+            IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local(),
+        };
+    }
+    !host.contains('.') || host.ends_with(".svc.cluster.local") || host.ends_with(".internal")
+}
+
 #[wasm_bindgen]
 impl FiduciaClient {
     /// `timeout_ms` is optional (pass `undefined` for none); when set, each
@@ -87,6 +120,20 @@ impl FiduciaClient {
     }
 
     async fn request(&self, method: &str, path: String, body: Option<String>) -> Result<JsValue, JsValue> {
+        // Refuse before the socket opens if a credential would cross a public
+        // hop in the clear. Browsers block mixed content for us, but this crate
+        // also runs under Node and Deno, where nothing else would.
+        if let Some(host) = cleartext_http_host(&self.base) {
+            let carries_credential = self
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+            if carries_credential && !cleartext_internal_host_allowed(host) {
+                return Err(JsValue::from_str(&format!(
+                    "fiducia: refusing to send Authorization over cleartext http://                      to public host "{host}": use https://, an in-cluster address,                      or loopback"
+                )));
+            }
+        }
         let opts = RequestInit::new();
         opts.set_method(method);
         // Hard-reject redirects: never auto-follow a 3xx, which would replay this
