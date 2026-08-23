@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-cli
-          ref: d70e3ad2ffdd1aaa2f09fd28bb615f9f51005567
+          ref: f60065eafbb6501dac8220a11f0ae687a6f453e1
           path: zed-cli
           persist-credentials: false
 
@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: zed-pkg/zed-interfaces
-          ref: 07d01604461d00e237c7d86ad3855464167574ec
+          ref: 4b87e425b04777b0ee413971dc1df805d24f295f
           path: zed-interfaces
           persist-credentials: false
 
@@ -48,7 +48,7 @@ jobs:
 
       - name: Pack every zed target
         working-directory: source
-        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- pack --out "$ZED_PACK_OUT"
+        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml --bin zed -- pack --out "$ZED_PACK_OUT"
 
       - name: Verify whole-repository and isolated language artifacts
         working-directory: source
@@ -75,7 +75,7 @@ jobs:
 
           expected = {}
           for target, section in targets.items():
-              name = section.get("name", f"{package['name']}-{target}")
+              name = package["name"] if section["dir"] == "." else section.get("name", f"{package['name']}-{target}")
               archive = out / f"{package['org']}-{name}-{package['version']}.tar.gz"
               expected[target] = archive
               assert archive.is_file(), f"missing {target} artifact: {archive.name}"
@@ -94,7 +94,7 @@ jobs:
                   member = packed.extractfile("pkg/.zpkg.toml")
                   assert member is not None, f"{target} has no derived manifest"
                   derived = tomllib.load(io.BytesIO(member.read()))
-              expected_name = targets[target].get("name", f"{package['name']}-{target}")
+              expected_name = package["name"] if targets[target]["dir"] == "." else targets[target].get("name", f"{package['name']}-{target}")
               assert derived["package"]["name"] == expected_name
               assert not derived.get("targets"), f"{target} artifact is still polyglot"
               # Every *language* slice must state what it is for, so a
@@ -102,13 +102,15 @@ jobs:
               # project. The whole-repository target is language-agnostic by
               # construction and is correctly left ungated.
               if target != "repository":
-                  declared = derived["package"].get("language")
-                  assert declared, (
-                      f"{target} artifact declares no language; consumers cannot be guarded"
+                  declared_language = derived["package"].get("language")
+                  declared_ecosystem = derived["package"].get("ecosystem")
+                  assert declared_language or declared_ecosystem, (
+                      f"{target} artifact declares neither language nor ecosystem; consumers cannot be guarded"
                   )
-                  assert declared != "universal", (
-                      f"{target} artifact declares language `universal`; it must name its language"
-                  )
+                  if declared_language:
+                      assert declared_language != "universal", (
+                          f"{target} artifact declares language `universal`; it must name its language"
+                      )
               archive_members[target] = names
 
           repository_files = archive_members["repository"]
@@ -176,8 +178,8 @@ jobs:
 
       - name: Validate coordinated native and forge release plan
         working-directory: source
-        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- release plan
+        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml --bin zed -- release plan
 
       - name: Exercise publish planning without uploading
         working-directory: source
-        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml -- publish --dry-run --skip-vcs-checks
+        run: cargo run --quiet --locked --manifest-path ../zed-cli/Cargo.toml --bin zed -- publish --dry-run --skip-vcs-checks

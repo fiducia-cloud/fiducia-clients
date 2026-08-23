@@ -130,7 +130,9 @@ impl FiduciaClient {
                 .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
             if carries_credential && !cleartext_internal_host_allowed(host) {
                 return Err(JsValue::from_str(&format!(
-                    "fiducia: refusing to send Authorization over cleartext http://                      to public host "{host}": use https://, an in-cluster address,                      or loopback"
+                    "fiducia: refusing to send Authorization over cleartext http:// \
+                     to public host \"{host}\": use https://, an in-cluster address, \
+                     or loopback"
                 )));
             }
         }
