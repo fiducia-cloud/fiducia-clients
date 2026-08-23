@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/idempotency.schema.json",
+  "title": "FiduciaIdempotency",
+  "description": "Idempotency-key payloads for webhook dedupe and retry-safe jobs/API calls.",
+  "type": "object",
+  "$defs": {
+    "IdempotencyClaimRequest": {
+      "type": "object",
+      "title": "IdempotencyClaimRequest",
+      "description": "Body of POST /v1/idempotency/claim. First claim for a key wins until the TTL expires.",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key": { "type": "string", "description": "Caller-chosen idempotency key, such as stripe-webhook/event_123." },
+        "owner": { "type": "string", "description": "Caller instance that is claiming the key. Defaults to anonymous." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Deduplication window in milliseconds." },
+        "ttl": { "type": "string", "description": "Human-friendly TTL such as 60s, 15m, 24h, or 7d." },
+        "metadata": {
+          "type": "object",
+          "description": "Optional string metadata attached to the claim.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "IdempotencyCompleteRequest": {
+      "type": "object",
+      "title": "IdempotencyCompleteRequest",
+      "description": "Body of POST /v1/idempotency/complete. Must present the owner and fencing token returned by claim.",
+      "additionalProperties": false,
+      "required": ["key", "owner", "fencing_token"],
+      "properties": {
+        "key": { "type": "string", "description": "Idempotency key to complete." },
+        "owner": { "type": "string", "description": "Owner that claimed the key." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Token returned by the winning claim." },
+        "result": { "type": "object", "description": "Optional small JSON result duplicate callers can replay." }
+      }
+    },
+    "IdempotencyRecord": {
+      "type": "object",
+      "title": "IdempotencyRecord",
+      "description": "Active idempotency record retained until the TTL window expires.",
+      "additionalProperties": false,
+      "required": ["key", "owner", "fencing_token", "status", "first_seen_ms", "lease_expires_ms", "metadata"],
+      "properties": {
+        "key": { "type": "string", "description": "Idempotency key." },
+        "owner": { "type": "string", "description": "Owner of the first claim." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Monotonic token guarding completion." },
+        "status": {
+          "type": "string",
+          "enum": ["claimed", "completed"],
+          "description": "Whether the key is still in progress or completed."
+        },
+        "first_seen_ms": { "type": "integer", "minimum": 0, "description": "First claim time in ms since epoch." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "When this dedupe record expires." },
+        "metadata": {
+          "type": "object",
+          "description": "Claim metadata.",
+          "additionalProperties": { "type": "string" }
+        },
+        "result": { "type": "object", "description": "Optional completion result." }
+      }
+    },
+    "IdempotencyGetResponse": {
+      "type": "object",
+      "title": "IdempotencyGetResponse",
+      "description": "Response of GET /v1/idempotency?key=...",
+      "additionalProperties": false,
+      "required": ["key", "found"],
+      "properties": {
+        "key": { "type": "string", "description": "Idempotency key." },
+        "found": { "type": "boolean", "description": "Whether an active record exists." },
+        "record": { "$ref": "#/$defs/IdempotencyRecord", "description": "Active record when found." }
+      }
+    }
+  }
+}

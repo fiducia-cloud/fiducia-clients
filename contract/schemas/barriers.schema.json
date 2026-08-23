@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/barriers.schema.json",
+  "title": "FiduciaBarriers",
+  "description": "Fan-in barrier payloads: coordinate parallel participants and resolve by policy (all, quorum, first_success, any_veto, best_by_deadline, weighted_quorum).",
+  "type": "object",
+  "$defs": {
+    "BarrierPolicy": {
+      "type": "object",
+      "title": "BarrierPolicy",
+      "description": "How a barrier resolves. kind selects the rule; required is used by quorum, required_weight by weighted_quorum.",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["all", "quorum", "first_success", "any_veto", "best_by_deadline", "weighted_quorum"],
+          "description": "The resolution rule."
+        },
+        "required": { "type": "integer", "minimum": 1, "description": "Distinct arrivals needed for quorum." },
+        "required_weight": { "type": "integer", "minimum": 1, "description": "Summed arrival weight needed for weighted_quorum." }
+      }
+    },
+    "BarrierCreateRequest": {
+      "type": "object",
+      "title": "BarrierCreateRequest",
+      "description": "Body of POST /v1/barriers/create.",
+      "additionalProperties": false,
+      "required": ["name", "policy"],
+      "properties": {
+        "name": { "type": "string", "description": "Slash-safe barrier name, such as release-942/reviewers." },
+        "policy": { "$ref": "#/$defs/BarrierPolicy" },
+        "expected": { "type": "integer", "minimum": 0, "description": "Participant count for all/any_veto. Defaults to 1." },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Resolution deadline in ms since epoch; required for best_by_deadline." }
+      }
+    },
+    "BarrierArriveRequest": {
+      "type": "object",
+      "title": "BarrierArriveRequest",
+      "description": "Body of POST /v1/barriers/arrive. Repeat arrivals by the same participant are idempotent.",
+      "additionalProperties": false,
+      "required": ["name", "participant"],
+      "properties": {
+        "name": { "type": "string", "description": "Barrier name." },
+        "participant": { "type": "string", "description": "Arriving participant id." },
+        "weight": { "type": "integer", "minimum": 0, "description": "Arrival weight for weighted_quorum. Defaults to 1." },
+        "veto": { "type": "boolean", "description": "Whether this arrival vetoes (aborts under any_veto)." }
+      }
+    },
+    "BarrierArrival": {
+      "type": "object",
+      "title": "BarrierArrival",
+      "description": "One participant's recorded arrival.",
+      "additionalProperties": false,
+      "required": ["participant", "weight", "veto", "arrived_ms"],
+      "properties": {
+        "participant": { "type": "string", "description": "Participant id." },
+        "weight": { "type": "integer", "minimum": 0, "description": "Arrival weight." },
+        "veto": { "type": "boolean", "description": "Whether this arrival vetoed." },
+        "arrived_ms": { "type": "integer", "minimum": 0, "description": "Arrival time in ms since epoch." }
+      }
+    },
+    "BarrierState": {
+      "type": "object",
+      "title": "BarrierState",
+      "description": "Current barrier state returned by GET /v1/barriers, with status derived at read time.",
+      "additionalProperties": false,
+      "required": ["name", "policy", "expected", "status", "arrivals", "arrived_count", "arrived_weight"],
+      "properties": {
+        "name": { "type": "string", "description": "Barrier name." },
+        "policy": { "$ref": "#/$defs/BarrierPolicy" },
+        "expected": { "type": "integer", "minimum": 0, "description": "Expected participant count." },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Resolution deadline, if any." },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "satisfied", "vetoed", "timed_out"],
+          "description": "Whether the barrier is still waiting or how it resolved."
+        },
+        "arrivals": {
+          "type": "array",
+          "description": "Every recorded arrival.",
+          "items": { "$ref": "#/$defs/BarrierArrival" }
+        },
+        "arrived_count": { "type": "integer", "minimum": 0, "description": "Distinct non-veto arrivals." },
+        "arrived_weight": { "type": "integer", "minimum": 0, "description": "Summed weight of non-veto arrivals." }
+      }
+    }
+  }
+}
