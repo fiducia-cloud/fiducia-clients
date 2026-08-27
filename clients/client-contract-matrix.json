@@ -1,0 +1,109 @@
+{
+  "api_schema": "clients/client-api.schema.json",
+  "api_surface": "clients/api-surface.json",
+  "minimum_targets": 15,
+  "schema_version": 1,
+  "standard_target_count": 20,
+  "targets": {
+    "c": {
+      "dir": "clients/c",
+      "runtime": "c",
+      "zed_target": "c"
+    },
+    "cpp": {
+      "dir": "clients/cpp",
+      "runtime": "cpp",
+      "zed_target": "cpp"
+    },
+    "dart": {
+      "dir": "clients/dart",
+      "runtime": "dart",
+      "zed_target": "dart"
+    },
+    "elixir": {
+      "dir": "clients/elixir",
+      "runtime": "elixir",
+      "zed_target": "elixir"
+    },
+    "erlang": {
+      "dir": "clients/erlang",
+      "runtime": "erlang",
+      "zed_target": "erlang"
+    },
+    "gleamlang": {
+      "dir": "clients/gleam",
+      "runtime": "gleamlang",
+      "zed_target": "gleam"
+    },
+    "golang": {
+      "dir": "clients/go",
+      "runtime": "golang",
+      "zed_target": "golang"
+    },
+    "java": {
+      "dir": "clients/java",
+      "runtime": "java",
+      "zed_target": "java"
+    },
+    "kotlin": {
+      "dir": "clients/kotlin",
+      "runtime": "kotlin",
+      "zed_target": "kotlin"
+    },
+    "php": {
+      "dir": "clients/php",
+      "runtime": "php",
+      "zed_target": "php"
+    },
+    "python3": {
+      "dir": "clients/python",
+      "runtime": "python3",
+      "zed_target": "python"
+    },
+    "ruby": {
+      "dir": "clients/ruby",
+      "runtime": "ruby",
+      "zed_target": "ruby"
+    },
+    "rust": {
+      "dir": "clients/rust",
+      "runtime": "rust",
+      "zed_target": "rust"
+    },
+    "swift": {
+      "dir": "clients/swift",
+      "runtime": "swift",
+      "zed_target": "swift"
+    },
+    "typescript-bun": {
+      "dir": "clients/typescript/bun",
+      "runtime": "bun",
+      "zed_target": "nodejs"
+    },
+    "typescript-deno": {
+      "dir": "clients/typescript/deno",
+      "runtime": "deno",
+      "zed_target": "nodejs"
+    },
+    "typescript-edge": {
+      "dir": "clients/typescript/edge",
+      "runtime": "edge",
+      "zed_target": "nodejs"
+    },
+    "typescript-nodejs": {
+      "dir": "clients/ts",
+      "runtime": "nodejs",
+      "zed_target": "nodejs"
+    },
+    "wasm": {
+      "dir": "clients/rust-wasm",
+      "runtime": "wasm",
+      "zed_target": "rust-wasm"
+    },
+    "zig": {
+      "dir": "clients/zig",
+      "runtime": "zig",
+      "zed_target": "zig"
+    }
+  }
+}
