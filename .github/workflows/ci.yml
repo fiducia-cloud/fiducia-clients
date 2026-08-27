@@ -85,6 +85,7 @@ jobs:
         run: |
           dart run fiducia_sync_test.dart
           dart run fiducia_secrets_test.dart
+          dart run fiducia_options_test.dart
       - name: Verify the pub.dev artifact without publishing
         working-directory: clients/dart
         run: ./publish.sh --dry-run
