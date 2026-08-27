@@ -1,0 +1,10 @@
+{
+  "apiSurface": "clients/api-surface.json",
+  "apiSurfaceSha256": "779e2722add9b4ed585137f597cae5cdc6d28fb7819b6a180908ea1f8310fbbf",
+  "coordinate": "fiducia-cloud/fiducia-clients",
+  "runtime": "python3",
+  "schemaId": "https://zpkg.tech/schemas/client-api.schema.json",
+  "schemaVersion": 1,
+  "target": "python3",
+  "zedTarget": "python"
+}
