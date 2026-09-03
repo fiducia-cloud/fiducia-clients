@@ -8,12 +8,9 @@
  * a disconnected or lagged subscriber may have missed one.
  */
 
-export interface ServiceInstance {
-  readonly instance_id: string;
-  readonly address: string;
-  readonly lease_expires_ms: number;
-  readonly metadata: Readonly<Record<string, string>>;
-}
+import type { ServiceInstance } from "@fiducia/interfaces/typescript";
+
+export type { ServiceInstance } from "@fiducia/interfaces/typescript";
 
 export interface ServiceWatchEnvelope {
   readonly event?: string;
@@ -213,8 +210,9 @@ function parseInstances(value: unknown): readonly ServiceInstance[] | undefined 
       seen.has(instanceId) ||
       typeof address !== "string" ||
       !address ||
+      typeof leaseExpiresMs !== "number" ||
       !Number.isSafeInteger(leaseExpiresMs) ||
-      (leaseExpiresMs as number) < 0 ||
+      leaseExpiresMs < 0 ||
       !metadata
     ) {
       return undefined;
@@ -228,7 +226,7 @@ function parseInstances(value: unknown): readonly ServiceInstance[] | undefined 
     instances.push(Object.freeze({
       instance_id: instanceId,
       address,
-      lease_expires_ms: leaseExpiresMs as number,
+      lease_expires_ms: leaseExpiresMs,
       metadata: Object.freeze(copiedMetadata),
     }));
   }
