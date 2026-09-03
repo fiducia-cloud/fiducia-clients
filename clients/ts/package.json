@@ -8,13 +8,14 @@
   "main": "fiducia.ts",
   "types": "fiducia.ts",
   "scripts": {
-    "test": "node --test --experimental-strip-types fiducia.test.ts default-fetch-binding.test.ts locking.test.ts sync.test.ts secrets.test.ts && node --check --experimental-strip-types locking.ts",
+    "test": "node --test --experimental-strip-types fiducia.test.ts default-fetch-binding.test.ts locking.test.ts sync.test.ts secrets.test.ts service-discovery.test.ts && node --check --experimental-strip-types locking.ts && node --check --experimental-strip-types service-discovery.ts",
     "test:browser": "tsc -p tsconfig.browser.json && node browser-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json"
   },
   "files": [
     "fiducia.ts",
-    "locking.ts"
+    "locking.ts",
+    "service-discovery.ts"
   ],
   "publishConfig": {
     "access": "public"
