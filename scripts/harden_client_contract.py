@@ -713,18 +713,24 @@ def extension_client_dirs(root: Path, target_dirs: dict[str, Path]) -> dict[str,
 
 
 def has_product_implementation(directory: Path) -> bool:
-    """Return true when a runtime already owns source code in its native layout."""
+    """Return true when a runtime already owns non-test source code.
 
-    source_roots = (
-        directory / "src",
-        directory / "lib",
-        directory / "include",
-        directory / "Sources",
-        directory / "zed_pkg_client",
-    )
-    if any(root.is_dir() and any(item.is_file() for item in root.rglob("*")) for root in source_roots):
-        return True
-    return any((directory / filename).is_file() for filename in ("client.go", "mod.ts"))
+    Mature SDKs may keep their primary implementation at the package
+    root (for example ``fiducia.go`` or ``fiducia.dart``), not only in
+    ``src/`` or ``lib/``. Reuse the same recursive source vocabulary as
+    contract fingerprinting so the hardener never adds a competing
+    scaffold package beside a real implementation.
+    """
+
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(directory)
+        if CONTRACT_IGNORED_PARTS.intersection(relative.parts):
+            continue
+        if path.suffix.lower() in CONTRACT_SOURCE_SUFFIXES:
+            return True
+    return False
 
 
 def implementation_evidence(directory: Path) -> tuple[int, str]:

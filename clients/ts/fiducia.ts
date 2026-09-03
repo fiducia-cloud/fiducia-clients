@@ -371,12 +371,12 @@ function requireEncryptedTransport(baseUrl: string): void {
 }
 
 export class FiduciaClient {
-  private readonly base: string;
-  private readonly fetchImpl: typeof fetch;
-  private readonly requestTimeoutMs?: number;
-  private readonly lockRequestTimeoutMs?: number;
-  private readonly retryMax: number;
-  private readonly retryDelayMs: number;
+  private base: string;
+  private fetchImpl: typeof fetch;
+  private requestTimeoutMs?: number;
+  private lockRequestTimeoutMs?: number;
+  private retryMax: number;
+  private retryDelayMs: number;
 
   constructor(baseUrl: string, opts: FiduciaClientOpts = {}) {
     requireEncryptedTransport(baseUrl);
