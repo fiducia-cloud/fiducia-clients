@@ -41,9 +41,41 @@ for (const [tier, definition] of Object.entries(inventory.tiers)) {
 }
 assertUnique("support tiers", tierClients);
 
+// `clients/ts` is the one maintained/published TypeScript SDK. The canonical
+// API-contract hardener also keeps small runtime-specific packages under
+// `clients/typescript/{deno,bun,edge}` so those environments have independent
+// contract fingerprints. That container is not a second language client and
+// must not be promoted into the support/publication inventory accidentally.
+const runtimeAdapterContainers = new Map([
+  ["typescript", ["bun", "deno", "edge"]],
+]);
+
 const actualClientEntries = await readdir(clientsRoot, { withFileTypes: true });
+for (const [container, expectedRuntimes] of runtimeAdapterContainers) {
+  const rootEntry = actualClientEntries.find((entry) => entry.name === container);
+  assert.ok(rootEntry?.isDirectory(), `missing runtime adapter container: clients/${container}`);
+  const entries = await readdir(path.join(clientsRoot, container), { withFileTypes: true });
+  const runtimes = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name);
+  assertSame(`clients/${container} runtime adapters`, runtimes, expectedRuntimes);
+  const unexpectedFiles = entries
+    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+    .map((entry) => entry.name);
+  assert.deepEqual(
+    unexpectedFiles,
+    [],
+    `clients/${container} must contain only runtime adapter directories and hidden contract metadata`,
+  );
+}
+
 const actualClients = actualClientEntries
-  .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+  .filter(
+    (entry) =>
+      entry.isDirectory()
+      && !entry.name.startsWith(".")
+      && !runtimeAdapterContainers.has(entry.name),
+  )
   .map((entry) => entry.name);
 assertSame("clients/* directories versus support tiers", actualClients, tierClients);
 
@@ -129,5 +161,6 @@ assert.match(
 
 console.log(
   `support inventory verified: ${actualClients.length} clients, `
-    + `${generated.length} generated, ${explicit.length} explicit`,
+    + `${generated.length} generated, ${explicit.length} explicit, `
+    + `${runtimeAdapterContainers.size} runtime adapter container`,
 );
