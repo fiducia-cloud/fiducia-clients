@@ -218,7 +218,7 @@
       "coordinate": "fiducia-cloud/fiducia-clients",
       "dir": "clients/ts",
       "implementationFileCount": 16,
-      "implementationSha256": "297be85fd3620256d5d09a8070c122e21a2ce855c4fbc6052ccea84daf3b2632",
+      "implementationSha256": "acefe106c4a78b098ad896f1a136b975e1dbd4893a8e1a60aba85067fafebb81",
       "runtime": "nodejs",
       "schemaId": "https://zpkg.tech/schemas/client-api.schema.json",
       "schemaVersion": 1,
