@@ -13,5 +13,5 @@
       "@fiducia/sync": ["../../../fiducia-sync/sdk/src/index.d.ts"]
     }
   },
-  "files": ["fiducia.ts", "locking.ts", "sync-compatibility.ts"]
+  "files": ["fiducia.ts", "locking.ts", "sync-compatibility.ts", "service-discovery.ts"]
 }
