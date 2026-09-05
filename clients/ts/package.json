@@ -10,10 +10,11 @@
   "scripts": {
     "test:contract": "python3 ../../contract/bin/check_surface.py --lang ts",
     "pretest": "python3 ../../contract/bin/check_surface.py --lang ts",
-    "prepublishOnly": "python3 ../../contract/bin/check_surface.py --prepublish --lang ts",
+    "prepublishOnly": "npm run lint:ores && python3 ../../contract/bin/check_surface.py --prepublish --lang ts",
     "test": "node --test --experimental-strip-types fiducia.test.ts default-fetch-binding.test.ts locking.test.ts sync.test.ts secrets.test.ts && node --check --experimental-strip-types locking.ts",
     "test:browser": "tsc -p tsconfig.browser.json && node browser-smoke.mjs",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "lint:ores": "if [ -f ../../.ores-lint/lint.sh ]; then sh ../../.ores-lint/lint.sh; else echo 'ores-lint not installed'; fi"
   },
   "files": [
     "fiducia.ts",
@@ -32,5 +33,13 @@
   },
   "devDependencies": {
     "typescript": "^7.0.2"
+  },
+  "oresLint": {
+    "note": "Declared, not installed. ores-lint resolves these from a global install - see .ores-lint/README.md",
+    "requires": {
+      "eslint": ">=9",
+      "typescript-eslint": ">=8 (optional; without it .ts files are skipped)"
+    },
+    "install": "npm i -g eslint typescript-eslint"
   }
 }
