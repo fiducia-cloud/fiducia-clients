@@ -1,0 +1,49 @@
+# GENERATED from Dockerfile (sha256:f385d411833bea8d) by ores-gha-workflows/scripts/render-dkf.mjs — target linux/arm64. Do not edit; edit Dockerfile and re-render.
+# syntax=docker/dockerfile:1
+# CI/test image for the multi-language Fiducia clients.
+FROM --platform=linux/arm64 rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
+ARG TARGETARCH
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates python3 nodejs npm
+# bookworm's apt `golang-go` is 1.19, but the generated go client's go.mod
+# requires >=1.21 (it uses strings.ContainsFunc). Bring a modern, multi-arch Go
+# from the official pinned image instead. GOTOOLCHAIN=local keeps the build
+# offline — it uses exactly this toolchain rather than fetching go.mod's version.
+COPY --from=golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac /usr/local/go /usr/local/go
+RUN useradd --create-home --uid 10001 ci \
+    && install -d -o 10001 -g 10001 /app /fiducia-interfaces /home/ci/.cargo /home/ci/.cache/go
+ENV HOME=/home/ci \
+    CARGO_HOME=/home/ci/.cargo \
+    GOCACHE=/home/ci/.cache/go \
+    GOTOOLCHAIN=local \
+    PATH=/usr/local/go/bin:${PATH}
+USER 10001:10001
+ARG INTERFACES_REF=ee8fe09f846f5a776d156c0b0d0d15582c8bd539
+RUN git init /fiducia-interfaces \
+    && git -C /fiducia-interfaces remote add origin https://github.com/fiducia-cloud/fiducia-interfaces.git \
+    && git -C /fiducia-interfaces fetch --depth 1 origin "$INTERFACES_REF" \
+    && test "$(git -C /fiducia-interfaces rev-parse FETCH_HEAD)" = "$INTERFACES_REF" \
+    && git -C /fiducia-interfaces checkout --detach FETCH_HEAD \
+    && test "$(git -C /fiducia-interfaces rev-parse HEAD)" = "$INTERFACES_REF"
+WORKDIR /app
+COPY --chown=10001:10001 . .
+RUN cd clients/go \
+    && go test ./... \
+    && cd ../.. \
+    && cargo test --locked --manifest-path clients/rust/Cargo.toml \
+    && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py
+
+# --- sops: decrypt at `docker run`, never at `docker build` ------------------
+# The image carries only CIPHERTEXT (env/enc/<SOPS_ENV>.env.enc) and the sops
+# binary. The age key arrives at run time (SOPS_AGE_KEY / SOPS_AGE_KEY_FILE);
+# scripts/sops-entrypoint.sh decrypts into the process environment and execs
+# the real command, so no plaintext ever lands in a layer or on disk.
+# See env/README.md.
+ARG SOPS_ENV=local
+COPY --chmod=0755 --from=ghcr.io/getsops/sops:v3.10.2-alpine /usr/local/bin/sops /usr/local/bin/sops
+COPY --chmod=0755 scripts/sops-entrypoint.sh /usr/local/bin/sops-entrypoint.sh
+COPY --chmod=0644 env/enc/${SOPS_ENV}.env.enc /app/secrets/app.env
+ENV SOPS_SECRETS_FILE=/app/secrets/app.env
+
+ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh"]
+CMD ["bash", "-lc", "cd clients/go && go test ./... && cd ../.. && cargo test --locked --manifest-path clients/rust/Cargo.toml && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py"]
