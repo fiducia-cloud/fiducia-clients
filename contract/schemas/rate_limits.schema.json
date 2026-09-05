@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/rate_limits.schema.json",
+  "title": "FiduciaRateLimits",
+  "description": "Distributed token-bucket and sliding-window rate-limit payloads.",
+  "type": "object",
+  "$defs": {
+    "RateLimitCheckRequest": {
+      "type": "object",
+      "title": "RateLimitCheckRequest",
+      "description": "Body of POST /v1/rate-limit/{tenant}/{key}/check.",
+      "additionalProperties": false,
+      "required": ["algorithm", "limit", "window_ms"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["token_bucket", "sliding_window"],
+          "description": "Rate-limiting algorithm to apply for this key."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum allowed events in the configured window or bucket."
+        },
+        "window_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Window length or bucket capacity horizon in milliseconds."
+        },
+        "refill_per_second": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Token-bucket refill rate. Defaults to limit / window."
+        },
+        "cost": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many units this request consumes. Defaults to 1."
+        }
+      }
+    },
+    "RateLimitSnapshot": {
+      "type": "object",
+      "title": "RateLimitSnapshot",
+      "description": "Current distributed limiter state for one tenant/key.",
+      "additionalProperties": false,
+      "required": ["key", "tenant", "algorithm", "allowed", "remaining", "reset_ms"],
+      "properties": {
+        "key": { "type": "string", "description": "Limiter key." },
+        "tenant": { "type": "string", "description": "Tenant/org whose quota is being enforced." },
+        "algorithm": {
+          "type": "string",
+          "enum": ["token_bucket", "sliding_window"],
+          "description": "Limiter algorithm that produced this snapshot."
+        },
+        "allowed": { "type": "boolean", "description": "Whether the most recent check was allowed." },
+        "remaining": { "type": "integer", "minimum": 0, "description": "Remaining units after the most recent check." },
+        "reset_ms": { "type": "integer", "minimum": 0, "description": "Approximate reset/refill time in ms since epoch." }
+      }
+    },
+    "RateLimitGetResponse": {
+      "type": "object",
+      "title": "RateLimitGetResponse",
+      "description": "Response of GET /v1/rate-limit/{tenant}/{key}.",
+      "additionalProperties": false,
+      "required": ["tenant", "key", "found"],
+      "properties": {
+        "tenant": { "type": "string", "description": "Tenant/org whose quota was requested." },
+        "key": { "type": "string", "description": "Limiter key." },
+        "found": { "type": "boolean", "description": "Whether limiter state exists." },
+        "limit": { "$ref": "#/$defs/RateLimitSnapshot", "description": "Snapshot when found." }
+      }
+    }
+  }
+}

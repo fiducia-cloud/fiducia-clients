@@ -8,11 +8,13 @@
   "main": "fiducia.ts",
   "types": "fiducia.ts",
   "scripts": {
+    "test:contract": "python3 ../../contract/bin/check_surface.py --lang ts",
+    "pretest": "python3 ../../contract/bin/check_surface.py --lang ts",
     "test": "node --test --experimental-strip-types fiducia.test.ts default-fetch-binding.test.ts locking.test.ts sync.test.ts secrets.test.ts service-discovery.test.ts && node --check --experimental-strip-types locking.ts && node --check --experimental-strip-types service-discovery.ts",
     "test:browser": "tsc -p tsconfig.browser.json && node browser-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint:ores": "if [ -f ../../.ores-lint/lint.sh ]; then sh ../../.ores-lint/lint.sh; else echo 'ores-lint not installed'; fi",
-    "prepublishOnly": "npm run lint:ores"
+    "prepublishOnly": "python3 ../../contract/bin/check_surface.py --prepublish --lang ts && npm run lint:ores"
   },
   "files": [
     "fiducia.ts",

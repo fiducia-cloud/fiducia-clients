@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/tasks.schema.json",
+  "title": "FiduciaTasks",
+  "description": "Durable task payloads: a claimable unit of work whose exclusive owner holds a fencing token. Progress/complete/fail must present that token, so a stale worker cannot commit newer state.",
+  "type": "object",
+  "$defs": {
+    "TaskCreateRequest": {
+      "type": "object",
+      "title": "TaskCreateRequest",
+      "description": "Body of POST /v1/tasks/create. Idempotent: a repeat create returns the existing task.",
+      "additionalProperties": false,
+      "required": ["name", "task_type"],
+      "properties": {
+        "name": { "type": "string", "description": "Slash-safe task name, such as repo/acme/api/issue/482." },
+        "task_type": { "type": "string", "description": "Application task kind, such as implement or backup." },
+        "payload": { "type": "object", "description": "Small task input. Large inputs belong in the application database; store a reference here." },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Overall deadline in ms since epoch." }
+      }
+    },
+    "TaskClaimRequest": {
+      "type": "object",
+      "title": "TaskClaimRequest",
+      "description": "Body of POST /v1/tasks/claim. Grants a fresh fencing token and an ownership lease if the task is pending or its prior lease expired.",
+      "additionalProperties": false,
+      "required": ["name", "worker"],
+      "properties": {
+        "name": { "type": "string", "description": "Task name." },
+        "worker": { "type": "string", "description": "Claiming worker id." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Ownership lease length in ms. Defaults to 60000." }
+      }
+    },
+    "TaskProgressRequest": {
+      "type": "object",
+      "title": "TaskProgressRequest",
+      "description": "Body of POST /v1/tasks/progress. Renews the lease; rejected unless the caller holds the current fencing token.",
+      "additionalProperties": false,
+      "required": ["name", "worker", "fencing_token"],
+      "properties": {
+        "name": { "type": "string", "description": "Task name." },
+        "worker": { "type": "string", "description": "Owning worker id." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "The token returned by claim." },
+        "percent": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Progress percent." },
+        "checkpoint": { "type": "object", "description": "Durable resume state." }
+      }
+    },
+    "TaskCompleteRequest": {
+      "type": "object",
+      "title": "TaskCompleteRequest",
+      "description": "Body of POST /v1/tasks/complete. Requires the current fencing token.",
+      "additionalProperties": false,
+      "required": ["name", "worker", "fencing_token"],
+      "properties": {
+        "name": { "type": "string", "description": "Task name." },
+        "worker": { "type": "string", "description": "Owning worker id." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "The token returned by claim." },
+        "result": { "type": "object", "description": "Durable result to record." }
+      }
+    },
+    "TaskFailRequest": {
+      "type": "object",
+      "title": "TaskFailRequest",
+      "description": "Body of POST /v1/tasks/fail. retryable returns the task to Pending for reassignment; otherwise it ends Failed. Requires the current fencing token.",
+      "additionalProperties": false,
+      "required": ["name", "worker", "fencing_token"],
+      "properties": {
+        "name": { "type": "string", "description": "Task name." },
+        "worker": { "type": "string", "description": "Owning worker id." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "The token returned by claim." },
+        "retryable": { "type": "boolean", "description": "Whether to requeue for another worker." }
+      }
+    },
+    "TaskState": {
+      "type": "object",
+      "title": "TaskState",
+      "description": "Current task state returned by GET /v1/tasks.",
+      "additionalProperties": false,
+      "required": ["name", "task_type", "status", "fencing_token", "progress", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Task name." },
+        "task_type": { "type": "string", "description": "Application task kind." },
+        "payload": { "type": "object", "description": "Task input." },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "claimed", "running", "completed", "failed", "cancelled"],
+          "description": "Lifecycle state."
+        },
+        "owner": { "type": "string", "description": "Current owning worker, if claimed." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Monotonic token of the current claim (0 if never claimed)." },
+        "progress": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Last reported progress percent." },
+        "checkpoint": { "type": "object", "description": "Last durable checkpoint." },
+        "result": { "type": "object", "description": "Result recorded on completion." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "When the current ownership lease expires." },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Overall task deadline." },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version, bumped on every mutation." }
+      }
+    }
+  }
+}

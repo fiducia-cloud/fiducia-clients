@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/budgets.schema.json",
+  "title": "FiduciaBudgets",
+  "description": "Hierarchical budget payloads: reserve, commit, and release spend across three axes (usd_micros, tokens, tool_calls) so concurrent workers cannot each spend the same remaining headroom.",
+  "type": "object",
+  "$defs": {
+    "BudgetAmount": {
+      "type": "object",
+      "title": "BudgetAmount",
+      "description": "A per-axis amount or limit. An omitted axis means unlimited (for a limit) or zero (for a spend).",
+      "additionalProperties": false,
+      "properties": {
+        "usd_micros": { "type": "integer", "minimum": 0, "description": "US dollars in millionths." },
+        "tokens": { "type": "integer", "minimum": 0, "description": "Model tokens." },
+        "tool_calls": { "type": "integer", "minimum": 0, "description": "Tool invocations." }
+      }
+    },
+    "BudgetSetRequest": {
+      "type": "object",
+      "title": "BudgetSetRequest",
+      "description": "Body of POST /v1/budgets/set. Creates or re-caps a budget's per-axis ceiling.",
+      "additionalProperties": false,
+      "required": ["name", "limit"],
+      "properties": {
+        "name": { "type": "string", "description": "Budget scope name, such as org/acme/workflow/42." },
+        "limit": { "$ref": "#/$defs/BudgetAmount" }
+      }
+    },
+    "BudgetReserveRequest": {
+      "type": "object",
+      "title": "BudgetReserveRequest",
+      "description": "Body of POST /v1/budgets/reserve. Rejected if it would exceed any limited axis.",
+      "additionalProperties": false,
+      "required": ["name", "reservation_id", "holder", "amount"],
+      "properties": {
+        "name": { "type": "string", "description": "Budget name." },
+        "reservation_id": { "type": "string", "description": "Caller-chosen reservation id (idempotent)." },
+        "holder": { "type": "string", "description": "Worker holding the reservation." },
+        "amount": { "$ref": "#/$defs/BudgetAmount" }
+      }
+    },
+    "BudgetCommitRequest": {
+      "type": "object",
+      "title": "BudgetCommitRequest",
+      "description": "Body of POST /v1/budgets/commit. Records the actual spend (capped at the reservation) and frees the difference.",
+      "additionalProperties": false,
+      "required": ["name", "reservation_id", "actual"],
+      "properties": {
+        "name": { "type": "string", "description": "Budget name." },
+        "reservation_id": { "type": "string", "description": "Reservation to commit." },
+        "actual": { "$ref": "#/$defs/BudgetAmount" }
+      }
+    },
+    "BudgetReservation": {
+      "type": "object",
+      "title": "BudgetReservation",
+      "description": "One reservation against a budget.",
+      "additionalProperties": false,
+      "required": ["id", "holder", "reserved", "spent", "status"],
+      "properties": {
+        "id": { "type": "string", "description": "Reservation id." },
+        "holder": { "type": "string", "description": "Holding worker." },
+        "reserved": { "$ref": "#/$defs/BudgetAmount" },
+        "spent": { "$ref": "#/$defs/BudgetAmount" },
+        "status": {
+          "type": "string",
+          "enum": ["held", "committed", "released"],
+          "description": "Reservation lifecycle state."
+        }
+      }
+    },
+    "BudgetState": {
+      "type": "object",
+      "title": "BudgetState",
+      "description": "Current budget state returned by GET /v1/budgets.",
+      "additionalProperties": false,
+      "required": ["name", "limit", "reserved", "spent", "available", "reservations", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Budget name." },
+        "limit": { "$ref": "#/$defs/BudgetAmount" },
+        "reserved": { "$ref": "#/$defs/BudgetAmount" },
+        "spent": { "$ref": "#/$defs/BudgetAmount" },
+        "available": { "$ref": "#/$defs/BudgetAmount" },
+        "reservations": {
+          "type": "array",
+          "description": "Every reservation against this budget.",
+          "items": { "$ref": "#/$defs/BudgetReservation" }
+        },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version." }
+      }
+    }
+  }
+}
