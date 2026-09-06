@@ -1,14 +1,25 @@
 #!/usr/bin/env sh
-# Package/build/validate/release entrypoint for the Dart Fiducia client (see clients/PUBLISHING.md).
+# Publish fiducia_client to pub.dev. Default mode is a dry run.
 set -eu
 
-# Surface-contract gate: refuse to publish a client whose exported
-# interface has drifted from contract/surface.contract.json.
-"$(cd "$(dirname "$0")/../.." && pwd)/contract/bin/prepublish-guard.sh" "$(basename "$(cd "$(dirname "$0")" && pwd)")"
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-. "$DIR/../../scripts/publish-common.sh"
+ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
+. "$ROOT/scripts/publish-common.sh"
+
 publish_parse_mode "$@"
 cd "$DIR"
-publish_check_version pubspec.yaml '^version:'
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/fiducia-dart.XXXXXX")"; mkdir -p "$tmp/lib"; cp fiducia.dart "$tmp/lib/fiducia_client.dart"; cp pubspec.yaml LICENSE README.md CHANGELOG.md "$tmp/"; cd "$tmp"; dart pub publish --dry-run
-[ "$PUBLISH_MODE" = dry-run ] || { dart pub publish --force; }
+publish_check_version pubspec.yaml '^version:[[:space:]]*'
+publish_require_files pubspec.yaml README.md LICENSE CHANGELOG.md
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+mkdir -p "$tmp/lib"
+"$DIR/prepublish.sh" "$tmp/lib/fiducia_client.dart"
+cp pubspec.yaml README.md LICENSE CHANGELOG.md "$tmp/"
+cd "$tmp"
+
+if [ "$PUBLISH_MODE" = "publish" ]; then
+    dart pub publish
+else
+    dart pub publish --dry-run
+fi
