@@ -1,0 +1,91 @@
+name: DEN-3982 one-shot client gate repair
+
+on:
+  push:
+    branches:
+      - "feat/DEN-3982-peer-authority-canary"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: den-3982-one-shot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact repair branch
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 2
+
+      - name: Apply deterministic gate repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path('clients/contract-manifest.json')
+          old_fingerprint = '7eb896fd8b3bab41e61a4fd37532485d068a255092e7d1852653b790350b85b2'
+          new_fingerprint = '5f8822fc54a1e9f164a5989605160cf9fc0f53c005ca9b85f7c03db46230adf9'
+          manifest_text = manifest.read_text()
+          if manifest_text.count(old_fingerprint) != 1:
+              raise SystemExit('expected exactly one stale Dart fingerprint')
+          manifest.write_text(manifest_text.replace(old_fingerprint, new_fingerprint))
+
+          publish = Path('clients/dart/publish.sh')
+          old_call = 'publish_require_files README.md CHANGELOG.md LICENSE'
+          replacement = '''for required_file in README.md CHANGELOG.md LICENSE; do
+            [ -f "$required_file" ] ||
+              publish_die "required publish file is missing: $required_file"
+            [ -r "$required_file" ] ||
+              publish_die "required publish file is unreadable: $required_file"
+          done'''
+          publish_text = publish.read_text()
+          if publish_text.count(old_call) != 1:
+              raise SystemExit('expected exactly one undefined publish_require_files call')
+          publish.write_text(publish_text.replace(old_call, replacement))
+
+          parity = Path('.github/workflows/typespec-json-schema-peer-authority.yml')
+          old_pin = '1048f31781606934b3716aad334e57e815c869dc'
+          new_pin = '282883afc4645f3303ed746bdb1e1571475724c5'
+          parity_text = parity.read_text()
+          if parity_text.count(old_pin) != 1:
+              raise SystemExit('expected exactly one stale validator pin')
+          parity.write_text(parity_text.replace(old_pin, new_pin))
+
+          Path('.github/workflows/den-3982-one-shot-repair.yml').unlink()
+          PY
+
+      - name: Verify generated receipt and repaired scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n clients/dart/publish.sh
+          git diff --check
+          node .github/scripts/verify-client-api-contract.mjs \
+            --manifest "$RUNNER_TEMP/contract-manifest.generated.json"
+          cmp clients/contract-manifest.json "$RUNNER_TEMP/contract-manifest.generated.json"
+          grep -Fq '282883afc4645f3303ed746bdb1e1571475724c5' \
+            .github/workflows/typespec-json-schema-peer-authority.yml
+          ! grep -Fq 'publish_require_files' clients/dart/publish.sh
+          test ! -e .github/workflows/den-3982-one-shot-repair.yml
+
+      - name: Commit and push the verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            clients/contract-manifest.json \
+            clients/dart/publish.sh \
+            .github/workflows/typespec-json-schema-peer-authority.yml \
+            .github/workflows/den-3982-one-shot-repair.yml
+          git commit -m 'fix(DEN-3982): repair client parity gates'
+          git push origin HEAD:feat/DEN-3982-peer-authority-canary
