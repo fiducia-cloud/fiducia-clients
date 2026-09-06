@@ -13,60 +13,88 @@ permissions:
   contents: read
 
 concurrency:
-  group: surface-contract-${{ github.ref }}
+  group: surface-contract-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   contract:
     name: contract document
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       languages: ${{ steps.langs.outputs.languages }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          python-version: '3.11'
-      - name: Validate the contract with the bundled validator
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          check-latest: false
+      - name: Validate with the bundled fail-closed validator
         run: python3 contract/bin/check_surface.py --schema-only
-      - name: Validate again with the reference jsonschema implementation
+      - name: Install the exact reference Draft 2020-12 validator
         run: |
-          python3 -m pip install --quiet jsonschema
-          python3 contract/bin/check_surface.py --schema-only
+          python3 -m pip install --disable-pip-version-check --no-deps \
+            attrs==26.1.0 \
+            jsonschema-specifications==2025.9.1 \
+            referencing==0.36.2 \
+            rpds-py==0.27.0 \
+            typing-extensions==4.16.0 \
+            jsonschema==4.25.1
+      - name: Cross-check with the reference jsonschema implementation
+        run: python3 contract/bin/check_surface.py --schema-only
       - id: langs
         name: Enumerate enforced clients
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          c = json.load(open("contract/surface.contract.json"))
-          langs = sorted(k for k, v in c["languages"].items() if v["tier"] != "off")
-          print("languages=" + json.dumps(langs))
+          from pathlib import Path
+
+          contract = json.loads(Path("contract/surface.contract.json").read_text(encoding="utf-8"))
+          languages = sorted(
+              name
+              for name, config in contract["languages"].items()
+              if config["tier"] != "off"
+          )
+          print("languages=" + json.dumps(languages, separators=(",", ":")))
           PY
 
   clients:
     name: clients/${{ matrix.language }}
     needs: contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         language: ${{ fromJSON(needs.contract.outputs.languages) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          python-version: '3.11'
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          check-latest: false
       - name: Check exported surface
-        run: python3 contract/bin/check_surface.py --lang "${{ matrix.language }}" --format github
+        env:
+          CLIENT_LANGUAGE: ${{ matrix.language }}
+        run: python3 contract/bin/check_surface.py --lang "$CLIENT_LANGUAGE" --format github
 
   summary:
     name: full sweep
-    needs: contract
-    runs-on: ubuntu-latest
+    if: ${{ always() && needs.contract.result == 'success' }}
+    needs: [contract, clients]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          python-version: '3.11'
-      - name: Every client, one report
-        run: python3 contract/bin/check_surface.py
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          check-latest: false
+      - name: Produce one attributable report for every client
+        run: python3 contract/bin/check_surface.py --format github
