@@ -69,7 +69,7 @@ jobs:
           find .ores-lint -type f -name '*.sh' -exec sh -n '{}' ';'
 
       # These are runner tools, not application dependencies. Major ranges are
-      # intentionally bounded; exact versions are printed into the run receipt.
+      # intentionally bounded; exact resolved versions are printed in the run.
       - name: Install bounded JavaScript lint tools
         if: steps.detect.outputs.js == 'true'
         run: |
@@ -77,8 +77,7 @@ jobs:
           npm install --global --ignore-scripts --no-audit --no-fund \
             'eslint@9' \
             'typescript-eslint@8'
-          eslint --version
-          node -e "const p=require(require.resolve('typescript-eslint/package.json',{paths:[require('node:child_process').execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim()]})); console.log('typescript-eslint v'+p.version)"
+          npm list --global --depth=0 eslint typescript-eslint
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # 1.97.0
         if: steps.detect.outputs.rs == 'true'
