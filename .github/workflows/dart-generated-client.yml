@@ -84,7 +84,7 @@ jobs:
           missing = [
               camel(item["name"])
               for item in operations
-              if re.search(r"\\b%s\\s*\\(" % re.escape(camel(item["name"])), candidate) is None
+              if re.search(r"\b%s\s*\(" % re.escape(camel(item["name"])), candidate) is None
           ]
           if missing:
               raise SystemExit("generated Dart methods missing: " + ", ".join(missing))
