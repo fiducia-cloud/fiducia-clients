@@ -7,6 +7,7 @@ on:
       - "clients/**"
       - "scripts/client_contract_boundary.py"
       - "scripts/harden_client_contract.py"
+      - "scripts/refresh_client_contract_manifest.py"
       - "scripts/verify_client_contract.py"
       - "tests/test_client_contract_boundary.py"
       - ".zpkg.toml"
@@ -18,6 +19,7 @@ on:
       - "clients/**"
       - "scripts/client_contract_boundary.py"
       - "scripts/harden_client_contract.py"
+      - "scripts/refresh_client_contract_manifest.py"
       - "scripts/verify_client_contract.py"
       - "tests/test_client_contract_boundary.py"
       - ".zpkg.toml"
@@ -45,6 +47,10 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check
           jsonschema==4.25.1 tomlkit==0.13.3 referencing==0.36.2 rpds-py==0.27.0
+      - name: Generate review-only implementation evidence candidate
+        run: >-
+          python3 scripts/refresh_client_contract_manifest.py
+          --output .artifacts/client-contract/contract-manifest.refreshed.json
       - name: Validate schema, instance, private boundary, and fingerprints
         run: |
           python3 - <<'PY'
@@ -73,3 +79,11 @@ jobs:
           if [ -f scripts/verify_client_contract.py ]; then
             python3 scripts/verify_client_contract.py
           fi
+      - name: Retain review-only implementation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: client-contract-evidence-${{ github.run_id }}
+          path: .artifacts/client-contract/
+          if-no-files-found: error
+          retention-days: 30
