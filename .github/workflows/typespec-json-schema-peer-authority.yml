@@ -33,7 +33,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
       - name: Verify checked-out revision
         shell: bash
         env:
@@ -41,9 +40,28 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-
-      - name: Compare peer authorities and emit Contract IR
-        uses: ORESoftware/typespec-json-schema-validator@3171025cbe03a7026a71ce94eea18c910e1431b2
+      - name: Verify client consumer policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          const manifest = JSON.parse(readFileSync("contract-admission/contract-ir-consumer.json", "utf8"));
+          assert.equal(manifest.schema, "ores.contract-ir-consumer/v1");
+          assert.equal(manifest.repository, process.env.GITHUB_REPOSITORY);
+          assert.equal(manifest.repositoryRole, "clients");
+          assert.equal(manifest.canonicalAuthorityRepository, "fiducia-cloud/fiducia-interfaces");
+          assert.equal(manifest.evidenceScope, "repository-local-canary-only");
+          assert.equal(manifest.validator.repository, "ORESoftware/typespec-json-schema-validator");
+          assert.equal(manifest.validator.actionCommit, "c745036456dd80408b83217118b8563edb8f6abd");
+          assert.equal(manifest.validator.contractIrSchema, "ores.typespec-json-schema-validator.contract-ir/v1");
+          assert.equal(manifest.authorityModel.precedence, "none");
+          assert.equal(manifest.admission.allowFallbackAuthority, false);
+          assert.ok(manifest.downstreamResponsibilities.includes("retain-generator-and-ir-digests"));
+          NODE
+      - name: Compare peer authorities and emit fresh Contract IR
+        uses: ORESoftware/typespec-json-schema-validator@c745036456dd80408b83217118b8563edb8f6abd
         with:
           typespec: test/fixtures/schema-authority-canary/main.tsp
           schema: test/fixtures/schema-authority-canary/authored.schema.json
@@ -52,64 +70,24 @@ jobs:
           contract_ir: .typespec-json-schema-validator/contract-ir.json
           output_dir: .typespec-json-schema-validator/generated
           max_probes: "64"
-
-      - name: Verify clients consumer admission
+      - name: Verify current inputs, retained receipt, IR identity and complete scope
+        uses: ORESoftware/typespec-json-schema-validator/actions/verify-contract-ir@c745036456dd80408b83217118b8563edb8f6abd
+        with:
+          contract_ir: .typespec-json-schema-validator/contract-ir.json
+          report: .typespec-json-schema-validator/report.json
+          typespec: test/fixtures/schema-authority-canary/main.tsp
+          schema: test/fixtures/schema-authority-canary/authored.schema.json
+          generated_schema: .typespec-json-schema-validator/generated/typespec.generated.schema.json
+          expected_declarations: '["OreSchemaAuthority.AuthorityKind","OreSchemaAuthority.PeerAuthorityRegistration"]'
+      - name: Verify authored authorities were not modified
         shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import assert from "node:assert/strict";
-          import { readFileSync } from "node:fs";
-
-          const manifest = JSON.parse(readFileSync("contract-admission/contract-ir-consumer.json", "utf8"));
-          const report = JSON.parse(readFileSync(".typespec-json-schema-validator/report.json", "utf8"));
-          const ir = JSON.parse(readFileSync(".typespec-json-schema-validator/contract-ir.json", "utf8"));
-          const sha256 = /^[a-f0-9]{64}$/;
-
-          assert.equal(manifest.repository, process.env.GITHUB_REPOSITORY);
-          assert.equal(manifest.repositoryRole, "clients");
-          assert.equal(manifest.canonicalAuthorityRepository, "fiducia-cloud/fiducia-interfaces");
-          assert.equal(manifest.validator.actionCommit, "3171025cbe03a7026a71ce94eea18c910e1431b2");
-          assert.equal(manifest.authorityModel.precedence, "none");
-          assert.equal(manifest.admission.allowFallbackAuthority, false);
-          assert.ok(manifest.downstreamResponsibilities.includes("retain-generator-and-ir-digests"));
-
-          assert.equal(report.schema, "ores.typespec-json-schema-validator.report/v1");
-          assert.equal(report.status, "passed");
-          assert.equal(report.zeroUnexplainedFindings, true);
-          assert.deepEqual(report.findings, []);
-          assert.match(report.runId, sha256);
-
-          assert.equal(ir.schema, manifest.validator.contractIrSchema);
-          assert.equal(ir.status, "passed");
-          assert.equal(ir.admissible, true);
-          assert.equal(ir.role, "downstream-derived-parity-artifact");
-          assert.equal(ir.editableAuthority, false);
-          assert.equal(ir.authorities.typespec, "independently-authored");
-          assert.equal(ir.authorities.jsonSchema, "independently-authored");
-          assert.equal(ir.authorities.generatedJsonSchema, "comparison-evidence-only");
-          assert.equal(ir.authorities.precedence, "none");
-          assert.match(ir.irId, sha256);
-          assert.equal(ir.admission.receipt.runId, report.runId);
-          assert.equal(ir.admission.receipt.status, "passed");
-          assert.equal(ir.admission.receipt.zeroUnexplainedFindings, true);
-          assert.match(ir.admission.receipt.digest, sha256);
-          for (const field of [
-            "exactInputDigests",
-            "directDeclarationInventory",
-            "generatedSchemaComparison",
-            "differentialInstanceValidation",
-            "zeroUnexplainedFindings",
-          ]) assert.equal(ir.admission.requirements[field], true);
-          assert.ok(ir.admission.scope.admittedDeclarations > 0);
-          NODE
-
-      - name: Retain receipt, Contract IR, SARIF, and generated witness
+        run: git diff --exit-code -- test/fixtures/schema-authority-canary/
+      - name: Retain diagnostic receipt, IR, SARIF and comparison witness
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: contract-ir-admission-${{ github.event.repository.name }}-${{ github.run_id }}
           path: .typespec-json-schema-validator/
           include-hidden-files: true
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
