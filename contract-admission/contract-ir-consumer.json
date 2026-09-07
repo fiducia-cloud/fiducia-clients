@@ -1,0 +1,33 @@
+{
+  "schema": "ores.contract-ir-consumer/v1",
+  "linearIssue": "DEN-3828",
+  "architectureIssue": "ORESoftware/typespec-json-schema-validator#20",
+  "repository": "fiducia-cloud/fiducia-clients",
+  "repositoryRole": "clients",
+  "canonicalAuthorityRepository": "fiducia-cloud/fiducia-interfaces",
+  "evidenceScope": "repository-local-canary-only",
+  "validator": {
+    "repository": "ORESoftware/typespec-json-schema-validator",
+    "actionCommit": "3171025cbe03a7026a71ce94eea18c910e1431b2",
+    "contractIrSchema": "ores.typespec-json-schema-validator.contract-ir/v1"
+  },
+  "authorityModel": {
+    "typespec": "independently-authored-peer-authority",
+    "jsonSchema": "independently-authored-peer-authority",
+    "generatedJsonSchema": "comparison-evidence-only",
+    "precedence": "none"
+  },
+  "admission": {
+    "requirePassedReceipt": true,
+    "requireAdmissibleContractIr": true,
+    "requireZeroUnexplainedFindings": true,
+    "rejectEditableAuthority": true,
+    "allowFallbackAuthority": false
+  },
+  "downstreamResponsibilities": [
+    "consume-admitted-contract-ir",
+    "generate-language-client-candidates",
+    "retain-generator-and-ir-digests",
+    "block-publication-on-stale-evidence"
+  ]
+}
