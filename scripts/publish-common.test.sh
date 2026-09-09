@@ -34,7 +34,11 @@ if (
 fi
 grep -F 'required publication file must not be a symlink: README-LINK.md' "$tmp/symlink.err" >/dev/null
 
-if publish_require_files >"$tmp/empty.out" 2>"$tmp/empty.err"; then
+# The production helper intentionally exits the invoking shell on invalid input.
+# Run the negative probe in a child shell so the harness can inspect its result.
+if (
+  publish_require_files
+) >"$tmp/empty.out" 2>"$tmp/empty.err"; then
   printf 'empty publication file list was accepted\n' >&2
   exit 1
 fi
