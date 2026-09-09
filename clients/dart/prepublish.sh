@@ -34,7 +34,10 @@ candidate="$work/fiducia_client.dart"
 clients_root="$work/clients"
 mkdir -p "$clients_root/dart"
 
-python3 "$root/generate_dart.py" --output "$candidate"
+# The publication candidate intentionally lives outside the repository. Use the
+# generator's stdout mode so a temporary absolute path is never interpreted as
+# a repository-relative evidence path.
+python3 "$root/generate_dart.py" --stdout > "$candidate"
 dart format "$candidate"
 dart format --output=none --set-exit-if-changed "$candidate"
 dart analyze "$candidate"
