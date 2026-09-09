@@ -58,6 +58,7 @@ sops-private*.txt
 
 # Scratch / git worktrees (tmp/worktrees/*)
 tmp/
+temp/
 
 # Gleam
 build/
