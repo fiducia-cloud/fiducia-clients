@@ -277,6 +277,14 @@ def assert_complete(
         )
 
 
+def display_output_path(output: Path) -> str:
+    """Return a stable, non-sensitive label for repository or temp outputs."""
+    try:
+        return output.relative_to(ROOT).as_posix()
+    except ValueError:
+        return f"<external>/{output.name}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -302,7 +310,7 @@ def main() -> int:
             output.read_text(encoding="utf-8") if output.is_file() else ""
         )
         if current != rendered:
-            print("dart generation drift: %s" % output.relative_to(ROOT))
+            print("dart generation drift: %s" % display_output_path(output))
             for line in difflib.unified_diff(
                 current.splitlines(),
                 rendered.splitlines(),
@@ -312,14 +320,14 @@ def main() -> int:
             ):
                 print(line)
             return 1
-        print("dart generation up to date: %s" % output.relative_to(ROOT))
+        print("dart generation up to date: %s" % display_output_path(output))
         return 0
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
     print(
         "generated Dart publication unit: %s (%d manifest operations)"
-        % (output.relative_to(ROOT), len(operations))
+        % (display_output_path(output), len(operations))
     )
     return 0
 
