@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "test/fixtures/schema-authority-canary/**"
+      - "scripts/check-required-client-matrix.py"
       - ".github/workflows/typespec-json-schema-peer-authority.yml"
   push:
     branches: [main, dev]
     paths:
       - "test/fixtures/schema-authority-canary/**"
+      - "scripts/check-required-client-matrix.py"
       - ".github/workflows/typespec-json-schema-peer-authority.yml"
   schedule:
     - cron: "7 5 * * 1"
@@ -23,38 +25,85 @@ concurrency:
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Check out exact head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          show-progress: false
 
-      - name: Verify checked-out revision
+      - name: Verify checked-out revision and conflict-marker absence
         shell: bash
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --check
+          status=0
+          git grep -n -I -E '^(<<<<<<< .+|=======|>>>>>>> .+)$' -- . || status=$?
+          test "$status" -eq 1
 
-      - name: Generate Schema B and compare both peer authorities
-        uses: ORESoftware/typespec-json-schema-validator@1048f31781606934b3716aad334e57e815c869dc
+      - name: Install the validator-supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.16.0"
+          package-manager-cache: false
+
+      - name: Install Python for the required client-language witness
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Generate comparison witness and Contract IR with current reviewed TJSV
+        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
         with:
           typespec: test/fixtures/schema-authority-canary/main.tsp
           schema: test/fixtures/schema-authority-canary/authored.schema.json
           report: .typespec-json-schema-validator/report.json
+          sarif: .typespec-json-schema-validator/report.sarif
+          contract_ir: .typespec-json-schema-validator/contract-ir.json
           output_dir: .typespec-json-schema-validator/generated
           max_probes: "64"
+          int64_strategy: string
+          seal_object_schemas: "true"
+          polymorphic_models_strategy: oneOf
 
-      - name: Retain receipt and generated comparison witness
+      - name: Prove exact-evidence consumer admission rejects nineteen altered cases
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@2281843126ab644607b11cf8281d84f382d68dfc
+        with:
+          contract_ir: .typespec-json-schema-validator/contract-ir.json
+          report: .typespec-json-schema-validator/report.json
+          typespec: test/fixtures/schema-authority-canary/main.tsp
+          schema: test/fixtures/schema-authority-canary/authored.schema.json
+          generated_schema: .typespec-json-schema-validator/generated/typespec.generated.schema.json
+          expected_declarations: '["OreSchemaAuthority.AuthorityKind","OreSchemaAuthority.PeerAuthorityRegistration"]'
+          verification: .typespec-json-schema-validator/consumer-verification.json
+
+      - name: Require the repository's declared client-language matrix after admission
+        run: python3 scripts/check-required-client-matrix.py
+
+      - name: Verify only validator-owned evidence was written
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code HEAD
+          unexpected="$(git status --porcelain --untracked-files=all --ignored=no \
+            | grep -v '^?? .typespec-json-schema-validator/' || true)"
+          if test -n "$unexpected"; then
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Retain parity, Contract IR, SARIF, generated witness and consumer evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: schema-peer-authority-${{ github.event.repository.name }}-${{ github.run_id }}
           path: .typespec-json-schema-validator/
           include-hidden-files: true
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
