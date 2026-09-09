@@ -6,7 +6,6 @@
 # contract by generate_dart.py into a temporary, exact publication candidate.
 # Nothing generated is allowed to rewrite either authored contract authority.
 set -eu
-umask 077
 
 dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 root="$dir"
@@ -35,9 +34,7 @@ candidate="$work/fiducia_client.dart"
 clients_root="$work/clients"
 mkdir -p "$clients_root/dart"
 
-# Stream the generated unit to the caller-owned temporary candidate. This keeps
-# the generator independent of filesystem locations outside the repository.
-python3 "$root/generate_dart.py" --stdout > "$candidate"
+python3 "$root/generate_dart.py" --output "$candidate"
 dart format "$candidate"
 dart format --output=none --set-exit-if-changed "$candidate"
 dart analyze "$candidate"
