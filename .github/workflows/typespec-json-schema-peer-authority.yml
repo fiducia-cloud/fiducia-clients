@@ -86,12 +86,17 @@ jobs:
       - name: Require the repository's declared client-language matrix after admission
         run: python3 scripts/check-required-client-matrix.py
 
-      - name: Verify authored authorities and client source remain unchanged
+      - name: Verify only validator-owned evidence was written
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code -- test/fixtures/schema-authority-canary/ scripts/check-required-client-matrix.py
-          test -z "$(git status --porcelain --untracked-files=all --ignored=no)"
+          git diff --exit-code HEAD
+          unexpected="$(git status --porcelain --untracked-files=all --ignored=no \
+            | grep -v '^?? .typespec-json-schema-validator/' || true)"
+          if test -n "$unexpected"; then
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
 
       - name: Retain parity, Contract IR, SARIF, generated witness and consumer evidence
         if: ${{ always() }}
