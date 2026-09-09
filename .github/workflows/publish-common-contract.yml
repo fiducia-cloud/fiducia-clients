@@ -1,0 +1,54 @@
+name: Shared publication contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/publish-common-contract.yml'
+      - 'scripts/publish-common.sh'
+      - 'scripts/publish-common.test.sh'
+      - 'clients/*/publish.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-common-contract.yml'
+      - 'scripts/publish-common.sh'
+      - 'scripts/publish-common.test.sh'
+      - 'clients/*/publish.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-publication-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify checked-out revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/publish-common-contract.yml
+      - name: Exercise shared POSIX publication guards
+        shell: dash {0}
+        run: scripts/publish-common.test.sh
+      - name: Require unchanged tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=no)"
