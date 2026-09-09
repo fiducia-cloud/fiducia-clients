@@ -172,7 +172,7 @@ jobs:
         with:
           toolchain: "1.95.0"
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@e18b497796c12c0975ef5d2fc7ad053ef454303e # v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: clients/rust-wasm
       # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
