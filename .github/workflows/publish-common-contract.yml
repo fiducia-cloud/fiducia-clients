@@ -46,7 +46,7 @@ jobs:
           args: .github/workflows/publish-common-contract.yml
       - name: Exercise shared POSIX publication guards
         shell: dash {0}
-        run: scripts/publish-common.test.sh
+        run: dash scripts/publish-common.test.sh
       - name: Require unchanged tracked source
         shell: bash
         run: |
