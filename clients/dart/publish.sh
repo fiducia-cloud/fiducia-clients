@@ -18,7 +18,7 @@ mkdir -p "$tmp/lib"
 cp pubspec.yaml README.md LICENSE CHANGELOG.md "$tmp/"
 cd "$tmp"
 
-if [ "$PUBLISH_MODE" = "publish" ]; then
+if [ "$PUBLISH_MODE" = "release" ]; then
     dart pub publish
 else
     dart pub publish --dry-run

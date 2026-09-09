@@ -32,6 +32,25 @@ publish_require() {
   fi
 }
 
+# Fail closed when a publish artifact is missing or unreadable. Callers invoke
+# this after changing into the package staging directory, so paths stay local
+# to the artifact being admitted rather than accidentally resolving in the
+# repository worktree.
+publish_require_files() {
+  if [ "$#" -eq 0 ]; then
+    printf 'publish_require_files requires at least one path\n' >&2
+    return 2
+  fi
+  publish_files_status=0
+  for publish_file in "$@"; do
+    if [ ! -r "$publish_file" ]; then
+      printf 'required publish file is missing or unreadable: %s\n' "$publish_file" >&2
+      publish_files_status=1
+    fi
+  done
+  return "$publish_files_status"
+}
+
 publish_require_clean_tree() {
   root="$1"
   if [ -n "$(git -C "$root" status --porcelain)" ]; then

@@ -1,0 +1,30 @@
+name: publish-contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate publish plumbing and mode contract
+        shell: sh
+        run: |
+          sh -n scripts/publish-common.sh
+          sh -n clients/dart/publish.sh
+          sh -n tests/test_publish_contract.sh
+          sh tests/test_publish_contract.sh
