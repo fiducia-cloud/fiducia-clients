@@ -1,0 +1,29 @@
+# Contract: ores-rate-limit/ores-rl-interfaces@241353d0f5269450690d9646be03db2aba59a2ae
+# Initial fleet adoption is deliberately observe-only/advisory.
+schemaVersion = "ores.rate-limit.config.v1"
+layout = "client-only"
+defaultPolicyId = "repo-default"
+
+[client]
+root = "."
+exposePolicyMetadata = true
+
+[[policies]]
+policyId = "repo-default"
+clientVisible = true
+algorithm = "fixed-window"
+identityScope = "anonymous-ip"
+capacity = 100
+windowMs = 60000
+refillTokens = 0
+refillIntervalMs = 0
+requestCost = 1
+enforcementMode = "observe-only"
+consistencyMode = "advisory"
+backendFailureMode = "fail-open"
+denyCacheMode = "local-denials"
+denyCacheCapacity = 0
+maxOvershoot = 0
+maxBlockTtlMs = 1000
+keyVersion = "v1"
+policyVersion = 1
