@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/handoffs.schema.json",
+  "title": "FiduciaHandoffs",
+  "description": "Atomic ownership handoff payloads: transfer responsibility for a resource from one holder to another with no moment of dual or zero ownership. On accept the new owner receives a strictly higher fencing token.",
+  "type": "object",
+  "$defs": {
+    "HandoffOfferRequest": {
+      "type": "object",
+      "title": "HandoffOfferRequest",
+      "description": "Body of POST /v1/handoffs/offer. The original owner keeps authority until the offer is accepted.",
+      "additionalProperties": false,
+      "required": ["name", "resource", "from", "to", "from_token"],
+      "properties": {
+        "name": { "type": "string", "description": "Handoff id, such as ticket-482/handoff." },
+        "resource": { "type": "string", "description": "The resource whose ownership is being transferred." },
+        "from": { "type": "string", "description": "Current owner offering the resource." },
+        "to": { "type": "string", "description": "Recipient the resource is offered to." },
+        "from_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "The current owner's fencing token, proving ownership." },
+        "context": { "type": "object", "description": "Context manifest handed to the recipient." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Accept deadline in ms. Defaults to 30000." }
+      }
+    },
+    "HandoffDecisionRequest": {
+      "type": "object",
+      "title": "HandoffDecisionRequest",
+      "description": "Body of POST /v1/handoffs/accept and /v1/handoffs/reject. Only the offered recipient may decide.",
+      "additionalProperties": false,
+      "required": ["name", "to"],
+      "properties": {
+        "name": { "type": "string", "description": "Handoff id." },
+        "to": { "type": "string", "description": "The offered recipient making the decision." }
+      }
+    },
+    "HandoffState": {
+      "type": "object",
+      "title": "HandoffState",
+      "description": "Current handoff state returned by GET /v1/handoffs.",
+      "additionalProperties": false,
+      "required": ["name", "resource", "from", "to", "from_token", "status", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Handoff id." },
+        "resource": { "type": "string", "description": "Resource being transferred." },
+        "from": { "type": "string", "description": "Original owner." },
+        "to": { "type": "string", "description": "Recipient." },
+        "from_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Original owner's fencing token." },
+        "to_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Recipient's fencing token, minted on accept (strictly higher than from_token)." },
+        "status": {
+          "type": "string",
+          "enum": ["offered", "accepted", "rejected", "expired"],
+          "description": "Lifecycle state."
+        },
+        "context": { "type": "object", "description": "Context manifest." },
+        "expires_ms": { "type": "integer", "minimum": 0, "description": "Accept deadline." },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version." }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/common.schema.json",
+  "title": "FiduciaCommon",
+  "description": "Shared envelopes returned across the fiducia coordination API. Field names are snake_case to match the wire format exactly.",
+  "type": "object",
+  "$defs": {
+    "ProposeOutcome": {
+      "type": "object",
+      "title": "ProposeOutcome",
+      "description": "Result of a committed write (lock/kv/election/discovery mutation).",
+      "additionalProperties": false,
+      "required": ["shard", "log_index", "revision", "output"],
+      "properties": {
+        "shard": { "type": "integer", "minimum": 0, "description": "Shard whose Raft group committed the command." },
+        "log_index": { "type": "integer", "minimum": 0, "description": "Index assigned in that shard's log." },
+        "revision": { "type": "integer", "minimum": 0, "description": "State-machine revision produced by applying the command." },
+        "output": { "description": "Domain-specific output from the committed state-machine command." }
+      }
+    },
+    "ProposeError": {
+      "type": "object",
+      "title": "ProposeError",
+      "description": "Why a write could not be committed.",
+      "additionalProperties": false,
+      "required": ["reason", "shard"],
+      "properties": {
+        "reason": { "type": "string", "enum": ["not_leader", "unavailable"], "description": "Failure class." },
+        "shard": { "type": "integer", "minimum": 0, "description": "Target shard." },
+        "leader": { "type": "string", "description": "Current leader hint for trusted infrastructure, when known (not_leader)." },
+        "retryable": { "type": "boolean", "description": "Whether the request was rejected before application and may be retried against the configured endpoint." }
+      }
+    },
+    "ChangeEvent": {
+      "type": "object",
+      "title": "ChangeEvent",
+      "description": "One server-sent event emitted on a watch stream (KV, election, or service).",
+      "additionalProperties": false,
+      "required": ["scope", "kind", "key", "revision"],
+      "properties": {
+        "scope": { "type": "string", "enum": ["kv", "election", "service"], "description": "Which primitive changed." },
+        "kind": { "type": "string", "description": "Domain verb: kv put/delete; election elected/renewed/resigned; service register/heartbeat/deregister." },
+        "key": { "type": "string", "description": "The watched name: kv key, election name, or service name." },
+        "revision": { "type": "integer", "minimum": 0, "description": "State-machine revision that produced the change." },
+        "detail": { "type": "object", "description": "Optional payload (the new Leadership or ServiceInstance) so watchers can act without a follow-up read." }
+      }
+    },
+    "Introspection": {
+      "type": "object",
+      "title": "Introspection",
+      "description": "Result of validating an API key (fiducia-auth). The edge/LB caches this.",
+      "additionalProperties": false,
+      "required": ["valid", "scopes"],
+      "properties": {
+        "valid": { "type": "boolean", "description": "Whether the key is valid and active." },
+        "org_id": { "type": "string", "description": "Owning org id when valid." },
+        "key_id": { "type": "string", "description": "Key id when valid." },
+        "scopes": { "type": "array", "items": { "type": "string" }, "description": "Granted scopes." },
+        "require_idempotency": { "type": "boolean", "description": "When true, the edge/LB rejects mutating calls made with this key that omit an Idempotency-Key header. Absent means not required (default)." }
+      }
+    }
+  }
+}

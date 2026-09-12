@@ -1,0 +1,2767 @@
+{
+  "$schema": "./surface.schema.json",
+  "$comment": "Declared exported interface for every client under clients/. Validated against surface.schema.json; enforced by contract/bin/check_surface.py in tests, in CI, and at pre-publish time. Edit this file to change the contract \u2014 never to paper over a client that drifted.",
+  "contractVersion": "1.0.0",
+  "product": "fiducia",
+  "provenance": {
+    "source": "operations.json",
+    "sourceSha256": "39bd860c38ff1490ea52ae359c3caf56ce7972bb9429422a23d231cbe35d2e80",
+    "sourceKind": "operations-manifest",
+    "generatedBy": "contract/bin/derive_contract.py",
+    "generatedAt": "2026-08-23",
+    "enrichedFromClients": 12
+  },
+  "conventions": {
+    "clientType": "FiduciaClient",
+    "errorTypes": [
+      "FiduciaError"
+    ],
+    "naming": {
+      "default": "snake_case",
+      "byLanguage": {
+        "c": "snake_case",
+        "clojure": "kebab-case",
+        "cpp": "snake_case",
+        "crystal": "snake_case",
+        "csharp": "PascalCase",
+        "dart": "camelCase",
+        "elixir": "snake_case",
+        "erlang": "snake_case",
+        "fsharp": "PascalCase",
+        "gleam": "snake_case",
+        "go": "PascalCase",
+        "haskell": "camelCase",
+        "java": "camelCase",
+        "julia": "snake_case",
+        "kotlin": "camelCase",
+        "lua": "snake_case",
+        "matlab": "snake_case",
+        "nim": "camelCase",
+        "ocaml": "snake_case",
+        "php": "camelCase",
+        "powershell": "PascalCase",
+        "python": "snake_case",
+        "r": "snake_case",
+        "ruby": "snake_case",
+        "rust": "snake_case",
+        "rust-wasm": "snake_case",
+        "scala": "camelCase",
+        "shell": "snake_case",
+        "swift": "camelCase",
+        "ts": "camelCase",
+        "zig": "camelCase"
+      }
+    }
+  },
+  "interfaceSchemas": [
+    {
+      "name": "Barriers",
+      "vendoredPath": "contract/schemas/barriers.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/barriers.schema.json",
+      "sha256": "c0a923470d96169cbf671dd4acc9bfd47d181acfcddc6cc60411fd8a86435d6a"
+    },
+    {
+      "name": "Budgets",
+      "vendoredPath": "contract/schemas/budgets.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/budgets.schema.json",
+      "sha256": "6cf2ab2789b3deb0d44b02a0dfab9f800ea6247ca0da4b2685969e764abcf10f"
+    },
+    {
+      "name": "Claims",
+      "vendoredPath": "contract/schemas/claims.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/claims.schema.json",
+      "sha256": "30fb004a42d9d96fb347dda95e8a3401daf538ae521eb5b5f38fa4e589e5523c"
+    },
+    {
+      "name": "Common",
+      "vendoredPath": "contract/schemas/common.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/common.schema.json",
+      "sha256": "733f5b36ed27173668069740e2da8edf281853f511f816463d1118bb3ff0535e"
+    },
+    {
+      "name": "Counters",
+      "vendoredPath": "contract/schemas/counters.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/counters.schema.json",
+      "sha256": "469834f2a6ce004d11574ebd8a566824f3b16c38f9f860d3e42588178b67134a"
+    },
+    {
+      "name": "Decisions",
+      "vendoredPath": "contract/schemas/decisions.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/decisions.schema.json",
+      "sha256": "a0c1bfcd9aa1cf657dd28d08c095aad63f8f1363c89ea7f2447cb32c4be8e2ed"
+    },
+    {
+      "name": "Discovery",
+      "vendoredPath": "contract/schemas/discovery.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/discovery.schema.json",
+      "sha256": "08527156aca8aa0036d890307b7df25927d8f5441c89bada3317df28bd0f72b2"
+    },
+    {
+      "name": "Effects",
+      "vendoredPath": "contract/schemas/effects.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/effects.schema.json",
+      "sha256": "4f090360911e723e8b895229bbba1ab2be0feb03161dc49356db785c83ecca08"
+    },
+    {
+      "name": "Elections",
+      "vendoredPath": "contract/schemas/elections.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/elections.schema.json",
+      "sha256": "686bb50bdc90decb133c7372f3c29b6c5e430c120a70ebfe11cb78d38ba2a586"
+    },
+    {
+      "name": "Handoffs",
+      "vendoredPath": "contract/schemas/handoffs.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/handoffs.schema.json",
+      "sha256": "641e1ab4b8cd4cd8533db601d0292bb4a31b8b05dba99bacd98baecf2711695b"
+    },
+    {
+      "name": "Idempotency",
+      "vendoredPath": "contract/schemas/idempotency.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/idempotency.schema.json",
+      "sha256": "a4fe54471c74951789feb78c642f92c35cf7ad8b5cdc2197446f6d8ded5d37b1"
+    },
+    {
+      "name": "Kv",
+      "vendoredPath": "contract/schemas/kv.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/kv.schema.json",
+      "sha256": "5da393cdd91148b185c9bc2e398013478bc83b9b5576144a90234309405d13a8"
+    },
+    {
+      "name": "Locks",
+      "vendoredPath": "contract/schemas/locks.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/locks.schema.json",
+      "sha256": "da14eb232fe84404eb290490d15718b7598e8dc6d95f6806b5a6715c9a9ec6dd"
+    },
+    {
+      "name": "RateLimits",
+      "vendoredPath": "contract/schemas/rate_limits.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/rate_limits.schema.json",
+      "sha256": "fbaf919bc7d05be0d476f116586e5e2f9b171ac9d924a46ecc3da952e54dfec5"
+    },
+    {
+      "name": "Schedules",
+      "vendoredPath": "contract/schemas/schedules.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/schedules.schema.json",
+      "sha256": "766a0f75b269f4bb7461b2d1550d6bd03fe81368f065c4a006b140b600f485e7"
+    },
+    {
+      "name": "Sync",
+      "vendoredPath": "contract/schemas/sync.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/sync.schema.json",
+      "sha256": "13413f413cbed14d090687d6d9927f7fc439fdfdeddec3cfe2ba5486ee360652"
+    },
+    {
+      "name": "Tasks",
+      "vendoredPath": "contract/schemas/tasks.schema.json",
+      "upstreamRepo": "fiducia-interfaces",
+      "upstreamPath": "schema/tasks.schema.json",
+      "sha256": "26669c33c7e9eebd49e3a1d884750b0c3a47fde93bd8c1e80c94772bc64310d9"
+    }
+  ],
+  "types": {
+    "Barriers": {
+      "$ref": "./schemas/barriers.schema.json"
+    },
+    "Budgets": {
+      "$ref": "./schemas/budgets.schema.json"
+    },
+    "Claims": {
+      "$ref": "./schemas/claims.schema.json"
+    },
+    "Common": {
+      "$ref": "./schemas/common.schema.json"
+    },
+    "Counters": {
+      "$ref": "./schemas/counters.schema.json"
+    },
+    "Decisions": {
+      "$ref": "./schemas/decisions.schema.json"
+    },
+    "Discovery": {
+      "$ref": "./schemas/discovery.schema.json"
+    },
+    "Effects": {
+      "$ref": "./schemas/effects.schema.json"
+    },
+    "Elections": {
+      "$ref": "./schemas/elections.schema.json"
+    },
+    "Handoffs": {
+      "$ref": "./schemas/handoffs.schema.json"
+    },
+    "Idempotency": {
+      "$ref": "./schemas/idempotency.schema.json"
+    },
+    "Kv": {
+      "$ref": "./schemas/kv.schema.json"
+    },
+    "Locks": {
+      "$ref": "./schemas/locks.schema.json"
+    },
+    "RateLimits": {
+      "$ref": "./schemas/rate_limits.schema.json"
+    },
+    "Schedules": {
+      "$ref": "./schemas/schedules.schema.json"
+    },
+    "Sync": {
+      "$ref": "./schemas/sync.schema.json"
+    },
+    "Tasks": {
+      "$ref": "./schemas/tasks.schema.json"
+    }
+  },
+  "operations": [
+    {
+      "name": "barrier_arrive",
+      "group": "barriers",
+      "doc": "Record a participant's arrival or veto; repeat arrivals by the same participant are idempotent.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/barriers/arrive"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "participant",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "weight",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "veto",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "barrier_create",
+      "group": "barriers",
+      "doc": "Create a fan-in barrier with a resolution policy (all/quorum/first_success/any_veto/best_by_deadline/weighted_quorum).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/barriers/create"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "policy",
+          "in": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "expected",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "deadline_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "barrier_get",
+      "group": "barriers",
+      "doc": "Read a barrier's arrivals and resolution status; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/barriers"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "budget_commit",
+      "group": "budgets",
+      "doc": "Commit a reservation with the actual spend (capped at reserved); frees the difference.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/budgets/commit"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reservation_id",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "actual",
+          "in": "body",
+          "type": "object",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "budget_get",
+      "group": "budgets",
+      "doc": "Read a budget's ceiling, reserved, spent, available, and reservations; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/budgets"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "budget_release",
+      "group": "budgets",
+      "doc": "Release a still-held reservation, returning its full headroom.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/budgets/release"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reservation_id",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "budget_reserve",
+      "group": "budgets",
+      "doc": "Reserve an amount; rejected if it would exceed any limited axis (prevents oversubscription).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/budgets/reserve"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reservation_id",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "in": "body",
+          "type": "object",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "budget_set",
+      "group": "budgets",
+      "doc": "Create or re-cap a budget with a per-axis ceiling (usd_micros, tokens, tool_calls); unset axis is unlimited.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/budgets/set"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "in": "body",
+          "type": "object",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_assert",
+      "group": "claims",
+      "doc": "Assert or re-assert a versioned claim; re-asserting bumps the version and resets support/contests.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/claims/assert"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "subject",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "predicate",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "value",
+          "in": "body",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "confidence",
+          "in": "body",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "author",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "evidence",
+          "in": "body",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "valid_until_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_contest",
+      "group": "claims",
+      "doc": "Record an agent's contest of a claim, moving it to contested.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/claims/contest"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "agent",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_get",
+      "group": "claims",
+      "doc": "Read a claim's subject/predicate/value, status, support, and contests; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/claims"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_resolve",
+      "group": "claims",
+      "doc": "Authoritatively accept or reject a claim (terminal).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/claims/resolve"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "accepted",
+          "in": "body",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_supersede",
+      "group": "claims",
+      "doc": "Supersede a claim with a newer one (terminal).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/claims/supersede"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "superseded_by",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "claim_support",
+      "group": "claims",
+      "doc": "Record an agent's support for a claim.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/claims/support"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "agent",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "counter_add",
+      "group": "counters",
+      "doc": "Atomically add delta (may be negative); prev_revision makes it a compare-and-set.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/counters/add"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "delta",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "prev_revision",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "counter_get",
+      "group": "counters",
+      "doc": "Read a counter's value and revision; absent reads as found=false (treat as 0).",
+      "http": {
+        "method": "GET",
+        "path": "/v1/counters"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "counter_set",
+      "group": "counters",
+      "doc": "Set a counter to an absolute value (e.g. reset to 0); prev_revision makes it a compare-and-set.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/counters/set"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "value",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "prev_revision",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "decision_get",
+      "group": "decisions",
+      "doc": "Read a decision's options, tallies, votes, and resolution; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/decisions"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "decision_propose",
+      "group": "decisions",
+      "doc": "Propose a decision with typed options and a resolution policy (plurality/threshold/unanimous).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/decisions/propose"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "question",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "options",
+          "in": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "policy",
+          "in": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "deadline_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "decision_vote",
+      "group": "decisions",
+      "doc": "Cast or replace a vote; option omitted abstains, veto aborts, weight drives resolution.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/decisions/vote"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "voter",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "option",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "confidence",
+          "in": "body",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "weight",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "veto",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "evidence",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "effect_abort",
+      "group": "effects",
+      "doc": "Abort a prepared/approved effect (terminal).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/effects/abort"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "effect_approve",
+      "group": "effects",
+      "doc": "Record one principal's approval; duplicate approvals count once.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/effects/approve"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "principal",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "effect_commit",
+      "group": "effects",
+      "doc": "Commit an approved effect exactly once, recording the result; a repeat commit replays.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/effects/commit"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "result",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "effect_get",
+      "group": "effects",
+      "doc": "Read an effect's status, approvals, and result; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/effects"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "effect_prepare",
+      "group": "effects",
+      "doc": "Prepare a side effect for later authorization (idempotent); required_approvals of 0 is pre-approved.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/effects/prepare"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "effect_type",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "in": "body",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "risk",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "idempotency_key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "required_approvals",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "election_campaign",
+      "group": "elections",
+      "doc": "Campaign for leadership with optional candidate metadata; wins if currently unheld. Returns a fencing token on win.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/elections/{name}/campaign"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "candidate",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "metadata",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "election_get",
+      "group": "elections",
+      "doc": "Observe the current holder of a named election.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/elections/{name}"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "election_renew",
+      "group": "elections",
+      "doc": "Extend the lease; requires the held fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/elections/{name}/renew"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "candidate",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "election_resign",
+      "group": "elections",
+      "doc": "Step down; requires the held fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/elections/{name}/resign"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "candidate",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "handoff_accept",
+      "group": "handoffs",
+      "doc": "Accept an offered handoff; the new owner receives a strictly higher fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/handoffs/accept"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "to",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "handoff_get",
+      "group": "handoffs",
+      "doc": "Read a handoff's status, counterparties, and tokens; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/handoffs"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "handoff_offer",
+      "group": "handoffs",
+      "doc": "Offer to transfer ownership of a resource; the original owner keeps authority until accepted.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/handoffs/offer"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "resource",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "from",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "to",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "from_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "context",
+          "in": "body",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "handoff_reject",
+      "group": "handoffs",
+      "doc": "Reject an offered handoff; ownership stays with the original owner.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/handoffs/reject"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "to",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "health",
+      "group": "misc",
+      "doc": "Liveness probe.",
+      "http": {
+        "method": "GET",
+        "path": "/healthz"
+      },
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "idempotency_claim",
+      "group": "idempotency",
+      "doc": "Claim an idempotency key; first claimant wins until TTL expiry, duplicates return the existing record.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/idempotency/claim"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "owner",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ttl",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "metadata",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "idempotency_complete",
+      "group": "idempotency",
+      "doc": "Mark a claimed idempotency key complete and optionally store a replayable result.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/idempotency/complete"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "owner",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "result",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "idempotency_get",
+      "group": "idempotency",
+      "doc": "Inspect an active idempotency record.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/idempotency"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "kv_delete",
+      "group": "kv",
+      "doc": "Delete a config key.",
+      "http": {
+        "method": "DELETE",
+        "path": "/v1/kv"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "kv_get",
+      "group": "kv",
+      "doc": "Read a config key.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/kv"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "kv_put",
+      "group": "kv",
+      "doc": "Write a config key; values are encrypted at rest when the cluster has KV protection configured. plaintext=true explicitly opts this value out. prev_revision is a compare-and-swap guard (0 = must-not-exist).",
+      "http": {
+        "method": "PUT",
+        "path": "/v1/kv"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "value",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "prev_revision",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "plaintext",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_acquire",
+      "group": "locks",
+      "doc": "Acquire a single-key lock (try-lock unless wait). holder is required on the wire; SDKs generate one when omitted from their ergonomic API.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/locks/acquire"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "wait",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "wait_timeout_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_acquire_many",
+      "group": "locks",
+      "doc": "Multi-key UNION lock: all-or-nothing across the set; conflicts on any member key.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/locks/acquire"
+      },
+      "params": [
+        {
+          "name": "keys",
+          "in": "body",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "wait",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "wait_timeout_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_cancel",
+      "group": "locks",
+      "doc": "Cancel one queued union-lock acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves the legacy holder/key behavior.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/locks/cancel"
+      },
+      "params": [
+        {
+          "name": "keys",
+          "in": "body",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_get",
+      "group": "locks",
+      "doc": "Inspect a lock member key: holder, the held union, and the FIFO wait queue.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/locks"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_release",
+      "group": "locks",
+      "doc": "Release the whole grant (every member key) by its fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/locks/release"
+      },
+      "params": [
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock_renew",
+      "group": "locks",
+      "doc": "Renew a held union lock only when holder and fencing token still match; preserves the token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/locks/renew"
+      },
+      "params": [
+        {
+          "name": "keys",
+          "in": "body",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rate_limit_check",
+      "group": "rate_limit",
+      "doc": "Atomic check-and-decrement (token_bucket | sliding_window). Returns {allowed, remaining}.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/rate-limit/{tenant}/{key}/check"
+      },
+      "params": [
+        {
+          "name": "tenant",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "key",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "algorithm",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "window_ms",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "refill_per_second",
+          "in": "body",
+          "type": "float",
+          "required": false
+        },
+        {
+          "name": "cost",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rate_limit_get",
+      "group": "rate_limit",
+      "doc": "Current limiter state for a tenant/key.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/rate-limit/{tenant}/{key}"
+      },
+      "params": [
+        {
+          "name": "tenant",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "key",
+          "in": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "schedule_get",
+      "group": "cron",
+      "doc": "Read a schedule definition.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/cron/schedules/{name}"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "schedule_history",
+      "group": "cron",
+      "doc": "Recent run history.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/cron/schedules/{name}/history"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "schedule_record_run",
+      "group": "cron",
+      "doc": "Record a fire; duplicate fire_id is deduped (exactly-once).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/cron/schedules/{name}/runs"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fire_id",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fired_at_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "schedule_upsert",
+      "group": "cron",
+      "doc": "Create/update a schedule. target = {kind: webhook|queue|grpc, ...}. Exactly one of cron / one_shot_at_ms.",
+      "http": {
+        "method": "PUT",
+        "path": "/v1/cron/schedules/{name}"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "target",
+          "in": "body",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "cron",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "one_shot_at_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "delivery",
+          "in": "body",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "max_retries",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore_acquire",
+      "group": "semaphores",
+      "doc": "Take a permit of a counting semaphore (up to limit holders).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/semaphores/acquire"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "wait",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "wait_timeout_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore_cancel",
+      "group": "semaphores",
+      "doc": "Cancel one queued semaphore acquisition attempt. request_id makes a pre-acquire cancel durable and scoped; omitting it preserves legacy behavior.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/semaphores/cancel"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "request_id",
+          "in": "body",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore_get",
+      "group": "semaphores",
+      "doc": "Inspect a semaphore: limit, holders, free permits, queue.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/semaphores"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore_release",
+      "group": "semaphores",
+      "doc": "Return one permit (admits the next FIFO waiter).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/semaphores/release"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore_renew",
+      "group": "semaphores",
+      "doc": "Renew a held semaphore permit only when holder and fencing token still match; preserves the token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/semaphores/renew"
+      },
+      "params": [
+        {
+          "name": "key",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "holder",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "service_deregister",
+      "group": "discovery",
+      "doc": "Remove an instance from the registry.",
+      "http": {
+        "method": "DELETE",
+        "path": "/v1/services/{service}/instances/{instance_id}"
+      },
+      "params": [
+        {
+          "name": "service",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "instance_id",
+          "in": "path",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "service_heartbeat",
+      "group": "discovery",
+      "doc": "Renew an instance lease before it expires.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/services/{service}/instances/{instance_id}/heartbeat"
+      },
+      "params": [
+        {
+          "name": "service",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "instance_id",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "service_instances",
+      "group": "discovery",
+      "doc": "List live instances of a service, optionally filtered by exact metadata matches.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/services/{service}"
+      },
+      "params": [
+        {
+          "name": "service",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "metadata",
+          "in": "query",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "service_register",
+      "group": "discovery",
+      "doc": "Register/refresh an instance with a TTL lease and optional metadata.",
+      "http": {
+        "method": "PUT",
+        "path": "/v1/services/{service}/instances/{instance_id}"
+      },
+      "params": [
+        {
+          "name": "service",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "instance_id",
+          "in": "path",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "address",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "metadata",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "status",
+      "group": "misc",
+      "doc": "Per-shard consensus status.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/status"
+      },
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_cancel",
+      "group": "tasks",
+      "doc": "Cancel a task (terminal), regardless of owner.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/cancel"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_claim",
+      "group": "tasks",
+      "doc": "Claim a pending or lease-expired task; the grant carries a fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/claim"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "worker",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ttl_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_complete",
+      "group": "tasks",
+      "doc": "Complete a task with a durable result under the current fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/complete"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "worker",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "result",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_create",
+      "group": "tasks",
+      "doc": "Create a durable task if it does not exist (idempotent).",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/create"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "task_type",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "in": "body",
+          "type": "object",
+          "required": false
+        },
+        {
+          "name": "deadline_ms",
+          "in": "body",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_fail",
+      "group": "tasks",
+      "doc": "Fail a task; retryable requeues it for another worker.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/fail"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "worker",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "retryable",
+          "in": "body",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_get",
+      "group": "tasks",
+      "doc": "Read a task's status, owner, and fencing token; absent reads as found=false.",
+      "http": {
+        "method": "GET",
+        "path": "/v1/tasks"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "query",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "task_progress",
+      "group": "tasks",
+      "doc": "Report progress and a checkpoint under the current fencing token.",
+      "http": {
+        "method": "POST",
+        "path": "/v1/tasks/progress"
+      },
+      "params": [
+        {
+          "name": "name",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "worker",
+          "in": "body",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "fencing_token",
+          "in": "body",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "percent",
+          "in": "body",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "checkpoint",
+          "in": "body",
+          "type": "object",
+          "required": false
+        }
+      ],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "kv_list",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "lock",
+      "doc": "Common surface: exported by 24 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "must_lock",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "must_semaphore",
+      "doc": "Common surface: exported by 28 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rw_acquire_read",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rw_acquire_write",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rw_end_read",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "rw_end_write",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "semaphore",
+      "doc": "Common surface: exported by 23 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "service_list",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "try_lock",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "try_semaphore",
+      "doc": "Common surface: exported by 29 of the 31 clients that had any surface when the contract was adopted.",
+      "params": [],
+      "returns": {
+        "type": "object"
+      }
+    }
+  ],
+  "languages": {
+    "c": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "symbolPrefix": "fiducia_",
+      "clientType": "fiducia_client",
+      "minCoverage": 50.0
+    },
+    "clojure": {
+      "tier": "warn",
+      "naming": "kebab-case",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 48.0
+    },
+    "cpp": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 50.0
+    },
+    "crystal": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 50.0
+    },
+    "csharp": {
+      "tier": "warn",
+      "naming": "PascalCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 35.0
+    },
+    "dart": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 35.0
+    },
+    "elixir": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 35.0
+    },
+    "erlang": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "client",
+      "minCoverage": 50.0
+    },
+    "fsharp": {
+      "tier": "warn",
+      "naming": "PascalCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 50.0
+    },
+    "gleam": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 50.0
+    },
+    "go": {
+      "tier": "gate",
+      "naming": "PascalCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 100.0
+    },
+    "haskell": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 50.0
+    },
+    "java": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 35.0
+    },
+    "julia": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 46.0
+    },
+    "kotlin": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 50.0
+    },
+    "lua": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 48.0
+    },
+    "matlab": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 50.0
+    },
+    "nim": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 50.0
+    },
+    "ocaml": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "client",
+      "minCoverage": 50.0
+    },
+    "php": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "Client",
+      "minCoverage": 35.0
+    },
+    "powershell": {
+      "tier": "warn",
+      "naming": "PascalCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 0.0
+    },
+    "python": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 98.0
+    },
+    "r": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 50.0
+    },
+    "ruby": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 33.0
+    },
+    "rust": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 98.0
+    },
+    "rust-wasm": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 85.0
+    },
+    "scala": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 50.0
+    },
+    "shell": {
+      "tier": "warn",
+      "naming": "snake_case",
+      "enforceArity": false,
+      "exclude": [],
+      "symbolPrefix": "fiducia_",
+      "minCoverage": 35.0
+    },
+    "swift": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 50.0
+    },
+    "ts": {
+      "tier": "gate",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "clientType": "FiduciaClient",
+      "minCoverage": 100.0
+    },
+    "zig": {
+      "tier": "warn",
+      "naming": "camelCase",
+      "enforceArity": false,
+      "exclude": [],
+      "minCoverage": 48.0
+    }
+  },
+  "waivers": []
+}

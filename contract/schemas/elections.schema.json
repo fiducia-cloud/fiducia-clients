@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/elections.schema.json",
+  "title": "FiduciaElections",
+  "description": "Client leader-election payloads.",
+  "type": "object",
+  "$defs": {
+    "CampaignRequest": {
+      "type": "object",
+      "title": "CampaignRequest",
+      "description": "Body of POST /v1/elections/{name}/campaign.",
+      "additionalProperties": false,
+      "required": ["candidate", "ttl_ms"],
+      "properties": {
+        "candidate": { "type": "string", "description": "Identifier of the campaigning instance." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Leadership lease TTL in milliseconds." },
+        "metadata": {
+          "type": "object",
+          "description": "Optional metadata published with the leadership grant, such as address, region, version, or role.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "RenewRequest": {
+      "type": "object",
+      "title": "RenewRequest",
+      "description": "Body of POST /v1/elections/{name}/renew — must present the held fencing token.",
+      "additionalProperties": false,
+      "required": ["candidate", "fencing_token"],
+      "properties": {
+        "candidate": { "type": "string", "description": "The current holder." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Token from the grant." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Optional new lease TTL; when omitted the original campaign TTL is reused." }
+      }
+    },
+    "HoldRequest": {
+      "type": "object",
+      "title": "HoldRequest",
+      "description": "Body of resign — must present the held fencing token.",
+      "additionalProperties": false,
+      "required": ["candidate", "fencing_token"],
+      "properties": {
+        "candidate": { "type": "string", "description": "The current holder." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Token from the grant." }
+      }
+    },
+    "Leadership": {
+      "type": "object",
+      "title": "Leadership",
+      "description": "Who currently holds a named election.",
+      "additionalProperties": false,
+      "required": ["leader", "fencing_token", "lease_expires_ms", "ttl_ms", "metadata"],
+      "properties": {
+        "leader": { "type": "string", "description": "Current leader id." },
+        "fencing_token": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Monotonic token for this leadership term." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "Lease expiry (ms since epoch)." },
+        "ttl_ms": { "type": "integer", "minimum": 0, "description": "Campaign TTL retained so a renew without an explicit TTL reuses it." },
+        "metadata": {
+          "type": "object",
+          "description": "Leader metadata from the winning campaign.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ElectionGetResponse": {
+      "type": "object",
+      "title": "ElectionGetResponse",
+      "description": "Response of GET /v1/elections/{name}.",
+      "additionalProperties": false,
+      "required": ["name", "held"],
+      "properties": {
+        "name": { "type": "string", "description": "Election name." },
+        "held": { "type": "boolean", "description": "Whether anyone currently holds it." },
+        "leadership": { "$ref": "#/$defs/Leadership", "description": "Holder details when held." }
+      }
+    }
+  }
+}

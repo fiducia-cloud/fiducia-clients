@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/counters.schema.json",
+  "title": "FiduciaCounters",
+  "description": "Distributed counter payloads: a replicated signed integer per key with a monotonic revision for compare-and-set. Used for success/failure thresholds, quota tallies, and barrier fan-in counts.",
+  "type": "object",
+  "$defs": {
+    "CounterAddRequest": {
+      "type": "object",
+      "title": "CounterAddRequest",
+      "description": "Body of POST /v1/counters/add. Atomically adds delta (which may be negative), creating the counter at 0 first.",
+      "additionalProperties": false,
+      "required": ["key", "delta"],
+      "properties": {
+        "key": { "type": "string", "description": "Slash-safe counter key, such as rollout/v2.4.1/failures." },
+        "delta": { "type": "integer", "description": "Signed amount to add; negative decrements." },
+        "prev_revision": { "type": "integer", "minimum": 0, "description": "When set, the add applies only if the counter's current mod_revision matches (compare-and-set)." }
+      }
+    },
+    "CounterSetRequest": {
+      "type": "object",
+      "title": "CounterSetRequest",
+      "description": "Body of POST /v1/counters/set. Writes an absolute value, such as resetting to 0.",
+      "additionalProperties": false,
+      "required": ["key", "value"],
+      "properties": {
+        "key": { "type": "string", "description": "Slash-safe counter key." },
+        "value": { "type": "integer", "description": "Absolute value to store." },
+        "prev_revision": { "type": "integer", "minimum": 0, "description": "When set, the set applies only if the current mod_revision matches (compare-and-set)." }
+      }
+    },
+    "CounterEntry": {
+      "type": "object",
+      "title": "CounterEntry",
+      "description": "The current state of a counter, returned by GET /v1/counters. An absent counter reads as not found and should be treated as 0.",
+      "additionalProperties": false,
+      "required": ["value", "mod_revision"],
+      "properties": {
+        "value": { "type": "integer", "description": "Current signed value." },
+        "mod_revision": { "type": "integer", "minimum": 0, "description": "Monotonic revision stamped on the last mutation; pass it as prev_revision to compare-and-set." }
+      }
+    }
+  }
+}

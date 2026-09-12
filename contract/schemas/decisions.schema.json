@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/decisions.schema.json",
+  "title": "FiduciaDecisions",
+  "description": "Decision payloads: typed, weighted, evidence-bearing votes with deterministic resolution (plurality, weight threshold, or unanimity), abstention, and veto.",
+  "type": "object",
+  "$defs": {
+    "DecisionPolicy": {
+      "type": "object",
+      "title": "DecisionPolicy",
+      "description": "How a decision resolves. kind selects the rule; min_votes is used by plurality/unanimous, required_weight by threshold.",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["plurality", "threshold", "unanimous"],
+          "description": "The resolution rule."
+        },
+        "min_votes": { "type": "integer", "minimum": 0, "description": "Votes needed before plurality/unanimity resolves." },
+        "required_weight": { "type": "integer", "minimum": 1, "description": "Summed weight an option needs to win under threshold." }
+      }
+    },
+    "DecisionTally": {
+      "type": "object",
+      "title": "DecisionTally",
+      "description": "Summed weight for one option.",
+      "additionalProperties": false,
+      "required": ["option", "weight"],
+      "properties": {
+        "option": { "type": "string", "description": "Option name." },
+        "weight": { "type": "integer", "minimum": 0, "description": "Summed voter weight for this option." }
+      }
+    },
+    "DecisionVote": {
+      "type": "object",
+      "title": "DecisionVote",
+      "description": "One voter's vote.",
+      "additionalProperties": false,
+      "required": ["voter", "confidence", "weight", "veto", "evidence"],
+      "properties": {
+        "voter": { "type": "string", "description": "Voting agent id." },
+        "option": { "type": "string", "description": "Chosen option, or omitted to abstain." },
+        "confidence": { "type": "number", "description": "Voter confidence in [0,1]." },
+        "weight": { "type": "integer", "minimum": 0, "description": "Voter weight (specialists count more)." },
+        "veto": { "type": "boolean", "description": "Whether this vote vetoes (aborts the decision)." },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence references backing the vote.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "DecisionProposeRequest": {
+      "type": "object",
+      "title": "DecisionProposeRequest",
+      "description": "Body of POST /v1/decisions/propose. Idempotent: a repeat propose returns the existing decision.",
+      "additionalProperties": false,
+      "required": ["name", "question", "options", "policy"],
+      "properties": {
+        "name": { "type": "string", "description": "Decision id." },
+        "question": { "type": "string", "description": "The question being decided." },
+        "options": {
+          "type": "array",
+          "description": "The allowed typed options.",
+          "items": { "type": "string" }
+        },
+        "policy": { "$ref": "#/$defs/DecisionPolicy" },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Resolution deadline in ms since epoch." }
+      }
+    },
+    "DecisionVoteRequest": {
+      "type": "object",
+      "title": "DecisionVoteRequest",
+      "description": "Body of POST /v1/decisions/vote. Re-voting replaces the voter's prior vote.",
+      "additionalProperties": false,
+      "required": ["name", "voter"],
+      "properties": {
+        "name": { "type": "string", "description": "Decision id." },
+        "voter": { "type": "string", "description": "Voting agent id." },
+        "option": { "type": "string", "description": "Chosen option, or omitted to abstain." },
+        "confidence": { "type": "number", "description": "Confidence in [0,1]." },
+        "weight": { "type": "integer", "minimum": 0, "description": "Voter weight. Defaults to 1." },
+        "veto": { "type": "boolean", "description": "Whether to veto." },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence references.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "DecisionState": {
+      "type": "object",
+      "title": "DecisionState",
+      "description": "Current decision state returned by GET /v1/decisions, with the outcome derived at read time.",
+      "additionalProperties": false,
+      "required": ["name", "question", "options", "policy", "status", "tallies", "votes", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Decision id." },
+        "question": { "type": "string", "description": "The question." },
+        "options": {
+          "type": "array",
+          "description": "Allowed options.",
+          "items": { "type": "string" }
+        },
+        "policy": { "$ref": "#/$defs/DecisionPolicy" },
+        "status": {
+          "type": "string",
+          "enum": ["open", "resolved", "vetoed", "timed_out"],
+          "description": "Whether the decision is still open or how it resolved."
+        },
+        "winner": { "type": "string", "description": "Winning option when resolved." },
+        "tallies": {
+          "type": "array",
+          "description": "Per-option weight tallies.",
+          "items": { "$ref": "#/$defs/DecisionTally" }
+        },
+        "votes": {
+          "type": "array",
+          "description": "Every cast vote.",
+          "items": { "$ref": "#/$defs/DecisionVote" }
+        },
+        "deadline_ms": { "type": "integer", "minimum": 0, "description": "Resolution deadline." },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version." }
+      }
+    }
+  }
+}
