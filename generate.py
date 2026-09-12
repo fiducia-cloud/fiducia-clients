@@ -274,7 +274,7 @@ def gen_go():
 # API via wasm-bindgen. Every op is an async method; wasm-bindgen exports the
 # snake_case names to JS as camelCase. Kept separate from clients/rust so that
 # native client stays a plain blocking crate.
-RUST_WASM_PRE = BANNER_C + '''
+RUST_WASM_PRE = BANNER_C + r'''
 //! Fiducia client (Rust -> WebAssembly) — generated. Transport is the global
 //! `fetch` (browser main thread, Web Workers, and Node 18+/Deno).
 //!

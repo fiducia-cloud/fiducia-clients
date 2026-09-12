@@ -21,22 +21,19 @@ REPOSITORY_URL = "https://github.com/fiducia-cloud/fiducia-clients"
 INTERFACES_DEPENDENCY = "fiducia-cloud/fiducia-interfaces"
 
 REQUIRED_TARGETS: dict[str, tuple[str, str | None]] = {
-    "gleam": ("clients/gleam", None),
-    "erlang": ("clients/erlang", None),
-    "elixir": ("clients/elixir", None),
-    "dart": ("clients/dart", "dart"),
-    "rust": ("clients/rust", "rust"),
+    "gleam": ("clients/gleam", "none"),
+    "erlang": ("clients/erlang", "none"),
+    "elixir": ("clients/elixir", "none"),
+    "dart": ("clients/dart", "none"),
+    "rust": ("clients/rust", "none"),
     "java": ("clients/java", "java"),
-    "golang": ("clients/go", "go"),
-    "python": ("clients/python", "python"),
-    "ruby": ("clients/ruby", None),
-    "php": ("clients/php", None),
+    "golang": ("clients/go", "none"),
+    "python": ("clients/python", "none"),
+    "ruby": ("clients/ruby", "none"),
+    "php": ("clients/php", "none"),
     "nodejs": ("clients/ts", "node"),
-    "deno": ("clients/ts", "none"),
-    "bun": ("clients/ts", "node"),
-    "edge": ("clients/ts", "none"),
     "kotlin": ("clients/kotlin", "java"),
-    "swift": ("clients/swift", None),
+    "swift": ("clients/swift", "none"),
 }
 
 NATIVE_MANIFESTS: dict[str, tuple[str, ...]] = {
@@ -51,9 +48,6 @@ NATIVE_MANIFESTS: dict[str, tuple[str, ...]] = {
     "ruby": ("fiducia-client.gemspec",),
     "php": ("composer.json",),
     "nodejs": ("package.json",),
-    "deno": ("deno.json",),
-    "bun": ("package.json",),
-    "edge": ("package.json",),
     "kotlin": ("build.gradle.kts",),
     "swift": ("Package.swift",),
 }
@@ -145,16 +139,13 @@ def validate_zed(errors: list[str]) -> None:
                     f"{name}: missing native manifest {directory}/{manifest}"
                 )
 
-    runtime_dirs = {
-        targets[name].get("dir")
-        for name in ("nodejs", "deno", "bun", "edge")
-        if isinstance(targets.get(name), dict)
-    }
-    if runtime_dirs != {"clients/ts"}:
-        errors.append(
-            "Node.js, Deno, Bun, and edge targets must share the "
-            "self-contained clients/ts source root"
-        )
+    for runtime_only in ("deno", "bun", "edge"):
+        if runtime_only in targets:
+            errors.append(
+                f"[targets.{runtime_only}] must not be published: "
+                "Zed does not define runtime-only language keys, so the "
+                "derived package would be universal and bypass ecosystem guards"
+            )
 
 
 def validate_typescript_runtime(errors: list[str]) -> None:
@@ -211,8 +202,8 @@ def main() -> int:
 
     print(
         "required-client-matrix: OK "
-        f"({len(REQUIRED_TARGETS)} required targets; "
-        "Node.js/Deno/Bun/edge share clients/ts)"
+        f"({len(REQUIRED_TARGETS)} canonical Zed targets; "
+        "clients/ts validated for Node.js, Deno, Bun, and browser/edge)"
     )
     return 0
 

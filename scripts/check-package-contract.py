@@ -105,10 +105,16 @@ def main() -> int:
         if not has_source(base, suffixes):
             errors.append(f"{target}: no implementation source with suffixes {suffixes!r}")
 
-    for runtime_target in ("nodejs", "deno", "bun", "edge"):
-        record = targets.get(runtime_target)
-        if not isinstance(record, dict) or record.get("dir") != "clients/ts":
-            errors.append(f"TypeScript runtime target {runtime_target!r} is missing or points outside clients/ts")
+    # Zed publishes the Fetch implementation once under the canonical nodejs
+    # language key. Deno, Bun, and edge are runtime modes verified below, not
+    # standalone Zed language targets; current zed-pkg would classify unknown
+    # target names as universal packages and bypass ecosystem validation.
+    for runtime_target in ("deno", "bun", "edge"):
+        if runtime_target in targets:
+            errors.append(
+                f"TypeScript runtime {runtime_target!r} must be validated through clients/ts, "
+                "not declared as a standalone Zed target"
+            )
 
     matrix_path = ROOT / "clients/ts/runtime-matrix.json"
     if not matrix_path.is_file():
