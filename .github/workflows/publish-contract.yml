@@ -1,0 +1,57 @@
+name: publish-contract
+
+on:
+  pull_request:
+    paths:
+      - "scripts/publish-common.sh"
+      - "clients/dart/publish.sh"
+      - "clients/dart/prepublish.sh"
+      - "tests/test_publish_contract.sh"
+      - ".github/workflows/publish-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/publish-common.sh"
+      - "clients/dart/publish.sh"
+      - "clients/dart/prepublish.sh"
+      - "tests/test_publish_contract.sh"
+      - ".github/workflows/publish-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact revision and shell syntax
+        shell: sh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          sh -n scripts/publish-common.sh
+          sh -n clients/dart/publish.sh
+          sh -n clients/dart/prepublish.sh
+          sh -n tests/test_publish_contract.sh
+
+      - name: Exercise publish plumbing and mode contract
+        shell: sh
+        run: |
+          set -eu
+          sh tests/test_publish_contract.sh
+          git diff --check
