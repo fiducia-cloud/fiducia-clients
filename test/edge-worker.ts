@@ -1,4 +1,7 @@
-import * as sdk from "../src/index";
+// Import the real published TypeScript source entrypoint. The repository has no
+// root src/index module; clients/ts/fiducia.ts is also what Node, Deno, and Bun
+// exercise in runtime-import-smoke.mjs.
+import * as sdk from "../clients/ts/fiducia.ts";
 
 export default {
   async fetch(): Promise<Response> {
