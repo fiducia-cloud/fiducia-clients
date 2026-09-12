@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/effects.schema.json",
+  "title": "FiduciaEffects",
+  "description": "Approval-escrow effect payloads: separate preparing a dangerous side effect from authorizing and committing it, so a risky action is performed at most once and only after approval.",
+  "type": "object",
+  "$defs": {
+    "EffectPrepareRequest": {
+      "type": "object",
+      "title": "EffectPrepareRequest",
+      "description": "Body of POST /v1/effects/prepare. Idempotent: a repeat prepare returns the existing effect. required_approvals of 0 is pre-approved.",
+      "additionalProperties": false,
+      "required": ["name", "effect_type", "idempotency_key"],
+      "properties": {
+        "name": { "type": "string", "description": "Effect id, such as invoice-882/payment." },
+        "effect_type": { "type": "string", "description": "Kind of side effect, such as send_payment or deploy." },
+        "payload": { "type": "object", "description": "Effect parameters." },
+        "risk": { "type": "string", "description": "Risk label, such as low/medium/high/critical. Defaults to medium." },
+        "idempotency_key": { "type": "string", "description": "Binds the effect to the external operation so the executor stays effectively-once." },
+        "required_approvals": { "type": "integer", "minimum": 0, "description": "Distinct principals required before commit. Defaults to 0." }
+      }
+    },
+    "EffectApproveRequest": {
+      "type": "object",
+      "title": "EffectApproveRequest",
+      "description": "Body of POST /v1/effects/approve. Duplicate approvals by the same principal count once.",
+      "additionalProperties": false,
+      "required": ["name", "principal"],
+      "properties": {
+        "name": { "type": "string", "description": "Effect id." },
+        "principal": { "type": "string", "description": "Approving principal id." }
+      }
+    },
+    "EffectCommitRequest": {
+      "type": "object",
+      "title": "EffectCommitRequest",
+      "description": "Body of POST /v1/effects/commit. Commits an approved effect exactly once; a repeat commit replays the recorded result.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Effect id." },
+        "result": { "type": "object", "description": "Durable result to record for replay." }
+      }
+    },
+    "EffectState": {
+      "type": "object",
+      "title": "EffectState",
+      "description": "Current effect state returned by GET /v1/effects.",
+      "additionalProperties": false,
+      "required": ["name", "effect_type", "risk", "idempotency_key", "status", "required_approvals", "approvals", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Effect id." },
+        "effect_type": { "type": "string", "description": "Kind of side effect." },
+        "payload": { "type": "object", "description": "Effect parameters." },
+        "risk": { "type": "string", "description": "Risk label." },
+        "idempotency_key": { "type": "string", "description": "External-operation binding." },
+        "status": {
+          "type": "string",
+          "enum": ["prepared", "approved", "committed", "aborted"],
+          "description": "Lifecycle state."
+        },
+        "required_approvals": { "type": "integer", "minimum": 0, "description": "Approvals required before commit." },
+        "approvals": {
+          "type": "array",
+          "description": "Distinct principals that have approved.",
+          "items": { "type": "string" }
+        },
+        "result": { "type": "object", "description": "Result recorded on commit." },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version." }
+      }
+    }
+  }
+}

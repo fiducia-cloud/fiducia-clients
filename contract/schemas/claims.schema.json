@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/claims.schema.json",
+  "title": "FiduciaClaims",
+  "description": "Claim ledger payloads: versioned, contestable assertions (subject/predicate/value) with confidence and evidence. Semantic similarity may surface a claim, but only an authorized resolution makes it authoritative.",
+  "type": "object",
+  "$defs": {
+    "ClaimContest": {
+      "type": "object",
+      "title": "ClaimContest",
+      "description": "One agent's contest of a claim.",
+      "additionalProperties": false,
+      "required": ["agent", "reason"],
+      "properties": {
+        "agent": { "type": "string", "description": "Contesting agent id." },
+        "reason": { "type": "string", "description": "Why the claim is contested." }
+      }
+    },
+    "ClaimAssertRequest": {
+      "type": "object",
+      "title": "ClaimAssertRequest",
+      "description": "Body of POST /v1/claims/assert. Re-asserting bumps the version and resets support/contests.",
+      "additionalProperties": false,
+      "required": ["name", "subject", "predicate", "author"],
+      "properties": {
+        "name": { "type": "string", "description": "Claim id." },
+        "subject": { "type": "string", "description": "The entity the claim is about, such as customer:219." },
+        "predicate": { "type": "string", "description": "The asserted relation, such as eligible_for_refund." },
+        "value": { "description": "The asserted value (any JSON)." },
+        "confidence": { "type": "number", "description": "Author confidence in [0,1]." },
+        "author": { "type": "string", "description": "Asserting agent id." },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence references.",
+          "items": { "type": "string" }
+        },
+        "valid_until_ms": { "type": "integer", "minimum": 0, "description": "Expiry of the claim's validity." }
+      }
+    },
+    "ClaimContestRequest": {
+      "type": "object",
+      "title": "ClaimContestRequest",
+      "description": "Body of POST /v1/claims/contest.",
+      "additionalProperties": false,
+      "required": ["name", "agent"],
+      "properties": {
+        "name": { "type": "string", "description": "Claim id." },
+        "agent": { "type": "string", "description": "Contesting agent." },
+        "reason": { "type": "string", "description": "Contest reason." }
+      }
+    },
+    "ClaimResolveRequest": {
+      "type": "object",
+      "title": "ClaimResolveRequest",
+      "description": "Body of POST /v1/claims/resolve. An authorized process accepts or rejects the claim (terminal).",
+      "additionalProperties": false,
+      "required": ["name", "accepted"],
+      "properties": {
+        "name": { "type": "string", "description": "Claim id." },
+        "accepted": { "type": "boolean", "description": "Whether the claim is accepted (true) or rejected (false)." }
+      }
+    },
+    "ClaimState": {
+      "type": "object",
+      "title": "ClaimState",
+      "description": "Current claim state returned by GET /v1/claims.",
+      "additionalProperties": false,
+      "required": ["name", "subject", "predicate", "confidence", "author", "status", "supporters", "contests", "evidence", "version", "generation"],
+      "properties": {
+        "name": { "type": "string", "description": "Claim id." },
+        "subject": { "type": "string", "description": "Claim subject." },
+        "predicate": { "type": "string", "description": "Claim predicate." },
+        "value": { "description": "The asserted value (any JSON)." },
+        "confidence": { "type": "number", "description": "Author confidence." },
+        "author": { "type": "string", "description": "Asserting agent." },
+        "status": {
+          "type": "string",
+          "enum": ["asserted", "contested", "accepted", "rejected", "superseded"],
+          "description": "Lifecycle state; only an authorized resolution reaches accepted/rejected."
+        },
+        "supporters": {
+          "type": "array",
+          "description": "Agents that support the claim.",
+          "items": { "type": "string" }
+        },
+        "contests": {
+          "type": "array",
+          "description": "Contests against the claim.",
+          "items": { "$ref": "#/$defs/ClaimContest" }
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence references.",
+          "items": { "type": "string" }
+        },
+        "valid_until_ms": { "type": "integer", "minimum": 0, "description": "Validity expiry." },
+        "superseded_by": { "type": "string", "description": "Successor claim id when superseded." },
+        "version": { "type": "integer", "minimum": 0, "description": "Bumped each time the asserted value changes." },
+        "generation": { "type": "integer", "minimum": 0, "description": "Monotonic state version." }
+      }
+    }
+  }
+}

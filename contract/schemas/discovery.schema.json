@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/discovery.schema.json",
+  "title": "FiduciaDiscovery",
+  "description": "Service discovery payloads.",
+  "type": "object",
+  "$defs": {
+    "ServiceRegisterRequest": {
+      "type": "object",
+      "title": "ServiceRegisterRequest",
+      "description": "Body of PUT /v1/services/{service}/instances/{id}.",
+      "additionalProperties": false,
+      "required": ["address", "ttl_ms"],
+      "properties": {
+        "address": { "type": "string", "description": "Reachable address of this instance." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Lease TTL; renew via heartbeat before it expires." },
+        "metadata": {
+          "type": "object",
+          "description": "Optional instance metadata such as region, cloud provider, version, or role.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ServiceHeartbeatRequest": {
+      "type": "object",
+      "title": "ServiceHeartbeatRequest",
+      "description": "Body of POST /v1/services/{service}/instances/{id}/heartbeat.",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Optional new lease TTL; when omitted a default is applied." }
+      }
+    },
+    "ServiceInstance": {
+      "type": "object",
+      "title": "ServiceInstance",
+      "description": "A live registered instance.",
+      "additionalProperties": false,
+      "required": ["instance_id", "address", "lease_expires_ms", "metadata"],
+      "properties": {
+        "instance_id": { "type": "string", "description": "Instance id." },
+        "address": { "type": "string", "description": "Reachable address." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "When the lease expires (ms since epoch)." },
+        "metadata": {
+          "type": "object",
+          "description": "Instance metadata from registration.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ServiceListResponse": {
+      "type": "object",
+      "title": "ServiceListResponse",
+      "description": "Response of GET /v1/services/{service} — the live instances of one service.",
+      "additionalProperties": false,
+      "required": ["service", "instances"],
+      "properties": {
+        "service": { "type": "string", "description": "Service name." },
+        "instances": { "type": "array", "items": { "$ref": "#/$defs/ServiceInstance" }, "description": "Live instances." }
+      }
+    },
+    "ServiceSummary": {
+      "type": "object",
+      "title": "ServiceSummary",
+      "description": "One service in a discovery listing.",
+      "additionalProperties": false,
+      "required": ["service", "instances"],
+      "properties": {
+        "service": { "type": "string", "description": "Service name." },
+        "instances": { "type": "integer", "minimum": 0, "description": "Number of live instances." }
+      }
+    },
+    "ServicesListResponse": {
+      "type": "object",
+      "title": "ServicesListResponse",
+      "description": "Response of GET /v1/services — every service with live instances, merged across shards.",
+      "additionalProperties": false,
+      "required": ["count", "services"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0, "description": "Number of services listed." },
+        "services": { "type": "array", "items": { "$ref": "#/$defs/ServiceSummary" }, "description": "Services with live instances." }
+      }
+    }
+  }
+}

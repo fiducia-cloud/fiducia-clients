@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/kv.schema.json",
+  "title": "FiduciaKv",
+  "description": "Config KV payloads.",
+  "type": "object",
+  "$defs": {
+    "KvEntry": {
+      "type": "object",
+      "title": "KvEntry",
+      "description": "A versioned KV value.",
+      "additionalProperties": false,
+      "required": ["value", "mod_revision"],
+      "properties": {
+        "value": { "type": "string", "description": "The stored value." },
+        "mod_revision": { "type": "integer", "minimum": 0, "description": "Revision at which the key was last written." },
+        "expires_at_ms": { "type": "integer", "minimum": 0, "description": "Absolute expiry (ms since epoch) if a TTL was set." }
+      }
+    },
+    "KvProtection": {
+      "type": "object",
+      "title": "KvProtection",
+      "description": "How the returned value is protected in Fiducia's replicated storage.",
+      "additionalProperties": false,
+      "required": ["at_rest"],
+      "properties": {
+        "at_rest": { "type": "string", "enum": ["encrypted", "plaintext"], "description": "Whether Fiducia stores this value as ciphertext or plaintext." },
+        "provider": { "type": "string", "enum": ["local_keyring", "local_keyring_legacy", "vault_transit"], "description": "Protection backend for an encrypted value." },
+        "key_id": { "type": "string", "description": "Non-secret key identifier used to encrypt the value." },
+        "key_version": { "type": "integer", "minimum": 1, "description": "External-provider key version, when available." }
+      }
+    },
+    "KvPutRequest": {
+      "type": "object",
+      "title": "KvPutRequest",
+      "description": "Body of PUT /v1/kv/{key}.",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "string", "description": "Value to store." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Optional TTL in milliseconds." },
+        "prev_revision": { "type": "integer", "minimum": 0, "description": "Optional compare-and-swap guard; 0 means must-not-exist." },
+        "plaintext": { "type": "boolean", "description": "Explicitly opt this value out of configured at-rest encryption. Omit or false for encrypted-by-default storage." }
+      }
+    },
+    "KvGetResponse": {
+      "type": "object",
+      "title": "KvGetResponse",
+      "description": "Response of GET /v1/kv/{key}.",
+      "additionalProperties": false,
+      "required": ["key", "found"],
+      "properties": {
+        "key": { "type": "string", "description": "The requested key." },
+        "found": { "type": "boolean", "description": "Whether the key exists." },
+        "entry": { "$ref": "#/$defs/KvEntry", "description": "The value when found." },
+        "protection": { "$ref": "#/$defs/KvProtection", "description": "Storage protection metadata when found." }
+      }
+    },
+    "KvListItem": {
+      "type": "object",
+      "title": "KvListItem",
+      "description": "One row of a prefix listing: a key with its entry fields flattened in.",
+      "additionalProperties": false,
+      "required": ["key", "value", "mod_revision"],
+      "properties": {
+        "key": { "type": "string", "description": "The key." },
+        "value": { "type": "string", "description": "The stored value." },
+        "mod_revision": { "type": "integer", "minimum": 0, "description": "Revision at which the key was last written." },
+        "expires_at_ms": { "type": "integer", "minimum": 0, "description": "Absolute expiry (ms since epoch) if a TTL was set." },
+        "protection": { "$ref": "#/$defs/KvProtection", "description": "Storage protection metadata." }
+      }
+    },
+    "KvListResponse": {
+      "type": "object",
+      "title": "KvListResponse",
+      "description": "Response of GET /v1/kv?prefix=... — live keys under a prefix, merged across shards and sorted by key.",
+      "additionalProperties": false,
+      "required": ["prefix", "count", "keys"],
+      "properties": {
+        "prefix": { "type": "string", "description": "The requested prefix (empty lists the whole keyspace)." },
+        "count": { "type": "integer", "minimum": 0, "description": "Number of keys returned." },
+        "keys": { "type": "array", "items": { "$ref": "#/$defs/KvListItem" }, "description": "Matching live entries." }
+      }
+    }
+  }
+}

@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.internal/surface-contract/v1/surface.schema.json",
+  "title": "Polyglot SDK Exported-Surface Contract",
+  "description": "Meta-schema for surface.contract.json: the machine-readable declaration of the exported public interface that EVERY language client under clients/<lang>/ must expose. This schema validates the contract document itself; the contract document in turn is what the conformance checker enforces against each language's real source.",
+  "type": "object",
+  "required": ["contractVersion", "product", "conventions", "operations", "languages"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string" },
+
+    "contractVersion": {
+      "description": "SemVer of this contract document. Removing or renaming an operation is a MAJOR bump; adding one is MINOR.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+
+    "product": {
+      "description": "Short product slug, e.g. \"fiducia\". Used for default type-name derivation.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+
+    "provenance": {
+      "description": "Where this contract was derived from, so drift against the upstream source is detectable.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "description": "Relative path or repo-qualified path of the upstream source of truth." },
+        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "canonicalRepo": { "type": "string", "description": "The *-interfaces repo that owns the canonical copy, if any." },
+        "sourceKind": { "enum": ["operations-manifest", "openapi", "api-surface", "reference-client"] },
+        "enrichedFromClients": {
+          "description": "How many operations were added because a supermajority of clients already exported them. Consensus, not aspiration: adding these cannot break a client that already has them, and it stops the last client from quietly omitting what the rest provide.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "generatedBy": { "type": "string" },
+        "generatedAt": { "type": "string" }
+      }
+    },
+
+    "conventions": {
+      "description": "How declared operation names map onto each language's idiomatic surface.",
+      "type": "object",
+      "required": ["clientType", "naming"],
+      "additionalProperties": false,
+      "properties": {
+        "clientType": {
+          "description": "Canonical name of the primary exported client type, in PascalCase. Per-language spelling is derived unless overridden in languages.<lang>.clientType.",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "errorTypes": {
+          "description": "Canonical names of error/exception types every client must export.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "naming": {
+          "type": "object",
+          "required": ["default"],
+          "additionalProperties": false,
+          "properties": {
+            "default": { "$ref": "#/$defs/namingStyle" },
+            "byLanguage": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/namingStyle" }
+            }
+          }
+        }
+      }
+    },
+
+    "interfaceSchemas": {
+      "description": "Payload JSON Schemas vendored from the paired *-interfaces repo into contract/schemas/. This is the layer JSON Schema is actually built for: request and response bodies. Each entry records where the file came from and its sha256, so the vendored copy and the upstream cannot drift apart unnoticed.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "vendoredPath", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "vendoredPath": { "type": "string" },
+          "upstreamRepo": { "type": "string" },
+          "upstreamPath": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      },
+      "default": []
+    },
+
+    "types": {
+      "description": "Named payload/value types shared by operations. Each value is an ordinary JSON Schema subschema, so request and response bodies are validated with real JSON Schema (this is the layer JSON Schema was designed for).",
+      "type": "object",
+      "additionalProperties": { "type": "object" },
+      "default": {}
+    },
+
+    "operations": {
+      "description": "The exported surface. One entry per operation every client must expose.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/operation" }
+    },
+
+    "languages": {
+      "description": "One entry per clients/<dir>. The key is the directory name under clients/.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/language" }
+    },
+
+    "waivers": {
+      "description": "Explicit, reviewed exemptions. A waiver is the ONLY way an operation may be absent from a language; it must name a reason and an expiry so exemptions cannot rot silently.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/waiver" },
+      "default": []
+    }
+  },
+
+  "$defs": {
+    "namingStyle": {
+      "enum": ["snake_case", "camelCase", "PascalCase", "kebab-case", "SCREAMING_SNAKE_CASE", "lowercase"]
+    },
+
+    "paramLocation": {
+      "enum": ["path", "query", "body", "header", "option"]
+    },
+
+    "scalarType": {
+      "description": "Transport-level type of a parameter. Deliberately small and language-neutral; richer shapes belong in types/ as JSON Schema.",
+      "anyOf": [
+        { "enum": ["string", "int", "float", "bool", "object", "any", "string[]", "int[]", "object[]"] },
+        { "type": "string", "pattern": "^#/types/[A-Za-z_][A-Za-z0-9_]*(\\[\\])?$" }
+      ]
+    },
+
+    "param": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" },
+        "in": { "$ref": "#/$defs/paramLocation", "default": "body" },
+        "type": { "$ref": "#/$defs/scalarType" },
+        "required": { "type": "boolean", "default": true },
+        "default": {},
+        "doc": { "type": "string" }
+      }
+    },
+
+    "operation": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Canonical operation name in snake_case. This is the identity of the operation across all languages.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "group": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+        "doc": { "type": "string" },
+        "stability": {
+          "enum": ["stable", "beta", "experimental", "deprecated"],
+          "default": "stable"
+        },
+        "since": { "type": "string" },
+        "deprecatedSince": { "type": "string" },
+        "http": {
+          "type": "object",
+          "required": ["method", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] },
+            "path": { "type": "string", "pattern": "^/" }
+          }
+        },
+        "params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/param" },
+          "default": []
+        },
+        "returns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "$ref": "#/$defs/scalarType" },
+            "doc": { "type": "string" },
+            "streaming": { "type": "boolean", "default": false }
+          }
+        },
+        "throws": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "default": []
+        },
+        "aliases": {
+          "description": "Extra accepted spellings per language, keyed by clients/<dir> name. Use when a language's idiomatic name cannot be derived from the naming style (e.g. Go's TryLock for try_lock is derivable, but Rust's lock_acquire_with_options is not).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "optionalIn": {
+          "description": "Languages where this operation is not required. Prefer a waiver with a reason over this field; optionalIn exists for genuinely inapplicable operations (e.g. a filesystem op in a wasm client).",
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+
+    "language": {
+      "type": "object",
+      "required": ["tier"],
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "description": "gate = contract violations fail CI and block publish. warn = reported, non-blocking. off = skipped entirely.",
+          "enum": ["gate", "warn", "off"]
+        },
+        "displayName": { "type": "string" },
+        "naming": { "$ref": "#/$defs/namingStyle" },
+        "clientType": { "type": "string" },
+        "symbolPrefix": {
+          "description": "Namespace prefix this language puts on every exported symbol, e.g. \"fiducia_\" for C and shell clients that have no module system. Declared names are matched with and without it.",
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "sources": {
+          "description": "Globs, relative to clients/<dir>, of the files that define the exported surface. Defaults to every source file of the detected language, excluding tests and vendored trees.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "minCoverage": {
+          "description": "Ratchet. The percentage of declared operations this client exported when the contract was adopted. Dropping below it is an error even at tier=warn, so a partial client can stay partial but can never quietly get worse. Raise it as the client fills in; never lower it without a note in the PR.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "enforceArity": {
+          "description": "Also require the declared required-parameter count to be satisfiable by the real signature. OFF by default and deliberately so: idiomatic clients collapse optional parameters into an options struct or object (Go's LockAcquireMany(o AcquireManyOpts) takes one argument for a two-parameter operation), so a strict arity rule reports drift where there is none. Turn it on only for a client whose signatures really are positional.",
+          "type": "boolean",
+          "default": false
+        },
+        "forbidExtraPublic": {
+          "description": "Treat undeclared public operation-shaped exports as violations. Off by default: most clients legitimately expose ergonomic helpers.",
+          "type": "boolean",
+          "default": false
+        },
+        "prepublish": {
+          "description": "How the pre-publish guard is wired for this language.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "script": { "type": "string" },
+            "hook": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "waiver": {
+      "type": "object",
+      "required": ["language", "operation", "reason", "expires"],
+      "additionalProperties": false,
+      "properties": {
+        "language": { "type": "string" },
+        "operation": {
+          "description": "Canonical operation name, or \"*\" for the whole language.",
+          "type": "string"
+        },
+        "reason": { "type": "string", "minLength": 12 },
+        "expires": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "owner": { "type": "string" }
+      }
+    }
+  }
+}

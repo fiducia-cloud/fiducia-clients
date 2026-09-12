@@ -1,0 +1,72 @@
+name: surface-contract
+
+# The exported interface of every client under clients/ is declared in
+# contract/surface.contract.json and enforced here. See contract/README.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: surface-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: contract document
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.langs.outputs.languages }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate the contract with the bundled validator
+        run: python3 contract/bin/check_surface.py --schema-only
+      - name: Validate again with the reference jsonschema implementation
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 contract/bin/check_surface.py --schema-only
+      - id: langs
+        name: Enumerate enforced clients
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          c = json.load(open("contract/surface.contract.json"))
+          langs = sorted(k for k, v in c["languages"].items() if v["tier"] != "off")
+          print("languages=" + json.dumps(langs))
+          PY
+
+  clients:
+    name: clients/${{ matrix.language }}
+    needs: contract
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.contract.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check exported surface
+        run: python3 contract/bin/check_surface.py --lang "${{ matrix.language }}" --format github
+
+  summary:
+    name: full sweep
+    needs: contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Every client, one report
+        run: python3 contract/bin/check_surface.py

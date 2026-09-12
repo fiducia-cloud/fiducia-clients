@@ -1,6 +1,10 @@
 #!/usr/bin/env sh
 # Package/build/validate/release entrypoint for the Go Fiducia client (see clients/PUBLISHING.md).
 set -eu
+
+# Surface-contract gate: refuse to publish a client whose exported
+# interface has drifted from contract/surface.contract.json.
+"$(cd "$(dirname "$0")/../.." && pwd)/contract/bin/prepublish-guard.sh" "$(basename "$(cd "$(dirname "$0")" && pwd)")"
 DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT="$(CDPATH= cd -- "$DIR/../.." && pwd)"
 . "$ROOT/scripts/publish-common.sh"

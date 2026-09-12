@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/schedules.schema.json",
+  "title": "FiduciaSchedules",
+  "description": "Cron and one-shot scheduling payloads.",
+  "type": "object",
+  "$defs": {
+    "ScheduleTarget": {
+      "type": "object",
+      "title": "ScheduleTarget",
+      "description": "Where a schedule fires: webhook, queue, or gRPC.",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["webhook", "queue", "grpc"],
+          "description": "Target transport."
+        },
+        "url": { "type": "string", "description": "Webhook URL when kind=webhook." },
+        "name": { "type": "string", "description": "Queue name when kind=queue." },
+        "endpoint": { "type": "string", "description": "gRPC endpoint when kind=grpc." }
+      }
+    },
+    "ScheduleUpsertRequest": {
+      "type": "object",
+      "title": "ScheduleUpsertRequest",
+      "description": "Body of PUT /v1/cron/schedules/{name}. Exactly one of cron or one_shot_at_ms must be set.",
+      "additionalProperties": false,
+      "required": ["target"],
+      "properties": {
+        "cron": { "type": "string", "description": "Standard five-field cron expression." },
+        "one_shot_at_ms": { "type": "integer", "minimum": 0, "description": "One-shot fire time in ms since epoch." },
+        "target": { "$ref": "#/$defs/ScheduleTarget", "description": "Delivery target." },
+        "delivery": {
+          "type": "string",
+          "enum": ["at_least_once", "exactly_once"],
+          "description": "Delivery semantics. Defaults to at_least_once."
+        },
+        "max_retries": { "type": "integer", "minimum": 0, "description": "Maximum delivery retries. Defaults to 3." }
+      }
+    },
+    "Schedule": {
+      "type": "object",
+      "title": "Schedule",
+      "description": "A replicated schedule definition.",
+      "additionalProperties": false,
+      "required": ["name", "target", "delivery", "max_retries", "enabled"],
+      "properties": {
+        "name": { "type": "string", "description": "Schedule name." },
+        "cron": { "type": "string", "description": "Cron expression for recurring schedules." },
+        "one_shot_at_ms": { "type": "integer", "minimum": 0, "description": "One-shot fire time in ms since epoch." },
+        "target": { "$ref": "#/$defs/ScheduleTarget", "description": "Delivery target." },
+        "delivery": {
+          "type": "string",
+          "enum": ["at_least_once", "exactly_once"],
+          "description": "Delivery semantics."
+        },
+        "max_retries": { "type": "integer", "minimum": 0, "description": "Maximum delivery retries." },
+        "enabled": { "type": "boolean", "description": "Whether this schedule can fire." }
+      }
+    },
+    "ScheduleRun": {
+      "type": "object",
+      "title": "ScheduleRun",
+      "description": "Durable record of one schedule fire attempt.",
+      "additionalProperties": false,
+      "required": ["fire_id", "fired_at_ms", "attempts", "duplicate", "target"],
+      "properties": {
+        "fire_id": { "type": "string", "description": "Idempotency id for the scheduled fire." },
+        "fired_at_ms": { "type": "integer", "minimum": 0, "description": "Fire time in ms since epoch." },
+        "attempts": { "type": "integer", "minimum": 0, "description": "Delivery attempts made." },
+        "duplicate": { "type": "boolean", "description": "Whether this fire was deduped by exactly-once semantics." },
+        "target": { "$ref": "#/$defs/ScheduleTarget", "description": "Target used for this fire." }
+      }
+    },
+    "ScheduleRecordRunRequest": {
+      "type": "object",
+      "title": "ScheduleRecordRunRequest",
+      "description": "Body of POST /v1/cron/schedules/{name}/runs.",
+      "additionalProperties": false,
+      "required": ["fire_id"],
+      "properties": {
+        "fire_id": { "type": "string", "description": "Idempotency id for this fire." },
+        "fired_at_ms": { "type": "integer", "minimum": 0, "description": "Override fire time in ms since epoch." }
+      }
+    },
+    "ScheduleGetResponse": {
+      "type": "object",
+      "title": "ScheduleGetResponse",
+      "description": "Response of GET /v1/cron/schedules/{name}.",
+      "additionalProperties": false,
+      "required": ["name", "found"],
+      "properties": {
+        "name": { "type": "string", "description": "Schedule name." },
+        "found": { "type": "boolean", "description": "Whether this schedule exists." },
+        "schedule": { "$ref": "#/$defs/Schedule", "description": "Schedule definition when found." }
+      }
+    },
+    "ScheduleHistoryResponse": {
+      "type": "object",
+      "title": "ScheduleHistoryResponse",
+      "description": "Response of GET /v1/cron/schedules/{name}/history.",
+      "additionalProperties": false,
+      "required": ["name", "history"],
+      "properties": {
+        "name": { "type": "string", "description": "Schedule name." },
+        "history": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ScheduleRun" },
+          "description": "Durable run history."
+        }
+      }
+    }
+  }
+}

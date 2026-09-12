@@ -1,0 +1,506 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/locks.schema.json",
+  "title": "FiduciaLocks",
+  "description": "Canonical request and operation-output payloads for union locks, counting semaphores, file leases, and reader-writer locks.",
+  "type": "object",
+  "$defs": {
+    "LockAcquireRequest": {
+      "type": "object",
+      "title": "LockAcquireRequest",
+      "description": "Body of POST /v1/locks/acquire. Supply key or keys; when both are present, keys takes precedence.",
+      "additionalProperties": false,
+      "required": ["holder"],
+      "anyOf": [
+        { "required": ["key"] },
+        { "required": ["keys"] }
+      ],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "One slash-safe member key. Use keys for an atomic union." },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "description": "Keys acquired atomically as one canonicalized union. The server sorts and deduplicates them."
+        },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Required, non-empty caller-chosen holder identity. Reuse it for retry, renew, release, and cancel." },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$", "description": "Optional caller-generated identity for this logical acquisition attempt. Generate it with cryptographically strong randomness, reuse it for every retry and the matching cancel, and never reuse it for a later attempt." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Held-lease TTL in milliseconds; defaults to 30000." },
+        "wait": { "type": "boolean", "description": "When true, enqueue durably if the union cannot be granted immediately; defaults to false." },
+        "wait_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Independent lifetime of a wait:true queue entry; defaults to 30000. Retries do not extend the original deadline." }
+      }
+    },
+    "LockAcquireManyRequest": {
+      "type": "object",
+      "title": "LockAcquireManyRequest",
+      "description": "Typed multi-key subset of POST /v1/locks/acquire. Acquires a bounded union atomically; use LockAcquireRequest when key-or-keys flexibility is needed.",
+      "additionalProperties": false,
+      "required": ["keys", "holder"],
+      "properties": {
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "description": "Keys to lock as one union. The server sorts/dedupes before acquisition."
+        },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Required, non-empty caller-chosen holder identity." },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$", "description": "Optional caller-generated identity for this logical acquisition attempt. Reuse it across retries and cancellation; a new logical attempt must use a new value." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Held-lease TTL in milliseconds; defaults to 30000." },
+        "wait": { "type": "boolean", "description": "When true, enqueue durably if the union cannot be granted immediately; defaults to false." },
+        "wait_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Independent lifetime of a wait:true queue entry; defaults to 30000." }
+      }
+    },
+    "LockHolder": {
+      "type": "object",
+      "title": "LockHolder",
+      "description": "One active union-lock grant. lock_id and exclusive are deprecated compatibility fields and are not emitted by the current node API.",
+      "additionalProperties": false,
+      "required": ["holder", "fencing_token", "lease_expires_ms", "keys"],
+      "properties": {
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "lock_id": { "type": "string", "deprecated": true, "description": "Deprecated legacy identifier; current grants are authorized by holder plus fencing_token." },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "lease_expires_ms": { "type": "integer", "minimum": 0 },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "exclusive": { "type": "boolean", "deprecated": true, "description": "Deprecated legacy field; union locks are always exclusive and current responses omit it." }
+      }
+    },
+    "LockPromotedGrant": {
+      "type": "object",
+      "title": "LockPromotedGrant",
+      "description": "A queued union-lock request promoted by the same committed release or cancel operation.",
+      "additionalProperties": false,
+      "required": ["holder", "keys", "fencing_token", "lease_expires_ms"],
+      "properties": {
+        "holder": { "type": "string" },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "lease_expires_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SemaphorePromotedGrant": {
+      "type": "object",
+      "title": "SemaphorePromotedGrant",
+      "description": "A queued semaphore holder promoted by the same committed release or cancel operation.",
+      "additionalProperties": false,
+      "required": ["holder", "fencing_token", "lease_expires_ms"],
+      "properties": {
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "lease_expires_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "LockAcquireResponse": {
+      "type": "object",
+      "title": "LockAcquireResponse",
+      "description": "Exact operation output of POST /v1/locks/acquire, inside the node propose envelope. Authority fields are present only when acquired is true; queue fields describe a durable waiter when queued is true.",
+      "additionalProperties": false,
+      "required": ["acquired", "queued", "keys", "holder", "revision"],
+      "allOf": [
+        {
+          "if": { "properties": { "acquired": { "const": true } }, "required": ["acquired"] },
+          "then": { "required": ["fencing_token", "lease_expires_ms"], "properties": { "queued": { "const": false } } },
+          "else": { "required": ["position", "wait_expires_ms", "conflicts"] }
+        },
+        {
+          "if": { "properties": { "queued": { "const": true } }, "required": ["queued"] },
+          "then": { "properties": { "position": { "type": "integer", "minimum": 1 }, "wait_expires_ms": { "type": "integer", "minimum": 0 } } }
+        }
+      ],
+      "properties": {
+        "acquired": { "type": "boolean" },
+        "queued": { "type": "boolean" },
+        "renewed": { "type": "boolean", "description": "False on an idempotent same-holder/key-set retry, making explicit that acquire did not extend the lease; absent on a new grant or failed acquire." },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Present only for a live grant. The canonical JSON wire range is capped at JavaScript's maximum safe integer so browser clients never silently round authority." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "Present only for a live grant." },
+        "position": { "type": ["integer", "null"], "minimum": 1, "description": "One-based queue position when queued is true; explicit null on an unqueued failed try-lock." },
+        "wait_expires_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Absolute replicated queue deadline when queued is true; explicit null on an unqueued failed try-lock." },
+        "conflicts": { "type": "array", "items": { "type": "string" }, "description": "Requested member keys currently held by another grant." },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "LockGrant": {
+      "type": "object",
+      "title": "LockGrant",
+      "description": "Deprecated compatibility shape from the pre-union lock API. Current consumers must use LockAcquireResponse or the dedicated semaphore/RW response type.",
+      "deprecated": true,
+      "additionalProperties": false,
+      "required": ["acquired"],
+      "properties": {
+        "acquired": { "type": "boolean", "description": "Whether the lock was granted." },
+        "lock_id": { "type": "string", "deprecated": true, "description": "Deprecated legacy id; never emitted by current union-lock endpoints." },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Monotonic token to fence stale holders; set when acquired." },
+        "fencing_tokens": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "deprecated": true,
+          "description": "Deprecated legacy per-key tokens; current union grants have one fencing_token for the complete key set."
+        },
+        "keys": { "type": "array", "items": { "type": "string" }, "description": "Composite keys when this is a multi-key grant." },
+        "holders": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Deprecated legacy semaphore count; use SemaphoreAcquireResponse." },
+        "max": { "type": "integer", "minimum": 1, "deprecated": true, "description": "Deprecated legacy semaphore limit; use SemaphoreAcquireResponse.limit." },
+        "available": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Deprecated legacy semaphore capacity; use SemaphoreAcquireResponse.available." }
+      }
+    },
+    "LockRenewRequest": {
+      "type": "object",
+      "title": "LockRenewRequest",
+      "description": "Token-bound body of POST /v1/locks/renew. Supply the exact key set and holder from the grant.",
+      "additionalProperties": false,
+      "required": ["holder", "fencing_token"],
+      "anyOf": [
+        { "required": ["key"] },
+        { "required": ["keys"] }
+      ],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "keys": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Renewal TTL measured from the committed command time; defaults to 30000." }
+      }
+    },
+    "LockRenewResponse": {
+      "type": "object",
+      "title": "LockRenewResponse",
+      "description": "Exact operation output of POST /v1/locks/renew. Grant fields are present only when renewed is true.",
+      "additionalProperties": false,
+      "required": ["renewed", "revision"],
+      "allOf": [
+        {
+          "if": { "properties": { "renewed": { "const": true } }, "required": ["renewed"] },
+          "then": { "required": ["keys", "holder", "fencing_token", "lease_expires_ms"] },
+          "else": { "required": ["reason"] }
+        }
+      ],
+      "properties": {
+        "renewed": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "not_holder", "key_mismatch"], "description": "Stable failure reason when renewed is false." },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "lease_expires_ms": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "LockReleaseRequest": {
+      "type": "object",
+      "title": "LockReleaseRequest",
+      "description": "Token-bound body of POST /v1/locks/release.",
+      "additionalProperties": false,
+      "required": ["holder", "fencing_token"],
+      "properties": {
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512, "description": "The holder identity used at acquire." },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "The token returned at acquire." }
+      }
+    },
+    "LockReleaseResponse": {
+      "type": "object",
+      "title": "LockReleaseResponse",
+      "description": "Exact operation output of POST /v1/locks/release.",
+      "additionalProperties": false,
+      "required": ["released", "revision"],
+      "allOf": [
+        {
+          "if": { "properties": { "released": { "const": true } }, "required": ["released"] },
+          "then": { "required": ["keys", "promoted"] },
+          "else": { "required": ["reason"] }
+        }
+      ],
+      "properties": {
+        "released": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "not_holder"], "description": "Stable failure reason when released is false." },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Released union when released is true." },
+        "promoted": { "type": "array", "items": { "$ref": "#/$defs/LockPromotedGrant" }, "description": "Waiters promoted by the same committed release." },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "LockReleaseManyRequest": {
+      "type": "object",
+      "title": "LockReleaseManyRequest",
+      "description": "Deprecated request for the removed POST /v1/locks/release-many route. Current union grants are released with LockReleaseRequest.",
+      "deprecated": true,
+      "additionalProperties": false,
+      "required": ["lock_id"],
+      "properties": {
+        "lock_id": { "type": "string", "deprecated": true, "description": "Deprecated composite id; current endpoints do not emit lock_id." }
+      }
+    },
+    "LockCancelRequest": {
+      "type": "object",
+      "title": "LockCancelRequest",
+      "description": "Body of idempotent POST /v1/locks/cancel. Identifies one exact queued holder/key-set request; it never silently releases an active grant.",
+      "additionalProperties": false,
+      "required": ["holder"],
+      "anyOf": [
+        { "required": ["key"] },
+        { "required": ["keys"] }
+      ],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "keys": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$", "description": "Attempt identity from the acquire being cancelled. When present, cancellation is durable and suppresses only that exact late acquire; omitting it preserves the legacy holder/key cancellation behavior." }
+      }
+    },
+    "LockCancelResponse": {
+      "type": "object",
+      "title": "LockCancelResponse",
+      "description": "Exact operation output of POST /v1/locks/cancel. If cancellation races promotion, acquired is true and authority fields let the aborting client release safely.",
+      "additionalProperties": false,
+      "required": ["cancelled", "acquired", "keys", "holder", "promoted", "revision"],
+      "oneOf": [
+        { "properties": { "cancelled": { "const": true }, "acquired": { "const": false } }, "required": ["cancelled", "acquired"] },
+        { "properties": { "cancelled": { "const": false }, "acquired": { "const": true } }, "required": ["cancelled", "acquired", "fencing_token", "lease_expires_ms"] },
+        { "properties": { "cancelled": { "const": false }, "acquired": { "const": false } }, "required": ["cancelled", "acquired", "reason"] }
+      ],
+      "properties": {
+        "cancelled": { "type": "boolean" },
+        "acquired": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "cancellation_capacity"], "description": "Present when cancellation did not establish safety. cancellation_capacity means the bounded replicated tombstone table was full; callers must surface failure and must not assume the ambiguous acquire was suppressed." },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Present when acquired is true after a promotion race." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "Present when acquired is true after a promotion race." },
+        "promoted": { "type": "array", "items": { "$ref": "#/$defs/LockPromotedGrant" } },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SemaphoreAcquireRequest": {
+      "type": "object",
+      "title": "SemaphoreAcquireRequest",
+      "description": "Body of POST /v1/semaphores/acquire.",
+      "additionalProperties": false,
+      "required": ["key", "holder", "limit"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Required, non-empty permit identity." },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$", "description": "Optional caller-generated identity for this logical permit-acquisition attempt. Reuse it across retries and cancellation; a new logical attempt must use a new value." },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 1000000, "description": "Maximum concurrent holders. It becomes immutable when the semaphore is first created; later mismatches fail without changing capacity." },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Permit TTL; defaults to 30000." },
+        "wait": { "type": "boolean", "description": "When true, enqueue durably when capacity is unavailable; defaults to false." },
+        "wait_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Independent lifetime of a wait:true queue entry; defaults to 30000." }
+      }
+    },
+    "SemaphoreAcquireResponse": {
+      "type": "object",
+      "title": "SemaphoreAcquireResponse",
+      "description": "Exact operation output of POST /v1/semaphores/acquire.",
+      "additionalProperties": false,
+      "required": ["acquired", "queued", "key", "holder", "limit", "revision"],
+      "oneOf": [
+        {
+          "properties": { "acquired": { "const": true }, "queued": { "const": false } },
+          "required": ["acquired", "queued", "available", "fencing_token", "lease_expires_ms"]
+        },
+        {
+          "properties": { "acquired": { "const": false } },
+          "required": ["acquired", "available", "position", "wait_expires_ms"],
+          "not": { "required": ["reason"] }
+        },
+        {
+          "properties": { "acquired": { "const": false }, "queued": { "const": false }, "reason": { "const": "limit_mismatch" } },
+          "required": ["acquired", "queued", "reason", "requested_limit"]
+        }
+      ],
+      "properties": {
+        "acquired": { "type": "boolean" },
+        "queued": { "type": "boolean" },
+        "renewed": { "type": "boolean", "description": "False on an idempotent same-holder retry, making explicit that acquire did not extend the permit; absent otherwise." },
+        "reason": { "type": "string", "enum": ["limit_mismatch"], "description": "Present only when an existing semaphore has a different immutable limit." },
+        "key": { "type": "string" },
+        "holder": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1 },
+        "requested_limit": { "type": "integer", "minimum": 1, "description": "Rejected caller-provided limit when reason is limit_mismatch." },
+        "available": { "type": "integer", "minimum": 0, "description": "Current free permits; absent from a limit_mismatch response." },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Present only for a live permit. The canonical JSON wire range is capped at JavaScript's maximum safe integer so browser clients never silently round authority." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "Present only for a live permit." },
+        "position": { "type": ["integer", "null"], "minimum": 1, "description": "One-based queue position when queued; explicit null on an unqueued failed try-acquire." },
+        "wait_expires_ms": { "type": ["integer", "null"], "minimum": 0, "description": "Absolute replicated queue deadline when queued; explicit null on an unqueued failed try-acquire." },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SemaphoreRenewRequest": {
+      "type": "object",
+      "title": "SemaphoreRenewRequest",
+      "description": "Token-bound body of POST /v1/semaphores/renew.",
+      "additionalProperties": false,
+      "required": ["key", "holder", "fencing_token"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "description": "Renewal TTL measured from the committed command time; defaults to 30000." }
+      }
+    },
+    "SemaphoreRenewResponse": {
+      "type": "object",
+      "title": "SemaphoreRenewResponse",
+      "description": "Exact operation output of POST /v1/semaphores/renew.",
+      "additionalProperties": false,
+      "required": ["renewed", "revision"],
+      "allOf": [
+        {
+          "if": { "properties": { "renewed": { "const": true } }, "required": ["renewed"] },
+          "then": { "required": ["key", "holder", "fencing_token", "lease_expires_ms"] },
+          "else": { "required": ["reason"] }
+        }
+      ],
+      "properties": {
+        "renewed": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "not_holder"] },
+        "key": { "type": "string" },
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "lease_expires_ms": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SemaphoreReleaseRequest": {
+      "type": "object",
+      "title": "SemaphoreReleaseRequest",
+      "description": "Token-bound body of POST /v1/semaphores/release.",
+      "additionalProperties": false,
+      "required": ["key", "holder", "fencing_token"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "SemaphoreReleaseResponse": {
+      "type": "object",
+      "title": "SemaphoreReleaseResponse",
+      "description": "Exact operation output of POST /v1/semaphores/release.",
+      "additionalProperties": false,
+      "required": ["released", "revision"],
+      "allOf": [
+        {
+          "if": { "properties": { "released": { "const": true } }, "required": ["released"] },
+          "then": { "required": ["key", "promoted"] },
+          "else": { "required": ["reason"] }
+        }
+      ],
+      "properties": {
+        "released": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "not_holder"] },
+        "key": { "type": "string" },
+        "promoted": { "type": "array", "items": { "$ref": "#/$defs/SemaphorePromotedGrant" } },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "SemaphoreCancelRequest": {
+      "type": "object",
+      "title": "SemaphoreCancelRequest",
+      "description": "Body of idempotent POST /v1/semaphores/cancel for one exact key/holder queue identity.",
+      "additionalProperties": false,
+      "required": ["key", "holder"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "holder": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$", "description": "Attempt identity from the acquire being cancelled. When present, cancellation is durable and scoped to that exact attempt; omitting it preserves legacy behavior." }
+      }
+    },
+    "SemaphoreCancelResponse": {
+      "type": "object",
+      "title": "SemaphoreCancelResponse",
+      "description": "Exact operation output of POST /v1/semaphores/cancel. A promotion race returns acquired:true with authority fields so the client can release safely.",
+      "additionalProperties": false,
+      "required": ["cancelled", "acquired", "key", "holder", "promoted", "revision"],
+      "oneOf": [
+        { "properties": { "cancelled": { "const": true }, "acquired": { "const": false } }, "required": ["cancelled", "acquired"] },
+        { "properties": { "cancelled": { "const": false }, "acquired": { "const": true } }, "required": ["cancelled", "acquired", "fencing_token", "lease_expires_ms"] },
+        { "properties": { "cancelled": { "const": false }, "acquired": { "const": false } }, "required": ["cancelled", "acquired", "reason"] }
+      ],
+      "properties": {
+        "cancelled": { "type": "boolean" },
+        "acquired": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["not_found", "cancellation_capacity"], "description": "cancellation_capacity means no durable attempt tombstone was installed; callers must surface failure." },
+        "key": { "type": "string" },
+        "holder": { "type": "string" },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "Present when acquired is true after a promotion race." },
+        "lease_expires_ms": { "type": "integer", "minimum": 0, "description": "Present when acquired is true after a promotion race." },
+        "promoted": { "type": "array", "items": { "$ref": "#/$defs/SemaphorePromotedGrant" } },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "FileLeaseAcquireRequest": {
+      "type": "object",
+      "title": "FileLeaseAcquireRequest",
+      "description": "Bridge-to-control-plane request to atomically lease repository-relative file paths.",
+      "additionalProperties": false,
+      "required": ["repository", "paths", "agent_key"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 3, "maxLength": 200, "pattern": "^(?!\\.{1,2}/)(?![^/]+/\\.{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "description": "Canonical GitHub owner/repo identity. A legacy bare repo may be accepted only by a server migration path and must not be emitted by new clients." },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 800 },
+          "description": "Repository-relative paths. Absolute paths, traversal, backslashes, and empty components are rejected."
+        },
+        "agent_key": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000 },
+        "wait": { "type": "boolean", "default": false }
+      }
+    },
+    "FileLeaseReleaseRequest": {
+      "type": "object",
+      "title": "FileLeaseReleaseRequest",
+      "description": "Bridge-to-control-plane request to release a file-path union lease.",
+      "additionalProperties": false,
+      "required": ["agent_key", "fencing_token"],
+      "properties": {
+        "agent_key": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "FileLeaseRenewRequest": {
+      "type": "object",
+      "title": "FileLeaseRenewRequest",
+      "description": "Bridge-to-control-plane request to renew one exact repository-path union lease without changing its fencing token.",
+      "additionalProperties": false,
+      "required": ["repository", "paths", "agent_key", "fencing_token"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 3, "maxLength": 200, "pattern": "^(?!\\.{1,2}/)(?![^/]+/\\.{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "description": "Canonical GitHub owner/repo identity." },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 800 },
+          "description": "The complete canonical repository-relative path set from the acquired union lease."
+        },
+        "agent_key": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "fencing_token": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 86400000, "default": 30000 }
+      }
+    },
+    "FileLeaseQuery": {
+      "type": "object",
+      "title": "FileLeaseQuery",
+      "description": "Query parameters used to find the bot or agent holding a repository file lease.",
+      "additionalProperties": false,
+      "required": ["repository", "path"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 3, "maxLength": 200, "pattern": "^(?!\\.{1,2}/)(?![^/]+/\\.{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "description": "Canonical GitHub owner/repo identity. Legacy bare values are migration input only." },
+        "path": { "type": "string", "minLength": 1, "maxLength": 800 }
+      }
+    },
+    "RwAcquireRequest": {
+      "type": "object",
+      "title": "RwAcquireRequest",
+      "description": "Body of POST /v1/rw/{key}/read|write.",
+      "additionalProperties": false,
+      "properties": {
+        "ttl_ms": { "type": "integer", "minimum": 1, "description": "Lease TTL in milliseconds." },
+        "wait": { "type": "boolean", "description": "Block until granted; false = try." }
+      }
+    }
+  }
+}
