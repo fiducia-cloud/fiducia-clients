@@ -14,11 +14,13 @@ trap cleanup EXIT HUP INT TERM
 : > "$tmp/LICENSE"
 
 (
+  trap - EXIT HUP INT TERM
   cd "$tmp"
   publish_require_files README.md LICENSE
 )
 
 if (
+  trap - EXIT HUP INT TERM
   cd "$tmp"
   publish_require_files README.md MISSING
 ) 2>"$tmp/missing.err"; then
@@ -29,6 +31,7 @@ grep -Fq 'required publication file is missing: MISSING' "$tmp/missing.err"
 
 ln -s README.md "$tmp/README.link"
 if (
+  trap - EXIT HUP INT TERM
   cd "$tmp"
   publish_require_files README.link
 ) 2>"$tmp/symlink.err"; then
@@ -37,7 +40,10 @@ if (
 fi
 grep -Fq 'required publication file must not be a symlink: README.link' "$tmp/symlink.err"
 
-if publish_require_files 2>"$tmp/zero.err"; then
+if (
+  trap - EXIT HUP INT TERM
+  publish_require_files
+) 2>"$tmp/zero.err"; then
   printf 'expected zero-argument validation to fail\n' >&2
   exit 1
 fi
@@ -50,13 +56,19 @@ publish_parse_mode --dry-run
 publish_parse_mode --release
 [ "$PUBLISH_MODE" = release ]
 
-if (publish_parse_mode --publish) 2>"$tmp/publish.err"; then
+if (
+  trap - EXIT HUP INT TERM
+  publish_parse_mode --publish
+) 2>"$tmp/publish.err"; then
   printf 'expected obsolete --publish mode to fail\n' >&2
   exit 1
 fi
 grep -Fq 'usage:' "$tmp/publish.err"
 
-if (publish_parse_mode --dry-run --release) 2>"$tmp/many.err"; then
+if (
+  trap - EXIT HUP INT TERM
+  publish_parse_mode --dry-run --release
+) 2>"$tmp/many.err"; then
   printf 'expected multiple mode arguments to fail\n' >&2
   exit 1
 fi
