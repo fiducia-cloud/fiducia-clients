@@ -32,6 +32,22 @@ publish_require() {
   fi
 }
 
+# Require every packaging input named by a client publish script to exist as a
+# regular file before copying/building a registry artifact. Keep this generic so
+# every ecosystem gets the same fail-closed guard rather than reimplementing it.
+publish_require_files() {
+  if [ "$#" -eq 0 ]; then
+    printf 'publish_require_files requires at least one path\n' >&2
+    exit 2
+  fi
+  for file in "$@"; do
+    if [ ! -f "$file" ]; then
+      printf 'required publish file not found: %s\n' "$file" >&2
+      exit 2
+    fi
+  done
+}
+
 publish_require_clean_tree() {
   root="$1"
   if [ -n "$(git -C "$root" status --porcelain)" ]; then
