@@ -42,10 +42,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          candidate="$(mktemp)"
-          python3 scripts/refresh_client_contract_manifest.py --output "${candidate#"$PWD/"}"
+          candidate=".artifacts/client-contract/contract-manifest.refreshed.json"
+          python3 scripts/refresh_client_contract_manifest.py --output "$candidate"
           cp "$candidate" clients/contract-manifest.json
-          rm "$candidate"
           python3 scripts/verify_client_contract.py
 
       - name: Commit only the refreshed evidence manifest
