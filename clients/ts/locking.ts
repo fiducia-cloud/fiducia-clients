@@ -99,6 +99,15 @@ const DEFAULT_TTL = 60_000;
 const DEFAULT_MAX_WAIT = 30_000;
 const DEFAULT_RETRY_INTERVAL = 250;
 
+/** One replaceable grant snapshot; renew never mutates the public handle. */
+type CoordinationGrant = {
+  keys: string[];
+  holder: string;
+  fencingToken: number;
+  leaseExpiresMs?: number;
+  ttlMs: number;
+};
+
 function genId(): string {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi?.randomUUID) return `fdc-${cryptoApi.randomUUID()}`;
@@ -280,24 +289,36 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     leaseExpiresMs?: number,
     defaultTtlMs: number = DEFAULT_TTL,
   ): Lock {
-    let currentTtlMs = defaultTtlMs;
-    const handle: Lock = {
+    let grant: CoordinationGrant = {
       keys,
       holder,
       fencingToken,
       leaseExpiresMs,
-      renew: async (ttlMs = currentTtlMs) => {
+      ttlMs: defaultTtlMs,
+    };
+    return {
+      get keys() {
+        return grant.keys;
+      },
+      get holder() {
+        return grant.holder;
+      },
+      get fencingToken() {
+        return grant.fencingToken;
+      },
+      get leaseExpiresMs() {
+        return grant.leaseExpiresMs;
+      },
+      renew: async (ttlMs = grant.ttlMs) => {
         const response = await this.lockRenew(keys, holder, fencingToken, ttlMs);
         const output = response?.result?.output ?? {};
         if (!output.renewed) throw new Error("fiducia: lock renewal lost fenced authority");
-        handle.leaseExpiresMs = output.lease_expires_ms;
-        currentTtlMs = ttlMs;
+        grant = { ...grant, leaseExpiresMs: output.lease_expires_ms, ttlMs };
         return response;
       },
       unlock: () => this.lockRelease(keys[0], { holder, fencingToken }),
       release: () => this.lockRelease(keys[0], { holder, fencingToken }),
     };
-    return handle;
   }
 
   private async cancelLockWait(keys: string[], holder: string, requestId: string): Promise<void> {
@@ -484,24 +505,36 @@ export class FiduciaLockClient extends FiduciaLockClientBase {
     leaseExpiresMs?: number,
     defaultTtlMs: number = DEFAULT_TTL,
   ): SemaphoreHandle {
-    let currentTtlMs = defaultTtlMs;
-    const handle: SemaphoreHandle = {
-      key,
+    let grant: CoordinationGrant = {
+      keys: [key],
       holder,
       fencingToken,
       leaseExpiresMs,
-      renew: async (ttlMs = currentTtlMs) => {
+      ttlMs: defaultTtlMs,
+    };
+    return {
+      get key() {
+        return grant.keys[0];
+      },
+      get holder() {
+        return grant.holder;
+      },
+      get fencingToken() {
+        return grant.fencingToken;
+      },
+      get leaseExpiresMs() {
+        return grant.leaseExpiresMs;
+      },
+      renew: async (ttlMs = grant.ttlMs) => {
         const response = await this.semaphoreRenew(key, holder, fencingToken, ttlMs);
         const output = response?.result?.output ?? {};
         if (!output.renewed) throw new Error("fiducia: semaphore renewal lost fenced authority");
-        handle.leaseExpiresMs = output.lease_expires_ms;
-        currentTtlMs = ttlMs;
+        grant = { ...grant, leaseExpiresMs: output.lease_expires_ms, ttlMs };
         return response;
       },
       unlock: () => this.semaphoreRelease(key, { holder, fencingToken }),
       release: () => this.semaphoreRelease(key, { holder, fencingToken }),
     };
-    return handle;
   }
 
   private async cancelSemaphoreWait(key: string, holder: string, requestId: string): Promise<void> {

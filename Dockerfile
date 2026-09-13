@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # CI/test image for the multi-language Fiducia clients.
-FROM rust:1.97.1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates python3 nodejs npm
 # bookworm's apt `golang-go` is 1.19, but the generated go client's go.mod
@@ -30,4 +30,18 @@ RUN cd clients/go \
     && cd ../.. \
     && cargo test --locked --manifest-path clients/rust/Cargo.toml \
     && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py
+
+# --- sops: decrypt at `docker run`, never at `docker build` ------------------
+# The image carries only CIPHERTEXT (env/enc/<SOPS_ENV>.env.enc) and the sops
+# binary. The age key arrives at run time (SOPS_AGE_KEY / SOPS_AGE_KEY_FILE);
+# scripts/sops-entrypoint.sh decrypts into the process environment and execs
+# the real command, so no plaintext ever lands in a layer or on disk.
+# See env/README.md.
+ARG SOPS_ENV=local
+COPY --chmod=0755 --from=ghcr.io/getsops/sops:v3.10.2-alpine /usr/local/bin/sops /usr/local/bin/sops
+COPY --chmod=0755 scripts/sops-entrypoint.sh /usr/local/bin/sops-entrypoint.sh
+COPY --chmod=0644 env/enc/${SOPS_ENV}.env.enc /app/secrets/app.env
+ENV SOPS_SECRETS_FILE=/app/secrets/app.env
+
+ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh"]
 CMD ["bash", "-lc", "cd clients/go && go test ./... && cd ../.. && cargo test --locked --manifest-path clients/rust/Cargo.toml && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest clients/python/fiducia_test.py"]

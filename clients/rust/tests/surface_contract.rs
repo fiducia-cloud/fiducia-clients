@@ -10,7 +10,9 @@ fn repo_root() -> PathBuf {
         if dir.join("contract").join("surface.contract.json").exists() {
             return dir.to_path_buf();
         }
-        dir = dir.parent().expect("no surface contract found above CARGO_MANIFEST_DIR");
+        dir = dir
+            .parent()
+            .expect("no surface contract found above CARGO_MANIFEST_DIR");
     }
 }
 

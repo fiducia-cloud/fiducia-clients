@@ -107,6 +107,41 @@ test("initial renewed:false grants are token-renewed before handles return", asy
   ]);
 });
 
+test("renew replaces the grant snapshot instead of mutating handle fields", async () => {
+  let renews = 0;
+  const transport = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const path = new URL(String(input)).pathname;
+    const semaphore = path.includes("semaphores");
+    const renew = path.endsWith("/renew");
+    if (renew) renews += 1;
+    const token = semaphore ? 72 : 71;
+    const output = renew
+      ? { renewed: true, fencing_token: token, lease_expires_ms: 1_000 + renews }
+      : {
+          acquired: true,
+          queued: false,
+          renewed: true,
+          fencing_token: token,
+          lease_expires_ms: 100,
+        };
+    return new Response(JSON.stringify({ result: { output } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  const client = new FiduciaLockClient("https://fiducia.test", { fetch: transport });
+
+  const lock = await client.tryLock("orders/42", { holder: "stable-worker" });
+  const permit = await client.trySemaphore("pool", 2, { holder: "stable-worker" });
+  assert.equal(lock?.leaseExpiresMs, 100);
+  assert.equal(permit?.leaseExpiresMs, 100);
+
+  await lock?.renew(90_000);
+  await permit?.renew(45_000);
+  assert.equal(lock?.leaseExpiresMs, 1_001);
+  assert.equal(permit?.leaseExpiresMs, 1_002);
+});
+
 test("cancellation capacity exhaustion is surfaced as unsafe", async () => {
   const transport = (async (input: RequestInfo | URL) => {
     const path = new URL(String(input)).pathname;

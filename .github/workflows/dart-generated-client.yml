@@ -1,0 +1,127 @@
+name: Dart generated client candidate
+
+on:
+  pull_request:
+    paths:
+      - "operations.json"
+      - "generate_dart.py"
+      - "clients/dart/**"
+      - ".github/workflows/dart-generated-client.yml"
+  push:
+    branches: [main]
+    paths:
+      - "operations.json"
+      - "generate_dart.py"
+      - "clients/dart/**"
+      - ".github/workflows/dart-generated-client.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dart-generated-client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify checked-out revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: dart-lang/setup-dart@43c102f4dc9b9829c862401f0b64c7c9184eab4e # v1
+        with:
+          sdk: "3.12.1"
+
+      - name: Generate and format the candidate publication unit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile generate_dart.py
+          mkdir -p .artifacts/dart
+          python3 generate_dart.py --output .artifacts/dart/fiducia_client.dart
+          dart format .artifacts/dart/fiducia_client.dart
+          dart format --output=none --set-exit-if-changed .artifacts/dart/fiducia_client.dart
+          dart analyze .artifacts/dart/fiducia_client.dart
+
+      - name: Assert every manifest operation has a Dart method
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+
+          operations_path = Path("operations.json")
+          reviewed_path = Path("clients/dart/fiducia.dart")
+          candidate_path = Path(".artifacts/dart/fiducia_client.dart")
+          operations = json.loads(operations_path.read_text(encoding="utf-8"))["operations"]
+          candidate = candidate_path.read_text(encoding="utf-8")
+
+          def camel(name: str) -> str:
+              parts = [part for part in name.split("_") if part]
+              return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+          missing = [
+              camel(item["name"])
+              for item in operations
+              if re.search(r"\b%s\s*\(" % re.escape(camel(item["name"])), candidate) is None
+          ]
+          if missing:
+              raise SystemExit("generated Dart methods missing: " + ", ".join(missing))
+
+          receipt = {
+              "schema": "fiducia.dart-generated-client-receipt/v1",
+              "operationCount": len(operations),
+              "operationsSha256": hashlib.sha256(operations_path.read_bytes()).hexdigest(),
+              "reviewedSourceSha256": hashlib.sha256(reviewed_path.read_bytes()).hexdigest(),
+              "candidateSha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+              "missingMethods": missing,
+          }
+          Path(".artifacts/dart/receipt.json").write_text(
+              json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+
+      - name: Exercise the exact pub.dev package candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/fiducia-dart-package"
+          mkdir -p "$package_dir/lib"
+          cp .artifacts/dart/fiducia_client.dart "$package_dir/lib/fiducia_client.dart"
+          cp clients/dart/pubspec.yaml clients/dart/LICENSE clients/dart/README.md clients/dart/CHANGELOG.md "$package_dir/"
+          cd "$package_dir"
+          dart pub get
+          dart analyze
+          dart pub publish --dry-run
+
+      - name: Retain candidate and immutable receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dart-generated-client-${{ github.run_id }}
+          path: .artifacts/dart/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

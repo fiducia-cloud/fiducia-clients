@@ -114,13 +114,21 @@ String _checkedBase(String baseUrl) {
 
 class FiduciaClient {
   final String base;
-  final HttpClient _http = HttpClient();
-  Duration? requestTimeout;
-  Duration? lockRequestTimeout;
-  int retryMax = 0;
-  Duration retryDelay = Duration.zero;
+  final HttpClient _http;
+  final Duration? requestTimeout;
+  final Duration? lockRequestTimeout;
+  final int retryMax;
+  final Duration retryDelay;
 
-  FiduciaClient(String baseUrl) : base = _checkedBase(baseUrl);
+  FiduciaClient(
+    String baseUrl, {
+    HttpClient? http,
+    this.requestTimeout,
+    this.lockRequestTimeout,
+    this.retryMax = 0,
+    this.retryDelay = Duration.zero,
+  })  : base = _checkedBase(baseUrl),
+        _http = http ?? HttpClient();
 
   Future<dynamic> _request(
     String method,

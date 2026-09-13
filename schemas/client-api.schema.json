@@ -1,0 +1,718 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zpkg.tech/schemas/client-api.schema.json",
+  "title": "Zed polyglot client API surface",
+  "description": "Canonical public/private API declaration shared by every generated client runtime, including behavior, authorization, lifecycle, and documentation metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "package",
+    "symbols"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "package": {
+      "$ref": "#/$defs/package"
+    },
+    "symbols": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/symbol"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "public",
+        "private"
+      ]
+    },
+    "interfaceSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate",
+        "versionRequirement",
+        "schemaDialect"
+      ],
+      "properties": {
+        "coordinate": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+-interfaces$"
+        },
+        "versionRequirement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schemaDialect": {
+          "const": "https://json-schema.org/draft/2020-12/schema"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinate",
+        "namespace",
+        "interfaces"
+      ],
+      "properties": {
+        "coordinate": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "namespace": {
+          "$ref": "#/$defs/identifier"
+        },
+        "interfaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/interfaceSource"
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "typeRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "const": "primitive"
+            },
+            "name": {
+              "type": "string",
+              "enum": [
+                "string",
+                "boolean",
+                "integer",
+                "number",
+                "bytes",
+                "void",
+                "unknown"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "const": "named"
+            },
+            "name": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "item"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "array",
+                "optional"
+              ]
+            },
+            "item": {
+              "$ref": "#/$defs/typeRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "key",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "map"
+            },
+            "key": {
+              "$ref": "#/$defs/typeRef"
+            },
+            "value": {
+              "$ref": "#/$defs/typeRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "items"
+          ],
+          "properties": {
+            "kind": {
+              "const": "union"
+            },
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/typeRef"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "arguments"
+          ],
+          "properties": {
+            "kind": {
+              "const": "generic"
+            },
+            "name": {
+              "$ref": "#/$defs/identifier"
+            },
+            "arguments": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/typeRef"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "type": {
+          "$ref": "#/$defs/typeRef"
+        },
+        "description": {
+          "type": "string"
+        },
+        "default": {}
+      }
+    },
+    "callable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "visibility",
+        "parameters",
+        "returns",
+        "async",
+        "behavior",
+        "auth",
+        "documentationId",
+        "stability",
+        "deprecation"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "returns": {
+          "$ref": "#/$defs/typeRef"
+        },
+        "async": {
+          "type": "boolean"
+        },
+        "static": {
+          "type": "boolean",
+          "default": false
+        },
+        "throws": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/typeRef"
+          }
+        },
+        "behavior": {
+          "$ref": "#/$defs/behavior"
+        },
+        "auth": {
+          "$ref": "#/$defs/auth"
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "visibility",
+        "type",
+        "documentationId",
+        "stability",
+        "deprecation"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "type": {
+          "$ref": "#/$defs/typeRef"
+        },
+        "readonly": {
+          "type": "boolean",
+          "default": false
+        },
+        "description": {
+          "type": "string"
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        }
+      }
+    },
+    "classSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "visibility",
+        "fields",
+        "constructors",
+        "methods",
+        "documentationId",
+        "stability",
+        "deprecation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "class"
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "description": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        },
+        "constructors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callable"
+          }
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callable"
+          }
+        },
+        "implements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        }
+      }
+    },
+    "interfaceSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "visibility",
+        "methods",
+        "documentationId",
+        "stability",
+        "deprecation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "interface"
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "description": {
+          "type": "string"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callable"
+          }
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        }
+      }
+    },
+    "functionSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "visibility",
+        "parameters",
+        "returns",
+        "async",
+        "documentationId",
+        "stability",
+        "deprecation",
+        "behavior",
+        "auth"
+      ],
+      "properties": {
+        "kind": {
+          "const": "function"
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "returns": {
+          "$ref": "#/$defs/typeRef"
+        },
+        "async": {
+          "type": "boolean"
+        },
+        "static": {
+          "type": "boolean",
+          "default": false
+        },
+        "throws": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/typeRef"
+          }
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        },
+        "behavior": {
+          "$ref": "#/$defs/behavior"
+        },
+        "auth": {
+          "$ref": "#/$defs/auth"
+        }
+      }
+    },
+    "typeSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "visibility",
+        "definition",
+        "documentationId",
+        "stability",
+        "deprecation"
+      ],
+      "properties": {
+        "kind": {
+          "const": "type"
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "description": {
+          "type": "string"
+        },
+        "definition": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "fields"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "object"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/field"
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "target"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "alias"
+                },
+                "target": {
+                  "$ref": "#/$defs/typeRef"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "values"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "enum"
+                },
+                "values": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/identifier"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "documentationId": {
+          "$ref": "#/$defs/documentationId"
+        },
+        "stability": {
+          "$ref": "#/$defs/stability"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/deprecation"
+        }
+      }
+    },
+    "symbol": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/classSymbol"
+        },
+        {
+          "$ref": "#/$defs/interfaceSymbol"
+        },
+        {
+          "$ref": "#/$defs/functionSymbol"
+        },
+        {
+          "$ref": "#/$defs/typeSymbol"
+        }
+      ]
+    },
+    "documentationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "stability": {
+      "type": "string",
+      "enum": [
+        "experimental",
+        "stable",
+        "deprecated"
+      ]
+    },
+    "deprecation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "since",
+            "message"
+          ],
+          "properties": {
+            "since": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "replacement": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/documentationId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "schemes",
+        "scopes"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
+        "schemes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "behavior": {
+      "type": "string",
+      "enum": [
+        "sync",
+        "async",
+        "streaming"
+      ]
+    }
+  }
+}

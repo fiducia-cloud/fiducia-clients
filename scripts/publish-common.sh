@@ -32,6 +32,31 @@ publish_require() {
   fi
 }
 
+# publish_require_files FILE...
+# Fail before staging a registry artifact when required package metadata or
+# source input is absent, unreadable, or replaced with a symlink. Callers pass
+# paths relative to the package directory after changing into it.
+publish_require_files() {
+  if [ "$#" -eq 0 ]; then
+    printf 'publish_require_files requires at least one path\n' >&2
+    exit 2
+  fi
+  for file do
+    if [ -L "$file" ]; then
+      printf 'required publication file must not be a symlink: %s\n' "$file" >&2
+      exit 2
+    fi
+    if [ ! -f "$file" ]; then
+      printf 'required publication file is missing: %s\n' "$file" >&2
+      exit 2
+    fi
+    if [ ! -r "$file" ]; then
+      printf 'required publication file is not readable: %s\n' "$file" >&2
+      exit 2
+    fi
+  done
+}
+
 publish_require_clean_tree() {
   root="$1"
   if [ -n "$(git -C "$root" status --porcelain)" ]; then

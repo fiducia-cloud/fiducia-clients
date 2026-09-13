@@ -1,0 +1,6 @@
+{
+  "exports": "./src/index.ts",
+  "name": "@fiducia-cloud/fiducia-client-edge",
+  "type": "module",
+  "version": "0.1.0"
+}

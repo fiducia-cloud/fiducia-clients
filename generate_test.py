@@ -221,7 +221,7 @@ class FirstTierEmitterRegression(unittest.TestCase):
         src = g.gen_ts()
         # Node 22's built-in strip-types parser rejects parameter properties.
         self.assertNotRegex(src, r"constructor\s*\(\s*(public|private|protected)\s+")
-        self.assertIn("private base: string;", src)
+        self.assertIn("private readonly base: string;", src)
         self.assertIn("constructor(baseUrl: string, opts: FiduciaClientOpts = {})", src)
 
     def test_go_object_query_reads_metadata_from_opts(self):
