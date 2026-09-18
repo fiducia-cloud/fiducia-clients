@@ -36,29 +36,15 @@ deps/
 *.beam
 
 # misc
-# --- environment / secrets (sops + age) -------------------------------------
-# Only env/enc/*.env.enc is tracked. Every plaintext form stays out of git;
-# `just env-check` enforces it. See env/README.md.
-# (`*.env` already matches at any depth — `**/*.env` is stated for clarity.)
 .env
 .env.*
-*.env
-**/*.env
-env/dec/
 !.env.example
-
-# age private keys — never commit these.
-*.agekey
-*.age-key
-keys.txt
-sops-private*.txt
-
 *.log
 .DS_Store
+.env
 
 # Scratch / git worktrees (tmp/worktrees/*)
 tmp/
-temp/
 
 # Gleam
 build/
@@ -77,6 +63,7 @@ dist-newstyle/
 
 # Nim
 nimcache/
+
 # --- hardened baseline (auto) ---
 Thumbs.db
 *.swp
@@ -89,11 +76,3 @@ tmp
 temp
 tmp/worktrees
 temp/worktrees
-
-# ores-sops dotenv hardening: plaintext dotenv is local-only at every depth;
-# only env/enc/*.env.enc (sops ciphertext) is tracked. See env/README.md.
-**/**/*.env
-env/dec
-
-# Sanctioned scratch locations - AGENTS.md requires both, trailing-slash form
-temp/

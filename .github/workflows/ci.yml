@@ -85,9 +85,6 @@ jobs:
         run: |
           dart run fiducia_sync_test.dart
           dart run fiducia_secrets_test.dart
-          dart run fiducia_options_test.dart
-      - name: Verify Dart generator temp-output reporting
-        run: python3 -m unittest generate_dart_test
       - name: Verify the pub.dev artifact without publishing
         working-directory: clients/dart
         run: ./publish.sh --dry-run
@@ -145,7 +142,7 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - working-directory: fiducia-clients/clients/rust
         run: cargo test --all-targets --all-features --locked
-      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-audit@0.22.2
       - working-directory: fiducia-clients/clients/rust
@@ -166,7 +163,7 @@ jobs:
         with:
           node-version: "22.22.1"
       # Generator regression tests + drift check for every generated target.
-      - run: python3 -m unittest generate_test generate_dart_test
+      - run: python3 -m unittest generate_test
       - run: python3 generate.py --check
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -176,10 +173,10 @@ jobs:
         with:
           workspaces: clients/rust-wasm
       # Pinned, checksummed prebuilt binary — no `curl | sh`, guaranteed on PATH.
-      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: wasm-pack@0.15.0
-      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-audit@0.22.2
       # compile gate

@@ -15,11 +15,6 @@ use ureq::http::{self, header::HeaderValue};
 mod locking;
 pub use locking::{LockError, LockHandle, LockOptions, SemaphoreHandle};
 
-#[cfg(feature = "async")]
-mod asynchronous;
-#[cfg(feature = "async")]
-pub use asynchronous::AsyncFiduciaClient;
-
 /// The shared, generated payload/error contract (from `fiducia-interfaces`),
 /// re-exported so callers can deserialize responses into typed structs, e.g.
 /// `serde_json::from_value::<fiducia_client::types::KvEntry>(resp["entry"].clone())`.
@@ -32,7 +27,7 @@ pub enum Error {
     Transport(String),
 }
 
-pub(crate) fn explicit_not_leader(body: Option<&Value>) -> bool {
+fn explicit_not_leader(body: Option<&Value>) -> bool {
     let Some(body) = body else {
         return false;
     };
@@ -62,7 +57,7 @@ fn sensitive_header_value(value: &str) -> Result<HeaderValue, Error> {
 /// The host portion of `base` when (and only when) its scheme is cleartext
 /// `http://`. Returns `None` for `https://` or anything unparseable (which the
 /// request builder will reject on its own later).
-pub(crate) fn cleartext_http_host(base: &str) -> Option<&str> {
+fn cleartext_http_host(base: &str) -> Option<&str> {
     if base.len() < 7 || !base[..7].eq_ignore_ascii_case("http://") {
         return None;
     }
@@ -81,7 +76,7 @@ pub(crate) fn cleartext_http_host(base: &str) -> Option<&str> {
 /// public IPs are refused — a bearer-equivalent secret must not cross a path an
 /// on-path observer could watch (see [`FiduciaClient::internal`] and
 /// [`FiduciaClient::bearer`]).
-pub(crate) fn cleartext_internal_host_allowed(host: &str) -> bool {
+fn cleartext_internal_host_allowed(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
