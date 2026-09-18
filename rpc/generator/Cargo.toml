@@ -1,0 +1,18 @@
+[package]
+name = "fiducia-rpc-manifest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Derive and verify the fiducia /v1/rpc operation manifest from the REST operation manifest"
+publish = false
+
+[[bin]]
+name = "fiducia-rpc-manifest"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"

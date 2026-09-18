@@ -1,0 +1,54 @@
+name: rpc-manifest
+
+# The /v1/rpc operation manifest is derived from operations.json, never authored.
+# This gate fails when the committed manifest is stale, when derivation stops
+# being deterministic, or when the projection loses, invents, or misplaces an
+# operation or parameter.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-manifest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact reviewed head
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - working-directory: rpc/generator
+        run: cargo fmt --all -- --check
+      - working-directory: rpc/generator
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - working-directory: rpc/generator
+        run: cargo test --all-targets --all-features --locked
+      # Regenerating must not change a byte. Running `check` separately from the
+      # test suite keeps the staleness failure readable in the job log.
+      - name: The committed manifest is current
+        run: cargo run --locked --manifest-path rpc/generator/Cargo.toml -- check .
+      - name: Regeneration leaves the tree clean
+        run: |
+          cargo run --locked --manifest-path rpc/generator/Cargo.toml -- generate .
+          if ! git diff --quiet -- rpc/operations.rpc.json rpc/operation-keys.json; then
+            echo "::error::regenerating the RPC manifest changed the committed artifacts"
+            git --no-pager diff -- rpc/operations.rpc.json rpc/operation-keys.json
+            exit 1
+          fi
