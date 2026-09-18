@@ -15,6 +15,7 @@
 //! No network, no clock, no model: output is a pure function of the input bytes.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -63,11 +64,40 @@ struct RpcManifest {
     schema_version: u32,
     rpc_transport_path: &'static str,
     namespace: &'static str,
-    source_manifest: &'static str,
-    source_manifest_version: u32,
+    /// What this document is derived from, and what it therefore is not.
+    authority: Authority,
+    provenance: Provenance,
     #[serde(rename = "$comment")]
     comment: &'static str,
     operations: Vec<RpcOperation>,
+}
+
+/// The authority standing behind this manifest.
+///
+/// Everything here is projected from the REST manifest. That makes it an HTTP
+/// projection, not a semantic contract: it can say which URL an operation is
+/// reachable at, and it cannot say what the operation *means*. Semantics
+/// require a handlers-authoritative Contract IR, which fiducia does not have
+/// yet, so they are marked unresolved rather than guessed.
+#[derive(Debug, Serialize)]
+struct Authority {
+    kind: &'static str,
+    semantics: &'static str,
+    #[serde(rename = "$comment")]
+    comment: &'static str,
+}
+
+/// Enough to tell which inputs produced these bytes.
+#[derive(Debug, Serialize)]
+struct Provenance {
+    source_manifest: &'static str,
+    source_manifest_version: u32,
+    /// SHA-256 of the exact source manifest bytes this was derived from.
+    source_manifest_sha256: String,
+    generator: &'static str,
+    generator_version: &'static str,
+    #[serde(rename = "$comment")]
+    comment: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,10 +106,14 @@ struct RpcOperation {
     rpc_key: String,
     group: String,
     name: String,
-    /// Unary everywhere today: fiducia has no long-lived response operations.
-    /// A watch-style operation would be declared `server_stream` here and would
-    /// reach the streaming client surface rather than the unary one.
-    stream: &'static str,
+    /// Streaming mode, when a semantic authority has established one.
+    ///
+    /// Absent means *unresolved*, not unary. The REST manifest cannot tell us
+    /// whether an operation streams: a single-response HTTP endpoint is how a
+    /// server-streaming operation looks before it is declared one. Asserting
+    /// "unary" here would turn an absence of evidence into a contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<&'static str>,
     /// The REST shape this operation projects from. Evidence, not a second
     /// authority: it exists so a reviewer can see the two surfaces are the same
     /// operation, and so the edge can route an envelope to the existing handler.
@@ -153,7 +187,7 @@ fn artifacts(root: &Path) -> Result<BTreeMap<String, String>, String> {
     let manifest: SourceManifest =
         serde_json::from_str(&source).map_err(|error| format!("{SOURCE_MANIFEST}: {error}"))?;
 
-    let rpc = derive(&manifest)?;
+    let rpc = derive(&manifest, &source)?;
     let keys: Vec<&str> = rpc
         .operations
         .iter()
@@ -176,7 +210,7 @@ fn artifacts(root: &Path) -> Result<BTreeMap<String, String>, String> {
 }
 
 /// Project the REST manifest into RPC operations.
-fn derive(manifest: &SourceManifest) -> Result<RpcManifest, String> {
+fn derive(manifest: &SourceManifest, source_bytes: &str) -> Result<RpcManifest, String> {
     let mut operations = Vec::with_capacity(manifest.operations.len());
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
@@ -218,7 +252,7 @@ fn derive(manifest: &SourceManifest) -> Result<RpcManifest, String> {
             rpc_key,
             group: source.group.clone(),
             name: source.name.clone(),
-            stream: "unary",
+            stream: None,
             http: HttpProjection {
                 method: source.method.to_ascii_uppercase(),
                 path: source.path.clone(),
@@ -234,8 +268,27 @@ fn derive(manifest: &SourceManifest) -> Result<RpcManifest, String> {
         schema_version: MANIFEST_VERSION,
         rpc_transport_path: RPC_TRANSPORT_PATH,
         namespace: NAMESPACE,
-        source_manifest: SOURCE_MANIFEST,
-        source_manifest_version: manifest.version,
+        authority: Authority {
+            kind: "http_projection",
+            semantics: "unresolved",
+            comment: "Derived from the REST manifest, so this document is an HTTP projection, \
+                      not a semantic contract. It records which URL each operation is reachable \
+                      at. It does not record what an operation means, whether it streams, or \
+                      what its payload types are; those need a handlers-authoritative Contract \
+                      IR, which fiducia does not have yet. Fields whose value would be a guess \
+                      are omitted rather than defaulted.",
+        },
+        provenance: Provenance {
+            source_manifest: SOURCE_MANIFEST,
+            source_manifest_version: manifest.version,
+            source_manifest_sha256: sha256_hex(source_bytes),
+            generator: env!("CARGO_PKG_NAME"),
+            generator_version: env!("CARGO_PKG_VERSION"),
+            comment: "The generating commit is deliberately not embedded: it would make output \
+                      depend on git state rather than on the input bytes, and the determinism \
+                      gate would stop meaning anything. source_manifest_sha256 identifies the \
+                      input exactly, which is the property that matters.",
+        },
         comment: "Generated by `cargo run --manifest-path rpc/generator/Cargo.toml -- generate`. \
                   Every RPC operation projects exactly one REST operation from operations.json; \
                   edit that manifest and regenerate rather than editing this file.",
@@ -261,6 +314,17 @@ fn check_segment(label: &str, value: &str) -> Result<(), String> {
     } else {
         Err(format!("{label} {value:?} is not a valid rpc_key segment"))
     }
+}
+
+/// Lowercase hex SHA-256 of the exact input bytes.
+fn sha256_hex(source: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn canonical_json<T: Serialize>(value: &T) -> Result<String, String> {
@@ -321,6 +385,8 @@ fn run_check(root: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    const FIXTURE_SOURCE: &str = "{\"version\":3,\"operations\":[]}";
+
     fn fixture() -> SourceManifest {
         serde_json::from_value(serde_json::json!({
             "version": 3,
@@ -350,7 +416,7 @@ mod tests {
 
     #[test]
     fn keys_are_namespaced_and_sorted() {
-        let rpc = derive(&fixture()).expect("derives");
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
         let keys: Vec<&str> = rpc.operations.iter().map(|o| o.rpc_key.as_str()).collect();
         assert_eq!(
             keys,
@@ -361,13 +427,13 @@ mod tests {
     #[test]
     fn every_rest_operation_projects_to_exactly_one_rpc_operation() {
         let source = fixture();
-        let rpc = derive(&source).expect("derives");
+        let rpc = derive(&source, FIXTURE_SOURCE).expect("derives");
         assert_eq!(rpc.operations.len(), source.operations.len());
     }
 
     #[test]
     fn parameters_land_in_the_section_the_rest_manifest_declares() {
-        let rpc = derive(&fixture()).expect("derives");
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
         let acquire = &rpc.operations[0];
         assert_eq!(acquire.sections.body.len(), 2);
         assert!(acquire.sections.query.is_empty());
@@ -380,7 +446,7 @@ mod tests {
 
     #[test]
     fn an_unmarked_parameter_stays_required() {
-        let rpc = derive(&fixture()).expect("derives");
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
         let body = &rpc.operations[0].sections.body;
         assert!(body[0].required, "key is unmarked and must stay required");
         assert!(!body[1].required, "ttl_ms is explicitly optional");
@@ -388,7 +454,7 @@ mod tests {
 
     #[test]
     fn the_http_method_is_normalized_but_the_path_is_not() {
-        let rpc = derive(&fixture()).expect("derives");
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
         assert_eq!(rpc.operations[0].http.method, "POST");
         assert_eq!(rpc.operations[0].http.path, "/v1/locks/acquire");
     }
@@ -402,7 +468,7 @@ mod tests {
             ty: "string".to_owned(),
             required: None,
         });
-        let error = derive(&source).expect_err("header is not a declared section");
+        let error = derive(&source, FIXTURE_SOURCE).expect_err("header is not a declared section");
         assert!(error.contains("unsupported location"), "{error}");
     }
 
@@ -410,7 +476,7 @@ mod tests {
     fn a_duplicate_key_is_refused() {
         let mut source = fixture();
         source.operations[1].name = "lock_acquire".to_owned();
-        let error = derive(&source).expect_err("duplicate key");
+        let error = derive(&source, FIXTURE_SOURCE).expect_err("duplicate key");
         assert!(error.contains("duplicate rpc_key"), "{error}");
     }
 
@@ -418,20 +484,46 @@ mod tests {
     fn a_key_segment_that_breaks_the_grammar_is_refused() {
         let mut source = fixture();
         source.operations[0].group = "Locks".to_owned();
-        let error = derive(&source).expect_err("uppercase segment");
+        let error = derive(&source, FIXTURE_SOURCE).expect_err("uppercase segment");
         assert!(error.contains("not a valid rpc_key segment"), "{error}");
     }
 
     #[test]
     fn derivation_is_a_pure_function_of_its_input() {
-        let first = canonical_json(&derive(&fixture()).expect("derives")).expect("serializes");
-        let second = canonical_json(&derive(&fixture()).expect("derives")).expect("serializes");
+        let first = canonical_json(&derive(&fixture(), FIXTURE_SOURCE).expect("derives"))
+            .expect("serializes");
+        let second = canonical_json(&derive(&fixture(), FIXTURE_SOURCE).expect("derives"))
+            .expect("serializes");
         assert_eq!(first, second);
     }
 
     #[test]
-    fn every_operation_is_unary_until_a_streaming_one_is_declared() {
-        let rpc = derive(&fixture()).expect("derives");
-        assert!(rpc.operations.iter().all(|o| o.stream == "unary"));
+    fn streaming_mode_is_left_unresolved_rather_than_assumed_unary() {
+        // The REST manifest cannot establish this. Absence means unresolved.
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
+        assert!(rpc.operations.iter().all(|o| o.stream.is_none()));
+        assert_eq!(rpc.authority.semantics, "unresolved");
+        assert_eq!(rpc.authority.kind, "http_projection");
+    }
+
+    #[test]
+    fn provenance_identifies_the_exact_input_bytes() {
+        let rpc = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
+        assert_eq!(
+            rpc.provenance.source_manifest_sha256,
+            sha256_hex(FIXTURE_SOURCE)
+        );
+        assert_eq!(rpc.provenance.source_manifest_sha256.len(), 64);
+        assert_eq!(rpc.provenance.generator, env!("CARGO_PKG_NAME"));
+    }
+
+    #[test]
+    fn a_changed_source_manifest_changes_the_recorded_digest() {
+        let a = derive(&fixture(), FIXTURE_SOURCE).expect("derives");
+        let b = derive(&fixture(), "{\"version\":4,\"operations\":[]}").expect("derives");
+        assert_ne!(
+            a.provenance.source_manifest_sha256,
+            b.provenance.source_manifest_sha256
+        );
     }
 }

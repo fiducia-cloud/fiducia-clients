@@ -49,14 +49,35 @@ location is not one of those three is a hard error rather than a guess, so a new
 location (a header parameter, say) has to be designed rather than silently
 landing in the body.
 
-## Streaming
+## What this document is not
 
-Every operation is `unary` today — fiducia has no long-lived response
-operations. A watch-style operation (`lock_watch`, `election_watch`) would be
-declared `server_stream` here and would reach the *streaming* client surface,
-which terminates in `stream()` rather than `makeCall()`. The two surfaces are
-separate types in the shared clients; the `stream` field is what routes an
-operation to one or the other.
+It is an **HTTP projection**, not a semantic contract, and it says so in its own
+`authority` block. It records which URL each operation is reachable at. It does
+not record what an operation means, whether it streams, or what its payload
+types are.
+
+Those need a handlers-authoritative Contract IR, which fiducia does not have
+yet. Until then, fields whose value would be a guess are **omitted rather than
+defaulted** — most importantly `stream`.
+
+An earlier draft wrote `stream: "unary"` on all 69 operations. That was wrong:
+the REST manifest cannot establish it, because a single-response HTTP endpoint
+is exactly how a server-streaming operation looks before anyone declares it one.
+Writing "unary" turned an absence of evidence into a contract that clients would
+then rely on. A watch-style operation (`lock_watch`, `election_watch`) will be
+declared `server_stream` by that Contract IR when it exists, and will reach the
+*streaming* client surface, which terminates in `stream()` rather than
+`makeCall()`.
+
+## Provenance
+
+Every generated manifest records the SHA-256 of the exact `operations.json`
+bytes it was derived from, plus the generator name and version, so a manifest
+can be tied back to its input without trusting the commit it happens to sit on.
+
+The generating git commit is deliberately **not** embedded: it would make output
+depend on git state rather than input bytes, and the determinism gate would stop
+meaning anything.
 
 ## Envelope
 

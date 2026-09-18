@@ -230,3 +230,55 @@ fn the_surface_is_large_enough_to_be_worth_checking() {
         .collect();
     assert!(groups.len() >= 10, "expected many operation groups");
 }
+
+#[test]
+fn the_manifest_declares_itself_a_projection_with_unresolved_semantics() {
+    let rpc = json("rpc/operations.rpc.json");
+    assert_eq!(rpc["authority"]["kind"].as_str(), Some("http_projection"));
+    assert_eq!(rpc["authority"]["semantics"].as_str(), Some("unresolved"));
+
+    // Absence of `stream` is the point: the REST manifest cannot establish it,
+    // and defaulting to "unary" would turn missing evidence into a contract.
+    for operation in rpc["operations"].as_array().expect("operations") {
+        assert!(
+            operation.get("stream").is_none(),
+            "{} declares a streaming mode no authority has established",
+            operation["rpc_key"]
+        );
+    }
+}
+
+#[test]
+fn provenance_records_the_digest_of_the_real_source_manifest() {
+    use std::process::Command;
+
+    let rpc = json("rpc/operations.rpc.json");
+    let recorded = rpc["provenance"]["source_manifest_sha256"]
+        .as_str()
+        .expect("source_manifest_sha256");
+    assert_eq!(recorded.len(), 64, "expected a hex sha256");
+
+    // Compute it independently of the generator, so a bug in one is not
+    // validated by the same bug in the other.
+    let output = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(root().join("operations.json"))
+        .output()
+        .expect("shasum runs");
+    let actual = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .expect("digest")
+        .to_owned();
+    assert_eq!(
+        recorded, actual,
+        "the recorded digest does not match operations.json on disk"
+    );
+
+    assert_eq!(
+        rpc["provenance"]["source_manifest"].as_str(),
+        Some("operations.json")
+    );
+    assert!(rpc["provenance"]["generator"].as_str().is_some());
+    assert!(rpc["provenance"]["generator_version"].as_str().is_some());
+}
