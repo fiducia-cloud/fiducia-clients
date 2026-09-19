@@ -90,8 +90,12 @@ jobs:
   # carries only content identity — source_manifest_sha256, generator,
   # generator_version — and the repository, commit, workflow and builder identity
   # live in a signed attestation bound to the artifact's SHA-256 digest.
+  #
+  # Provenance is emitted only after BOTH the deterministic generator gate and
+  # the independent authored-contract gate pass. An attestation proves origin,
+  # not validity; do not mint one for bytes that failed admission.
   provenance:
-    needs: manifest
+    needs: [manifest, contract]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
