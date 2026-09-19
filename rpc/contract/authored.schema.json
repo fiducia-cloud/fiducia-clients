@@ -177,7 +177,7 @@
           "const": "operations.json"
         },
         "source_manifest_version": {
-          "type": "integer",
+          "type": "number",
           "const": 1,
           "description": "The projection contract v1 is defined against operations.json v1. A source-format version change requires an explicit generator/contract decision, not silent pass-through."
         },
