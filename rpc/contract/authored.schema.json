@@ -178,8 +178,8 @@
         },
         "source_manifest_version": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 2147483647
+          "const": 1,
+          "description": "The projection contract v1 is defined against operations.json v1. A source-format version change requires an explicit generator/contract decision, not silent pass-through."
         },
         "source_manifest_sha256": {
           "type": "string",
