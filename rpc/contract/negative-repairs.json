@@ -17,6 +17,9 @@
     "source-digest-not-sha256": {
       "field": "provenance"
     },
+    "source-manifest-version-unsupported": {
+      "field": "provenance"
+    },
     "generating-commit-embedded": {
       "field": "provenance"
     },
