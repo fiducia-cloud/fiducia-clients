@@ -1,14 +1,34 @@
-# Fiducia RPC (`/v1/rpc`)
+# Fiducia HTTP projection for `/v1/rpc`
 
 Fiducia's operations are reachable two ways: the existing REST endpoints, and a
-single RPC envelope endpoint at `POST /v1/rpc`. This directory holds the RPC
-contract.
+single RPC envelope endpoint at `POST /v1/rpc`. This directory holds a generated
+**HTTP projection** of those operations: which key names each one, and where it
+is reachable over plain HTTP.
 
-## RPC is a projection of REST, not a second surface
+**It is not the RPC contract, and nothing here is an RPC semantic authority.**
+The artifact says so itself — `authority.kind: "http_projection"`,
+`authority.semantics: "unresolved"` — and this page must not say more than the
+artifact does.
 
-Every RPC operation corresponds to exactly one REST operation in
-[`../operations.json`](../operations.json), which stays the authority. The RPC
-manifest is *derived* from it:
+## Two different questions, two different authorities
+
+| Question | Authority | Status |
+| --- | --- | --- |
+| Which REST operations exist, with what method, path and parameters? | [`../operations.json`](../operations.json) | Authoritative, for the REST surface and only for it. |
+| What does an RPC operation *mean* — request and response types, errors, auth, idempotency, whether it streams? | A handlers-authoritative ORES `OperationSpec` and the Contract IR admitted from it | **Does not exist for fiducia yet.** Nothing in this directory stands in for it. |
+
+`operations.json` is the authority for the first row. It is **not** an authority
+for the second, and an artifact derived from it cannot become one: a REST
+inventory cannot know that an operation streams, and a single-response endpoint
+is exactly how a server-streaming operation looks before it is declared one.
+Reading "derived from `operations.json`" as "`operations.json` defines the RPC
+surface" is the mistake this directory is built to prevent.
+
+When fiducia's handlers expose `OperationSpec`, the Contract IR becomes the
+semantic authority, and this projection becomes the HTTP side of a join by
+`rpc_key` that fails on any disagreement. It never becomes the semantic source.
+
+## Generated, not authored
 
 ```sh
 cargo run --manifest-path rpc/generator/Cargo.toml -- generate .   # write the manifest

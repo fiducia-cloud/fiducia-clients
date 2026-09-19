@@ -473,3 +473,31 @@ fn the_key_list_tjsv_validates_is_the_artifact_itself() {
         "TJSV would be validating a stale copy"
     );
 }
+
+/// The artifact is careful to call itself an HTTP projection with unresolved
+/// semantics. The prose around it has to be as careful: this README once said
+/// `operations.json` "stays the authority" and called the directory "the RPC
+/// contract", which is the reading — a REST-derived file as the RPC semantic
+/// source — that the artifact's own `authority` block exists to prevent.
+#[test]
+fn the_readme_claims_no_more_authority_than_the_artifact_does() {
+    let rpc = json("rpc/http-projection.json");
+    assert_eq!(rpc["authority"]["kind"], "http_projection");
+    assert_eq!(rpc["authority"]["semantics"], "unresolved");
+
+    let readme = std::fs::read_to_string(root().join("rpc/README.md")).expect("rpc/README.md");
+    let lowered = readme.to_lowercase();
+    for claim in [
+        "stays the authority",
+        "holds the rpc contract",
+        "the rpc contract.",
+    ] {
+        assert!(!lowered.contains(claim), "rpc/README.md claims {claim:?}");
+    }
+    for required in ["http projection", "unresolved", "not the rpc contract"] {
+        assert!(
+            lowered.contains(required),
+            "rpc/README.md no longer says {required:?}"
+        );
+    }
+}

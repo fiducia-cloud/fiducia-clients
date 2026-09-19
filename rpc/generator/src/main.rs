@@ -4,7 +4,7 @@
 //! second hand-maintained surface. Every RPC operation corresponds to exactly
 //! one REST operation and carries its HTTP projection as evidence, so the two
 //! cannot drift: regenerating after any change to `operations.json` is the only
-//! way to change the RPC manifest, and `check` fails when the committed copy is
+//! way to change the HTTP projection, and `check` fails when the committed copy is
 //! stale.
 //!
 //! ```text
@@ -228,7 +228,7 @@ fn artifacts(root: &Path) -> Result<BTreeMap<String, String>, String> {
     out.insert(RPC_MANIFEST.to_owned(), projection);
     let key_list = canonical_json(&serde_json::json!({
         "$comment": "Generated from operations.json. Client SDKs import this list so an \
-                     operation absent from the contract cannot be called.",
+                     operation absent from the projection cannot be called. A key list, not a contract: it says which keys exist, not what they mean.",
         "schema_version": MANIFEST_VERSION,
         "rpc_transport_path": RPC_TRANSPORT_PATH,
         "operation_keys": keys,
@@ -476,7 +476,7 @@ fn run_check(root: &Path) -> Result<String, String> {
     }
     if !drifted.is_empty() {
         return Err(format!(
-            "committed RPC manifest is stale; re-run `generate`:\n  {}",
+            "committed HTTP projection is stale; re-run `generate`:\n  {}",
             drifted.join("\n  ")
         ));
     }

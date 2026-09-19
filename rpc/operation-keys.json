@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from operations.json. Client SDKs import this list so an operation absent from the contract cannot be called.",
+  "$comment": "Generated from operations.json. Client SDKs import this list so an operation absent from the projection cannot be called. A key list, not a contract: it says which keys exist, not what they mean.",
   "operation_keys": [
     "fiducia.barriers.barrier_arrive",
     "fiducia.barriers.barrier_create",
