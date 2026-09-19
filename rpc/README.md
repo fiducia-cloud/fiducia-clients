@@ -17,7 +17,7 @@ cargo run --manifest-path rpc/generator/Cargo.toml -- check .      # determinism
 
 No network, no clock, no model — output is a pure function of the input bytes.
 Adding an operation means editing `operations.json` and regenerating; editing
-`operations.rpc.json` by hand is caught by CI.
+`http-projection.json` by hand is caught by CI.
 
 This is the whole point of the arrangement. A hand-maintained RPC surface beside
 a hand-maintained REST surface drifts within weeks, and the drift is invisible
@@ -25,9 +25,33 @@ until a client calls something that no longer exists.
 
 | File | What it is |
 | --- | --- |
-| `operations.rpc.json` | Generated. All 69 operations: key, sections, HTTP projection. |
+| `http-projection.json` | Generated. All 69 operations: key, sections, HTTP projection. Was `operations.rpc.json`, a name that read as "the RPC operations" — the semantic contract this document explicitly is not. |
 | `operation-keys.json` | Generated. Flat key list for client SDKs to import. |
-| `bin/` | The Rust generator and its conformance tests. |
+| `generator/` | The Rust generator and its conformance tests. |
+| `contract/` | The authored contract for the *format* of the two generated files: `main.tsp` and `authored.schema.json`, independent peers compared by TJSV. The generator files its output under `contract/instances/` so TJSV validates the real artifacts against both. |
+
+## What the generator refuses
+
+The projection can be "69 of 69" and still be wrong, so the generator validates
+what it copies rather than only copying it:
+
+- **An HTTP method outside a closed set.** Uppercasing whatever the manifest
+  said would emit `POTS`.
+- **A path that is not absolute, or whose `{placeholders}` are not exactly the
+  parameters declared `in: path`.** Either way the operation is unroutable. A
+  path parameter marked optional is refused too: a segment cannot be omitted.
+- **A parameter name declared twice in one operation,** in the same section or
+  across two. Each section would be well formed and the envelope ambiguous.
+- **A field in `operations.json` it does not know.** This one is here because of
+  a bug. The manifest marks optionality as `optional: true`. The generator read
+  a `required` field the manifest has never had, defaulted it to `true`, and
+  serde silently dropped the real field — so all 63 optional parameters were
+  projected as required, while every check reported 69 of 69. The unit test
+  that should have caught it used `"required": false` in its fixture, a
+  spelling invented to match the code. The source structs now deny unknown
+  fields, a conformance test compares every parameter's optionality with the
+  real manifest, and another pins the rule to the one `generate.py` applies
+  (`x.get("optional")`), since the two read the same file.
 
 ## Keys
 
@@ -93,7 +117,7 @@ given manifest is recoverable without any of it leaking into the manifest
 itself:
 
 ```sh
-gh attestation verify rpc/operations.rpc.json --repo fiducia-cloud/fiducia-clients
+gh attestation verify rpc/http-projection.json --repo fiducia-cloud/fiducia-clients
 ```
 
 ## Envelope

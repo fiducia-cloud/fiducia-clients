@@ -40,12 +40,12 @@
           {
             "name": "weight",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "veto",
             "type": "bool",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -74,12 +74,12 @@
           {
             "name": "expected",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "deadline_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -262,12 +262,12 @@
           {
             "name": "value",
             "type": "object",
-            "required": true
+            "required": false
           },
           {
             "name": "confidence",
             "type": "number",
-            "required": true
+            "required": false
           },
           {
             "name": "author",
@@ -277,12 +277,12 @@
           {
             "name": "evidence",
             "type": "object",
-            "required": true
+            "required": false
           },
           {
             "name": "valid_until_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -311,7 +311,7 @@
           {
             "name": "reason",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -431,7 +431,7 @@
           {
             "name": "prev_revision",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -479,7 +479,7 @@
           {
             "name": "prev_revision",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -548,7 +548,7 @@
           {
             "name": "fired_at_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -579,22 +579,22 @@
           {
             "name": "cron",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "one_shot_at_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "delivery",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "max_retries",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -652,7 +652,7 @@
           {
             "name": "deadline_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -681,27 +681,27 @@
           {
             "name": "option",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "confidence",
             "type": "number",
-            "required": true
+            "required": false
           },
           {
             "name": "weight",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "veto",
             "type": "bool",
-            "required": true
+            "required": false
           },
           {
             "name": "evidence",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -756,7 +756,7 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -782,7 +782,7 @@
           {
             "name": "metadata",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -823,7 +823,7 @@
           {
             "name": "metadata",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -890,7 +890,7 @@
           {
             "name": "result",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -938,12 +938,12 @@
           {
             "name": "payload",
             "type": "object",
-            "required": true
+            "required": false
           },
           {
             "name": "risk",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "idempotency_key",
@@ -953,7 +953,7 @@
           {
             "name": "required_approvals",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -989,7 +989,7 @@
           {
             "name": "metadata",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1157,12 +1157,12 @@
           {
             "name": "context",
             "type": "object",
-            "required": true
+            "required": false
           },
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1210,22 +1210,22 @@
           {
             "name": "owner",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "ttl",
             "type": "string",
-            "required": true
+            "required": false
           },
           {
             "name": "metadata",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1259,7 +1259,7 @@
           {
             "name": "result",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1347,17 +1347,17 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "prev_revision",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "plaintext",
             "type": "bool",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1386,22 +1386,22 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "wait",
             "type": "bool",
-            "required": true
+            "required": false
           },
           {
             "name": "wait_timeout_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "request_id",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1430,22 +1430,22 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "wait",
             "type": "bool",
-            "required": true
+            "required": false
           },
           {
             "name": "wait_timeout_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "request_id",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1474,7 +1474,7 @@
           {
             "name": "request_id",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1619,12 +1619,12 @@
           {
             "name": "refill_per_second",
             "type": "number",
-            "required": true
+            "required": false
           },
           {
             "name": "cost",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1682,22 +1682,22 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "wait",
             "type": "bool",
-            "required": true
+            "required": false
           },
           {
             "name": "wait_timeout_ms",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "request_id",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1726,7 +1726,7 @@
           {
             "name": "request_id",
             "type": "string",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1856,7 +1856,7 @@
           {
             "name": "ttl_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1890,7 +1890,7 @@
           {
             "name": "result",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1919,12 +1919,12 @@
           {
             "name": "payload",
             "type": "object",
-            "required": true
+            "required": false
           },
           {
             "name": "deadline_ms",
             "type": "int",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -1958,7 +1958,7 @@
           {
             "name": "retryable",
             "type": "bool",
-            "required": true
+            "required": false
           }
         ]
       },
@@ -2011,12 +2011,12 @@
           {
             "name": "percent",
             "type": "int",
-            "required": true
+            "required": false
           },
           {
             "name": "checkpoint",
             "type": "object",
-            "required": true
+            "required": false
           }
         ]
       },

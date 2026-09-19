@@ -8,7 +8,7 @@
 //! stale.
 //!
 //! ```text
-//! fiducia-rpc-manifest generate [repo-root]   # write rpc/operations.rpc.json
+//! fiducia-rpc-manifest generate [repo-root]   # write rpc/http-projection.json
 //! fiducia-rpc-manifest check    [repo-root]   # determinism + staleness, no writes
 //! ```
 //!
@@ -27,16 +27,33 @@ const NAMESPACE: &str = "fiducia";
 const MANIFEST_VERSION: u32 = 1;
 
 const SOURCE_MANIFEST: &str = "operations.json";
-const RPC_MANIFEST: &str = "rpc/operations.rpc.json";
+/// Named for what it is. It was `operations.rpc.json`, which reads as "the RPC
+/// operations" — the semantic contract this document explicitly is not.
+const RPC_MANIFEST: &str = "rpc/http-projection.json";
+/// The same bytes again, filed where TJSV validates them against the authored
+/// TypeSpec and JSON Schema peers of this format on every run.
+const RPC_MANIFEST_INSTANCE: &str =
+    "rpc/contract/instances/HttpProjectionManifest/valid/generated.json";
+
+const OPERATION_KEYS_INSTANCE: &str =
+    "rpc/contract/instances/OperationKeyList/valid/generated.json";
+
+/// Every method an HTTP projection may name. A closed set: uppercasing whatever
+/// the source says would happily emit `POTS`.
+const HTTP_METHODS: &[&str] = &["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"];
 const OPERATION_KEYS: &str = "rpc/operation-keys.json";
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceManifest {
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde_json::Value>,
     version: u32,
     operations: Vec<SourceOperation>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceOperation {
     name: String,
     group: String,
@@ -48,15 +65,26 @@ struct SourceOperation {
     doc: Option<String>,
 }
 
+/// One REST parameter, exactly as `operations.json` spells it.
+///
+/// Unknown fields are refused. This struct used to read a `required` field that
+/// the manifest has never had, default it to `true`, and silently ignore the
+/// `optional` field the manifest actually uses — so all 63 optional parameters
+/// were projected as required. serde dropped `optional` without a word because
+/// nothing told it not to.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceParam {
     name: String,
     #[serde(rename = "in")]
     location: String,
     #[serde(rename = "type")]
     ty: String,
+    /// `true` marks the parameter optional; absent means required. The same
+    /// rule generate.py applies (`x.get("optional")`), pinned by a conformance
+    /// test against the real manifest.
     #[serde(default)]
-    required: Option<bool>,
+    optional: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,17 +223,18 @@ fn artifacts(root: &Path) -> Result<BTreeMap<String, String>, String> {
         .collect();
 
     let mut out = BTreeMap::new();
-    out.insert(RPC_MANIFEST.to_owned(), canonical_json(&rpc)?);
-    out.insert(
-        OPERATION_KEYS.to_owned(),
-        canonical_json(&serde_json::json!({
-            "$comment": "Generated from operations.json. Client SDKs import this list so an \
-                         operation absent from the contract cannot be called.",
-            "schema_version": MANIFEST_VERSION,
-            "rpc_transport_path": RPC_TRANSPORT_PATH,
-            "operation_keys": keys,
-        }))?,
-    );
+    let projection = canonical_json(&rpc)?;
+    out.insert(RPC_MANIFEST_INSTANCE.to_owned(), projection.clone());
+    out.insert(RPC_MANIFEST.to_owned(), projection);
+    let key_list = canonical_json(&serde_json::json!({
+        "$comment": "Generated from operations.json. Client SDKs import this list so an \
+                     operation absent from the contract cannot be called.",
+        "schema_version": MANIFEST_VERSION,
+        "rpc_transport_path": RPC_TRANSPORT_PATH,
+        "operation_keys": keys,
+    }))?;
+    out.insert(OPERATION_KEYS_INSTANCE.to_owned(), key_list.clone());
+    out.insert(OPERATION_KEYS.to_owned(), key_list);
     Ok(out)
 }
 
@@ -222,8 +251,27 @@ fn derive(manifest: &SourceManifest, source_bytes: &str) -> Result<RpcManifest, 
             return Err(format!("duplicate rpc_key {rpc_key}"));
         }
 
+        let method = source.method.to_ascii_uppercase();
+        if !HTTP_METHODS.contains(&method.as_str()) {
+            return Err(format!(
+                "{rpc_key}: {:?} is not an HTTP method ({})",
+                source.method,
+                HTTP_METHODS.join(", ")
+            ));
+        }
+        let placeholders = path_placeholders(&rpc_key, &source.path)?;
+
         let mut sections = Sections::default();
+        let mut names: BTreeSet<&str> = BTreeSet::new();
         for param in &source.params {
+            // One name, one place. The same name in two sections makes the RPC
+            // envelope ambiguous even though each section is well formed.
+            if !names.insert(param.name.as_str()) {
+                return Err(format!(
+                    "{rpc_key}: parameter {:?} is declared more than once",
+                    param.name
+                ));
+            }
             // A parameter with no declared location cannot be placed, and
             // guessing would silently move data between sections.
             let field = Field {
@@ -231,7 +279,7 @@ fn derive(manifest: &SourceManifest, source_bytes: &str) -> Result<RpcManifest, 
                 ty: param.ty.clone(),
                 // The REST manifest marks optional params explicitly; anything
                 // unmarked has always been required by the existing clients.
-                required: param.required.unwrap_or(true),
+                required: !param.optional.unwrap_or(false),
             };
             match param.location.as_str() {
                 "path" => sections.path.push(field),
@@ -248,13 +296,31 @@ fn derive(manifest: &SourceManifest, source_bytes: &str) -> Result<RpcManifest, 
         // Field order follows the REST manifest, which is the reviewed order.
         // Only the section split is derived.
 
+        // The path template and the path section must describe the same
+        // variables, or the projection is "69 of 69" and still unroutable.
+        let declared: BTreeSet<&str> = sections.path.iter().map(|f| f.name.as_str()).collect();
+        let templated: BTreeSet<&str> = placeholders.iter().map(String::as_str).collect();
+        if declared != templated {
+            return Err(format!(
+                "{rpc_key}: path {:?} has placeholders {templated:?} but the parameters \
+                 declared `in: path` are {declared:?}",
+                source.path
+            ));
+        }
+        if let Some(optional) = sections.path.iter().find(|field| !field.required) {
+            return Err(format!(
+                "{rpc_key}: path parameter {:?} is optional, but a path segment cannot be omitted",
+                optional.name
+            ));
+        }
+
         operations.push(RpcOperation {
             rpc_key,
             group: source.group.clone(),
             name: source.name.clone(),
             stream: None,
             http: HttpProjection {
-                method: source.method.to_ascii_uppercase(),
+                method,
                 path: source.path.clone(),
             },
             sections,
@@ -294,6 +360,45 @@ fn derive(manifest: &SourceManifest, source_bytes: &str) -> Result<RpcManifest, 
                   edit that manifest and regenerate rather than editing this file.",
         operations,
     })
+}
+
+/// The `{name}` placeholders of an absolute path template, in order.
+fn path_placeholders(rpc_key: &str, path: &str) -> Result<Vec<String>, String> {
+    if !path.starts_with('/') {
+        return Err(format!("{rpc_key}: path {path:?} is not absolute"));
+    }
+    let mut found = Vec::new();
+    let mut rest = path;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .ok_or_else(|| format!("{rpc_key}: path {path:?} has an unclosed placeholder"))?;
+        let name = &after[..close];
+        let well_formed = name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !well_formed {
+            return Err(format!(
+                "{rpc_key}: path {path:?} has a malformed placeholder {{{name}}}"
+            ));
+        }
+        if found.iter().any(|seen| seen == name) {
+            return Err(format!(
+                "{rpc_key}: path {path:?} repeats placeholder {{{name}}}"
+            ));
+        }
+        found.push(name.to_owned());
+        rest = &after[close + 1..];
+    }
+    if rest.contains('}') {
+        return Err(format!(
+            "{rpc_key}: path {path:?} has an unopened placeholder"
+        ));
+    }
+    Ok(found)
 }
 
 /// rpc_key segments must satisfy the shared key grammar, which is lowercase
@@ -399,7 +504,7 @@ mod tests {
                     "doc": "Acquire a lock.",
                     "params": [
                         { "name": "key", "in": "body", "type": "string" },
-                        { "name": "ttl_ms", "in": "body", "type": "integer", "required": false }
+                        { "name": "ttl_ms", "in": "body", "type": "integer", "optional": true }
                     ]
                 },
                 {
@@ -466,10 +571,102 @@ mod tests {
             name: "x_trace".to_owned(),
             location: "header".to_owned(),
             ty: "string".to_owned(),
-            required: None,
+            optional: None,
         });
         let error = derive(&source, FIXTURE_SOURCE).expect_err("header is not a declared section");
         assert!(error.contains("unsupported location"), "{error}");
+    }
+
+    fn param(name: &str, location: &str) -> SourceParam {
+        SourceParam {
+            name: name.to_owned(),
+            location: location.to_owned(),
+            ty: "string".to_owned(),
+            optional: None,
+        }
+    }
+
+    /// Each case changes ONE thing in a fixture that derives cleanly, so the
+    /// refusal can only be about that thing.
+    #[test]
+    fn a_projection_that_could_not_be_routed_is_refused() {
+        derive(&fixture(), FIXTURE_SOURCE).expect("the premise: unchanged, it derives");
+
+        type Edit = fn(&mut SourceManifest);
+        let cases: [(&str, Edit, &str); 8] = [
+            (
+                "a typo for a method",
+                |s| s.operations[0].method = "POTS".to_owned(),
+                "is not an HTTP method",
+            ),
+            (
+                "a relative path",
+                |s| s.operations[0].path = "v1/locks/acquire".to_owned(),
+                "is not absolute",
+            ),
+            (
+                "a placeholder with no path parameter",
+                |s| s.operations[0].path = "/v1/locks/{id}/acquire".to_owned(),
+                "has placeholders",
+            ),
+            (
+                "a path parameter with no placeholder",
+                |s| s.operations[0].params.push(param("id", "path")),
+                "has placeholders",
+            ),
+            (
+                "an unclosed placeholder",
+                |s| s.operations[0].path = "/v1/locks/{id".to_owned(),
+                "unclosed placeholder",
+            ),
+            (
+                "the same name in two sections",
+                |s| s.operations[0].params.push(param("key", "query")),
+                "declared more than once",
+            ),
+            (
+                "the same name twice in one section",
+                |s| s.operations[0].params.push(param("key", "body")),
+                "declared more than once",
+            ),
+            (
+                "an optional path segment",
+                |s| {
+                    s.operations[0].path = "/v1/locks/{id}".to_owned();
+                    let mut id = param("id", "path");
+                    id.optional = Some(true);
+                    s.operations[0].params.push(id);
+                },
+                "cannot be omitted",
+            ),
+        ];
+        for (why, edit, expected) in cases {
+            let mut source = fixture();
+            edit(&mut source);
+            let error = derive(&source, FIXTURE_SOURCE).expect_err(why);
+            assert!(error.contains(expected), "{why}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_path_parameter_and_its_placeholder_agree() {
+        let mut source = fixture();
+        source.operations[1].path = "/v1/locks/{lock_id}".to_owned();
+        source.operations[1].params.push(param("lock_id", "path"));
+        let rpc = derive(&source, FIXTURE_SOURCE).expect("agreeing template and parameter");
+        assert_eq!(rpc.operations[1].sections.path[0].name, "lock_id");
+    }
+
+    #[test]
+    fn a_field_the_source_model_does_not_know_is_refused_not_dropped() {
+        // How the `optional` bug survived: the struct read a `required` field
+        // the manifest never had, and serde dropped the real one silently.
+        let error = serde_json::from_value::<SourceParam>(serde_json::json!({
+            "name": "ttl_ms", "in": "body", "type": "integer", "required": false
+        }))
+        .expect_err("an unknown spelling must not be ignored")
+        .to_string();
+        assert!(error.contains("unknown field `required`"), "{error}");
     }
 
     #[test]
