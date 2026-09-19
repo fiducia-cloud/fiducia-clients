@@ -1,0 +1,149 @@
+import "@typespec/json-schema";
+using TypeSpec.JsonSchema;
+
+/// The FORMAT of fiducia's generated HTTP projection (`rpc/http-projection.json`)
+/// and operation key list (`rpc/operation-keys.json`).
+///
+/// This is a contract for a piece of evidence, not for RPC semantics. The
+/// projection is generated from `operations.json` and says only where each
+/// operation is reachable over HTTP. Downstream SDK tooling reads it, so its
+/// shape must not be defined solely by whatever one Rust serializer happens to
+/// emit: this file and `authored.schema.json` are independently authored peers,
+/// compared by TJSV, and the generated artifact is validated against both.
+namespace Fiducia.Rpc.HttpProjection.V1;
+
+/// A closed set. The generator refuses anything else rather than uppercasing a
+/// typo into the artifact.
+enum HttpMethod {
+  DELETE,
+  GET,
+  HEAD,
+  OPTIONS,
+  PATCH,
+  POST,
+  PUT,
+}
+
+/// Parameter types as `operations.json` spells them.
+enum ParamType {
+  boolean: "bool",
+  integer: "int",
+  number: "number",
+  object: "object",
+  string: "string",
+  stringArray: "string[]",
+}
+
+/// One request field.
+model ProjectionField {
+  @minLength(1)
+  name: string;
+
+  type: ParamType;
+
+  /// False exactly when `operations.json` marks the parameter `optional: true`.
+  required: boolean;
+}
+
+/// Request fields, split by where the REST operation carries them. A section
+/// with no fields is omitted, never emitted empty.
+model ProjectionSections {
+  @minItems(1)
+  path?: ProjectionField[];
+
+  @minItems(1)
+  query?: ProjectionField[];
+
+  @minItems(1)
+  body?: ProjectionField[];
+}
+
+/// Where the operation is reachable over plain HTTP.
+model HttpRoute {
+  method: HttpMethod;
+
+  /// Absolute path template. `{name}` placeholders correspond one to one with
+  /// the `path` section; the generator enforces that, a schema cannot.
+  @pattern("^/")
+  path: string;
+}
+
+/// One projected operation.
+///
+/// Deliberately has NO `stream`, idempotency, auth or payload-type field. The
+/// REST manifest cannot establish any of them, and this model is sealed, so a
+/// generator that started guessing one would fail validation rather than
+/// quietly publish it.
+model ProjectedOperation {
+  @pattern("^fiducia\\.[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_-]*$")
+  rpc_key: string;
+
+  @pattern("^[a-z][a-z0-9_-]*$")
+  group: string;
+
+  @pattern("^[a-z][a-z0-9_-]*$")
+  name: string;
+
+  http: HttpRoute;
+  sections: ProjectionSections;
+  doc?: string;
+}
+
+/// What stands behind the document, and what therefore does not.
+model ProjectionAuthority {
+  kind: "http_projection";
+
+  /// The only admitted value. When fiducia has a handlers-authoritative
+  /// Contract IR, that is a new artifact with its own contract, not a new value
+  /// here.
+  semantics: "unresolved";
+
+  `$comment`: string;
+}
+
+/// Content identity: which input bytes produced these bytes. The generating
+/// commit is NOT here; it lives in a signed attestation about the artifact.
+model ProjectionProvenance {
+  source_manifest: "operations.json";
+
+  @minValue(1)
+  source_manifest_version: int32;
+
+  @pattern("^[0-9a-f]{64}$")
+  source_manifest_sha256: string;
+
+  @minLength(1)
+  generator: string;
+
+  @pattern("^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  generator_version: string;
+
+  `$comment`: string;
+}
+
+/// `rpc/http-projection.json`.
+model HttpProjectionManifest {
+  schema_version: 1;
+  rpc_transport_path: "/v1/rpc";
+  `namespace`: "fiducia";
+  authority: ProjectionAuthority;
+  provenance: ProjectionProvenance;
+  `$comment`: string;
+
+  @minItems(1)
+  operations: ProjectedOperation[];
+}
+
+/// `rpc/operation-keys.json`.
+model OperationKeyList {
+  `$comment`: string;
+  schema_version: 1;
+  rpc_transport_path: "/v1/rpc";
+
+  @minItems(1)
+  @uniqueItems
+  operation_keys: OperationKey[];
+}
+
+@pattern("^fiducia\\.[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_-]*$")
+scalar OperationKey extends string;

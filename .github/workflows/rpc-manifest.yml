@@ -1,0 +1,151 @@
+name: rpc-manifest
+
+# The /v1/rpc operation manifest is derived from operations.json, never authored.
+# This gate fails when the committed manifest is stale, when derivation stops
+# being deterministic, or when the projection loses, invents, or misplaces an
+# operation or parameter.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-manifest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact reviewed head
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - working-directory: rpc/generator
+        run: cargo fmt --all -- --check
+      - working-directory: rpc/generator
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - working-directory: rpc/generator
+        run: cargo test --all-targets --all-features --locked
+      # Regenerating must not change a byte. Running `check` separately from the
+      # test suite keeps the staleness failure readable in the job log.
+      - name: The committed manifest is current
+        run: cargo run --locked --manifest-path rpc/generator/Cargo.toml -- check .
+      - name: Regeneration leaves the tree clean
+        run: |
+          cargo run --locked --manifest-path rpc/generator/Cargo.toml -- generate .
+          if ! git diff --quiet -- rpc/http-projection.json rpc/operation-keys.json rpc/contract/instances; then
+            echo "::error::regenerating the HTTP projection changed the committed artifacts"
+            git --no-pager diff -- rpc/http-projection.json rpc/operation-keys.json rpc/contract/instances
+            exit 1
+          fi
+
+  # The artifact's FORMAT has independently authored TypeSpec and JSON Schema
+  # peers. TJSV compares them, then validates the generated artifacts against
+  # both (they are filed under instances/ by the generator, and the conformance
+  # test proves those copies are the artifacts, byte for byte). Without this the
+  # shape downstream SDK tooling depends on is whatever one Rust serializer
+  # happens to emit.
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.16.0"
+          package-manager-cache: false
+      - name: Compare the authored peers and validate the generated artifacts
+        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
+        with:
+          typespec: rpc/contract/main.tsp
+          schema: rpc/contract/authored.schema.json
+          instances: rpc/contract/instances
+          report: .typespec-json-schema-validator/rpc-projection-report.json
+          int64_strategy: string
+          seal_object_schemas: "true"
+
+  # Commit and build provenance is recorded ABOUT the artifact, never inside it.
+  #
+  # Embedding the generating commit in http-projection.json would make the output
+  # depend on git state rather than on its input bytes: the artifact would change
+  # on every unrelated commit, the staleness check above would fail constantly,
+  # and the determinism check would stop meaning anything. The manifest therefore
+  # carries only content identity — source_manifest_sha256, generator,
+  # generator_version — and the repository, commit, workflow and builder identity
+  # live in a signed attestation bound to the artifact's SHA-256 digest.
+  provenance:
+    needs: manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Attest the generated HTTP projection
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            rpc/http-projection.json
+            rpc/operation-keys.json
+
+  # Emitting an attestation proves nothing until something verifies one. This
+  # runs after the attestation above exists and fails if it cannot be verified
+  # against this repository, so provenance is tested end to end on every push to
+  # main rather than assumed from a green "attest" step.
+  verify-provenance:
+    needs: provenance
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: The attestation verifies against this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for artifact in rpc/http-projection.json rpc/operation-keys.json; do
+            gh attestation verify "$artifact" --repo "${{ github.repository }}"
+          done
+      - name: A tampered artifact does NOT verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The twin that makes the step above mean something: one byte changed,
+          # same command, and it has to fail.
+          cp rpc/http-projection.json "$RUNNER_TEMP/tampered.json"
+          printf ' ' >> "$RUNNER_TEMP/tampered.json"
+          if gh attestation verify "$RUNNER_TEMP/tampered.json" --repo "${{ github.repository }}"; then
+            echo "::error::a modified artifact verified; the attestation is not binding the bytes"
+            exit 1
+          fi
