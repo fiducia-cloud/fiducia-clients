@@ -15,6 +15,7 @@ GitHub Actions pipelines for the multi-language client monorepo.
   terminal. The live loopback server exercises real browser fetch redirect
   behavior, AbortController timeouts, Web Crypto holder generation, marked
   not-leader retries with a stable idempotency key, and SSE stream decoding.
+- `rpc-manifest.yml` — derives the `/v1/rpc` operation manifest from `operations.json` and fails when the committed copy is stale, when derivation stops being deterministic, or when the projection loses, invents, or misplaces an operation or parameter. The RPC surface is generated, never authored.
 - `cli-flags.yml` — audits `.cli-flags.toml` against the pinned `flags-2-env` tool whenever the CLI flag config (or its submodule/wrapper) changes.
 - `client-packaging.yml` — hard-gates each supported client's publishable
   artifact rather than its repo-relative source; a failure in any language

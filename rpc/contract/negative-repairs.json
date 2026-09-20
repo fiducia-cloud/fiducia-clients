@@ -1,0 +1,40 @@
+{
+  "$comment": "Every instances/HttpProjectionManifest/invalid/<name>.json differs from valid/minimal.json — a document both authorities accept — in exactly the one top-level field named here. TJSV proves the verdicts on both authorities; the generator conformance test proves the difference is confined to the field. So each negative is rejected for the rule in its name and for nothing else.",
+  "model": "HttpProjectionManifest",
+  "repairs": {
+    "stream-asserted-from-rest-metadata": {
+      "field": "operations"
+    },
+    "semantics-claimed-resolved": {
+      "field": "authority"
+    },
+    "method-outside-the-closed-set": {
+      "field": "operations"
+    },
+    "relative-http-path": {
+      "field": "operations"
+    },
+    "source-digest-not-sha256": {
+      "field": "provenance"
+    },
+    "source-manifest-version-unsupported": {
+      "field": "provenance"
+    },
+    "generating-commit-embedded": {
+      "field": "provenance"
+    },
+    "empty-section-emitted": {
+      "field": "operations"
+    },
+    "required-missing-from-a-field": {
+      "field": "operations"
+    },
+    "rpc-key-outside-the-namespace": {
+      "field": "operations"
+    },
+    "no-operations": {
+      "field": "operations"
+    }
+  },
+  "accepted": "valid/minimal.json"
+}

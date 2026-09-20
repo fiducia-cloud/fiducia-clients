@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fiducia.cloud/schemas/rpc/http-projection/v1",
+  "title": "Fiducia HTTP projection format v1",
+  "description": "The FORMAT of fiducia's generated HTTP projection and operation key list. A contract for a piece of evidence, not for RPC semantics. Independently authored peer of main.tsp; TJSV compares the two and validates the generated artifact against both.",
+  "$defs": {
+    "HttpMethod": {
+      "type": "string",
+      "enum": [
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "description": "A closed set. The generator refuses anything else rather than uppercasing a typo into the artifact."
+    },
+    "ParamType": {
+      "type": "string",
+      "enum": [
+        "bool",
+        "int",
+        "number",
+        "object",
+        "string",
+        "string[]"
+      ],
+      "description": "Parameter types as operations.json spells them."
+    },
+    "ProjectionField": {
+      "type": "object",
+      "description": "One request field.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/$defs/ParamType"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "False exactly when operations.json marks the parameter optional: true."
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "required"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "ProjectionSections": {
+      "type": "object",
+      "description": "Request fields, split by where the REST operation carries them. A section with no fields is omitted, never emitted empty.",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectionField"
+          },
+          "minItems": 1
+        },
+        "query": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectionField"
+          },
+          "minItems": 1
+        },
+        "body": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectionField"
+          },
+          "minItems": 1
+        }
+      },
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "HttpRoute": {
+      "type": "object",
+      "description": "Where the operation is reachable over plain HTTP.",
+      "properties": {
+        "method": {
+          "$ref": "#/$defs/HttpMethod"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Absolute path template. {name} placeholders correspond one to one with the path section; the generator enforces that, a schema cannot."
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "ProjectedOperation": {
+      "type": "object",
+      "description": "One projected operation. Deliberately has NO stream, idempotency, auth or payload-type field: the REST manifest cannot establish any of them, and this object is sealed, so a generator that started guessing one fails validation rather than quietly publishing it.",
+      "properties": {
+        "rpc_key": {
+          "type": "string",
+          "pattern": "^fiducia\\.[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_-]*$"
+        },
+        "group": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "http": {
+          "$ref": "#/$defs/HttpRoute"
+        },
+        "sections": {
+          "$ref": "#/$defs/ProjectionSections"
+        },
+        "doc": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rpc_key",
+        "group",
+        "name",
+        "http",
+        "sections"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "ProjectionAuthority": {
+      "type": "object",
+      "description": "What stands behind the document, and what therefore does not.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "http_projection"
+        },
+        "semantics": {
+          "type": "string",
+          "const": "unresolved",
+          "description": "The only admitted value. A handlers-authoritative Contract IR is a new artifact with its own contract, not a new value here."
+        },
+        "$comment": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "semantics",
+        "$comment"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "ProjectionProvenance": {
+      "type": "object",
+      "description": "Content identity: which input bytes produced these bytes. The generating commit is NOT here; it lives in a signed attestation about the artifact.",
+      "properties": {
+        "source_manifest": {
+          "type": "string",
+          "const": "operations.json"
+        },
+        "source_manifest_version": {
+          "type": "number",
+          "const": 1,
+          "description": "The projection contract v1 is defined against operations.json v1. A source-format version change requires an explicit generator/contract decision, not silent pass-through."
+        },
+        "source_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "generator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generator_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "$comment": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_manifest",
+        "source_manifest_version",
+        "source_manifest_sha256",
+        "generator",
+        "generator_version",
+        "$comment"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "HttpProjectionManifest": {
+      "type": "object",
+      "description": "rpc/http-projection.json.",
+      "properties": {
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "rpc_transport_path": {
+          "type": "string",
+          "const": "/v1/rpc"
+        },
+        "namespace": {
+          "type": "string",
+          "const": "fiducia"
+        },
+        "authority": {
+          "$ref": "#/$defs/ProjectionAuthority"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ProjectionProvenance"
+        },
+        "$comment": {
+          "type": "string"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectedOperation"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "rpc_transport_path",
+        "namespace",
+        "authority",
+        "provenance",
+        "$comment",
+        "operations"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    },
+    "OperationKey": {
+      "type": "string",
+      "pattern": "^fiducia\\.[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_-]*$"
+    },
+    "OperationKeyList": {
+      "type": "object",
+      "description": "rpc/operation-keys.json.",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "number",
+          "const": 1
+        },
+        "rpc_transport_path": {
+          "type": "string",
+          "const": "/v1/rpc"
+        },
+        "operation_keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OperationKey"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "$comment",
+        "schema_version",
+        "rpc_transport_path",
+        "operation_keys"
+      ],
+      "unevaluatedProperties": {
+        "not": {}
+      }
+    }
+  }
+}
