@@ -59,7 +59,7 @@ jobs:
           python-version: "3.12"
 
       - name: Generate comparison witness and Contract IR with current reviewed TJSV
-        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
+        uses: ORESoftware/typespec-json-schema-validator@69337efc11ba4ecaa90b48878c942384fc74f650
         with:
           typespec: test/fixtures/schema-authority-canary/main.tsp
           schema: test/fixtures/schema-authority-canary/authored.schema.json
@@ -73,7 +73,7 @@ jobs:
           polymorphic_models_strategy: oneOf
 
       - name: Prove exact-evidence consumer admission rejects nineteen altered cases
-        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@2281843126ab644607b11cf8281d84f382d68dfc
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@69337efc11ba4ecaa90b48878c942384fc74f650
         with:
           contract_ir: .typespec-json-schema-validator/contract-ir.json
           report: .typespec-json-schema-validator/report.json

@@ -183,7 +183,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: jiro4989/setup-nim-action@cb1fc1270b117457dd0d9f610ec981fad3369cec # v2
+      - uses: jiro4989/setup-nim-action@189b145833368cc92f1e7b3e166a25a3e057a693 # v2
         with:
           nim-version: "2.2.10"
       - name: nimble install into a temp (publishable artifact)
@@ -217,7 +217,7 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: sbt
-      - uses: sbt/setup-sbt@c7d2d6258b4bd0d3ec5129e6b3453199d3c79729 # v1
+      - uses: sbt/setup-sbt@6158cb0903b8ceeae04f830055f3155e1b6a5ad7 # v1
       - name: publishLocal (publishable artifact → ~/.ivy2/local)
         working-directory: clients/scala
         run: sbt publishLocal
@@ -516,7 +516,7 @@ jobs:
           persist-credentials: false
       - name: Refresh system package indexes
         run: sudo apt-get update
-      - uses: ocaml/setup-ocaml@e89b2ded52a6e13f50162220cf5fe47290162032 # v3
+      - uses: ocaml/setup-ocaml@93303b622b2522e4411e295f9e77411a24912ac7 # v3
         with:
           ocaml-compiler: "5.2"
       - name: Assert archive integrity (must_contain)
