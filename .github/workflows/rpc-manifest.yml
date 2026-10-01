@@ -93,7 +93,7 @@ jobs:
           node-version: "22.16.0"
           package-manager-cache: false
       - name: Compare the authored peers and validate the generated artifacts
-        uses: ORESoftware/typespec-json-schema-validator@2281843126ab644607b11cf8281d84f382d68dfc
+        uses: ORESoftware/typespec-json-schema-validator@69337efc11ba4ecaa90b48878c942384fc74f650
         with:
           typespec: rpc/contract/main.tsp
           schema: rpc/contract/authored.schema.json
