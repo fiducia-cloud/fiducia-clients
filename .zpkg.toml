@@ -22,9 +22,6 @@ include_readme = true
 tag_format = "v{version}"
 exclude = [".env", ".env.*", ".direnv/**", ".zed-pack/**", ".vendor/.zed/**", "tools/flags-2-env/**", "tmp/**", "**/*.log", ".DS_Store"]
 
-[scripts]
-required-client-matrix = "python3 scripts/check-required-client-matrix.py"
-
 # The repository target publishes the complete multi-language source snapshot.
 # Every other target is re-rooted and published as one isolated language package.
 [targets.repository]
@@ -177,4 +174,3 @@ adapter = "node"
 registry = "npm"
 package = "@fiducia/client"
 forge = ["github-packages", "gitlab-packages", "bitbucket-packages"]
-
