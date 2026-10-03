@@ -72,3 +72,7 @@ Thumbs.db
 **/.gradle/
 .zed/
 .zed-pack/
+tmp
+temp
+tmp/worktrees
+temp/worktrees
