@@ -73,7 +73,7 @@ jobs:
           polymorphic_models_strategy: oneOf
 
       - name: Prove exact-evidence consumer admission rejects nineteen altered cases
-        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@69337efc11ba4ecaa90b48878c942384fc74f650
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@5fdbeaf57d582b69126c6e1a0623b43bc2a25d04
         with:
           contract_ir: .typespec-json-schema-validator/contract-ir.json
           report: .typespec-json-schema-validator/report.json
