@@ -451,9 +451,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
-        with:
-          swift-version: "6.3.3"
+      # The GitHub Ubuntu runner already provides Swift 6.4. The setup-swift
+      # action currently fails its Swiftly GPG check (missing signing key),
+      # before it can compile a single client source file. Use the hosted
+      # toolchain, but retain a fail-closed >= 6.3.3 compiler requirement.
+      - name: Verify hosted Swift compiler is at least 6.3.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v swift
+          swift --version
+          version="$(swift --version | sed -nE 's/^Swift version ([0-9]+\\.[0-9]+(\\.[0-9]+)?).*$/\\1/p' | head -1)"
+          test -n "$version"
+          minimum="6.3.3"
+          if [[ "$(printf '%s\\n%s\\n' "$minimum" "$version" | sort -V | head -1)" != "$minimum" ]]; then
+            echo "::error::Swift $version is older than required $minimum" >&2
+            exit 1
+          fi
       - name: Assert archive integrity (must_contain)
         run: |
           git archive --format=tar HEAD:clients/swift -o "$RUNNER_TEMP/swift.tar"
@@ -471,6 +485,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Refresh Ubuntu's apt index before install-crystal asks apt for libevent;
+      # cached runner indexes can refer to .deb files removed from the mirror.
+      - name: Refresh apt indexes before Crystal toolchain setup
+        run: sudo apt-get update
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
           crystal: "1.20.3"
