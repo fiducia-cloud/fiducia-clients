@@ -456,8 +456,13 @@ jobs:
         run: |
           set -euo pipefail
           key="$RUNNER_TEMP/swift-signing-key.asc"
-          curl --fail --location --retry 3 --silent --show-error \
+          curl --fail --location --retry 3 --compressed --silent --show-error \
             https://www.swift.org/keys/automatic-signing-key-4.asc -o "$key"
+          # Swift's CDN sometimes delivers gzip bytes without a matching encoding header.
+          if gzip -t "$key" >/dev/null 2>&1; then
+            gzip -dc "$key" > "$key.asc"
+            mv "$key.asc" "$key"
+          fi
           expected=E813C892820A6FA13755B268F167DF1ACF9CE069
           fingerprint="$(gpg --batch --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" {print $10; exit}')"
           test "$fingerprint" = "$expected"
