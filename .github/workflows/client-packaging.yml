@@ -451,6 +451,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Import verified official Swift signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/swift-signing-key.asc"
+          curl --fail --location --retry 3 --silent --show-error \
+            https://www.swift.org/keys/automatic-signing-key-4.asc -o "$key"
+          expected=E813C892820A6FA13755B268F167DF1ACF9CE069
+          fingerprint="$(gpg --batch --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$fingerprint" = "$expected"
+          gpg --batch --import "$key"
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         with:
           swift-version: "6.3.3"
