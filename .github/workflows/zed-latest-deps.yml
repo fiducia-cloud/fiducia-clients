@@ -22,4 +22,23 @@ jobs:
           printf '%s  %s\n' f87576bc289e43ed647902527e7be70566445d2f1fd11249f067ab35547d4b8a "$a" | sha256sum --check --strict
           mkdir -p "$d" "$HOME/.local/bin"; tar -xzf "$a" -C "$d"; z="$(find "$d" -type f -name zed -perm -111 -print -quit)"; test -n "$z"; install -m 0755 "$z" "$HOME/.local/bin/zed"; echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: zed --version
+      # An empty tracked lock is not a valid resolved state. Show whether the
+      # manifest can actually resolve, rather than hiding missing lock entries
+      # behind the first opaque --require-lock error.
+      - name: Diagnose missing canonical lock entries (fail closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if zed validate --require-lock; then
+            exit 0
+          fi
+          echo "::group::Resolve declared Zed dependencies for lock repair"
+          if ! zed install; then
+            echo "::error::Cannot resolve the declared dependencies; do not bypass the canonical lock gate" >&2
+            exit 1
+          fi
+          git --no-pager diff -- .zpkg.lock
+          echo "::endgroup::"
+          echo "::error::Commit the freshly resolved .zpkg.lock, then rerun strict validation" >&2
+          exit 1
       - run: bash .githooks/pre-push --ci
