@@ -1,7 +1,7 @@
 # GENERATED from Dockerfile (sha256:8fc3b180fe38af70) by ores-gha-workflows/scripts/render-dkf.mjs — target linux/amd64. Do not edit; edit Dockerfile and re-render.
 # syntax=docker/dockerfile:1
 # CI/test image for the multi-language Fiducia clients.
-FROM --platform=linux/amd64 rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e
+FROM --platform=linux/amd64 rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates python3 nodejs npm
