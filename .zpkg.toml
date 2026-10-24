@@ -2,6 +2,7 @@
 org = "fiducia-cloud"
 name = "fiducia-clients"
 version = "0.1.0"
+kind = "sdk"
 description = "Official polyglot clients for fiducia.cloud"
 license = "MIT"
 keywords = ["clients", "sdk", "polyglot", "fiducia"]
