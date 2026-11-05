@@ -188,3 +188,95 @@ test("SDK rejects unsafe fencing tokens returned by a real HTTP server", async (
   const client = new FiduciaClient(api.url);
   await assert.rejects(() => client.lockGet("unsafe/token"), /safe integer/);
 });
+
+
+test("SDK -> node: a lost POST response is retried only with a durable replay key", async (t) => {
+  const attempts = [];
+  const node = await serve(async (request, response) => {
+    attempts.push({
+      method: request.method,
+      path: request.url,
+      key: request.headers["idempotency-key"],
+      body: await readBody(request),
+    });
+    if (attempts.length === 1) {
+      response.destroy(); // The node has received the mutation; the reply is ambiguous.
+      return;
+    }
+    json(response, 200, {
+      committed: true,
+      result: { output: { acquired: true, fencing_token: 91 } },
+    });
+  });
+  t.after(node.close);
+  const sdk = new FiduciaClient(node.url, { maxRetries: 1 });
+  const accepted = await sdk.tryLock("batch/91", {
+    holder: "worker-retry",
+    requestId: "durable-attempt-91",
+    idempotencyKey: "durable-ledger-key-91",
+  });
+  assert.equal(accepted.result.output.fencing_token, 91);
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[1], attempts[0], "wire retry must preserve the exact logical attempt");
+  assert.equal(attempts[0].method, "POST");
+  assert.equal(attempts[0].key, "durable-ledger-key-91");
+});
+
+test("SDK -> node: a lost POST response without a durable key never replays the write", async (t) => {
+  let observedWrites = 0;
+  const node = await serve(async (request, response) => {
+    observedWrites++;
+    await readBody(request);
+    response.destroy(); // External side-effect could already be committed.
+  });
+  t.after(node.close);
+  const sdk = new FiduciaClient(node.url, { maxRetries: 3 });
+  await assert.rejects(() => sdk.tryLock("critical", {
+    holder: "worker-unkeyed",
+    requestId: "unkeyed-attempt-91",
+  }));
+  assert.equal(observedWrites, 1, "connection failure cannot authorize duplicate mutations");
+});
+
+test("SDK -> node: a fragmented SSE stream decodes two event frames across TCP chunks", async (t) => {
+  const requested = [];
+  const node = await serve(async (request, response) => {
+    requested.push({ method: request.method, url: request.url, accept: request.headers.accept });
+    response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+    response.write(": heartbeat\\n\\n");
+    response.write("event: update\\nid: seq-");
+    response.write("01\\ndata: {\\"key\\":\\"catalog/a\\",\\"revision\\":1}\\n\\n");
+    response.write("event: update\\nid: seq-02\\ndata: {\\"key\\":");
+    response.end("\\"catalog/b\\",\\"revision\\":2}\\n\\n");
+  });
+  t.after(node.close);
+  const sdk = new FiduciaClient(node.url);
+  const events = [];
+  for await (const event of sdk.kvWatchPrefix("catalog/")) events.push(event);
+  assert.deepEqual(requested, [{
+    method: "GET",
+    url: "/v1/kv?prefix=catalog%2F&watch=true",
+    accept: "text/event-stream",
+  }]);
+  assert.deepEqual(events, [
+    { event: "update", id: "seq-01", data: { key: "catalog/a", revision: 1 } },
+    { event: "update", id: "seq-02", data: { key: "catalog/b", revision: 2 } },
+  ]);
+});
+
+test("SDK -> node: a retryable GET may move past 503 but preserves request URL", async (t) => {
+  const paths = [];
+  const node = await serve(async (request, response) => {
+    paths.push([request.method, request.url]);
+    if (paths.length === 1) json(response, 503, { error: "leader_election" });
+    else json(response, 200, { value: "after-recovery" });
+  });
+  t.after(node.close);
+  const sdk = new FiduciaClient(node.url, { maxRetries: 1 });
+  const response = await sdk.kvGet("space/with a slash");
+  assert.equal(response.value, "after-recovery");
+  assert.deepEqual(paths, [
+    ["GET", "/v1/kv?key=space%2Fwith%20a%20slash"],
+    ["GET", "/v1/kv?key=space%2Fwith%20a%20slash"],
+  ]);
+});
