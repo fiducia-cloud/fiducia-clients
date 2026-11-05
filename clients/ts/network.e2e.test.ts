@@ -243,11 +243,11 @@ test("SDK -> node: a fragmented SSE stream decodes two event frames across TCP c
   const node = await serve(async (request, response) => {
     requested.push({ method: request.method, url: request.url, accept: request.headers.accept });
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
-    response.write(": heartbeat\\n\\n");
-    response.write("event: update\\nid: seq-");
-    response.write("01\\ndata: {\\"key\\":\\"catalog/a\\",\\"revision\\":1}\\n\\n");
-    response.write("event: update\\nid: seq-02\\ndata: {\\"key\\":");
-    response.end("\\"catalog/b\\",\\"revision\\":2}\\n\\n");
+    response.write(": heartbeat\n\n");
+    response.write("event: update\nid: seq-");
+    response.write("01\ndata: {\"key\":\"catalog/a\",\"revision\":1}\n\n");
+    response.write("event: update\nid: seq-02\ndata: {\"key\":");
+    response.end("\"catalog/b\",\"revision\":2}\n\n");
   });
   t.after(node.close);
   const sdk = new FiduciaClient(node.url);
